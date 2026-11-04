@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>Notchy</AssemblyName>
+    <RootNamespace>Notchy</RootNamespace>
+    <Product>Notchy</Product>
+    <!-- Major.minor here; the build number comes from GitHub Actions (each push = a new release). -->
+    <Version>1.1.0</Version>
+    <ApplicationIcon>Notchy.ico</ApplicationIcon>
+    <!-- Custom Main (Program.cs) so the hook mode can run without starting WPF. -->
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
+    <StartupObject>Notchy.Program</StartupObject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Velopack" Version="1.2.161" />
+  </ItemGroup>
+
+
+  <ItemGroup>
+    <!-- GitHub repository the updater reads Releases from (set by the release workflow). -->
+    <AssemblyMetadata Include="NotchyRepo" Value="$(NotchyRepo)" Condition="'$(NotchyRepo)' != ''" />
+  </ItemGroup>
+
+</Project>

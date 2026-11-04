@@ -1,0 +1,72 @@
+# Every push to main builds Notchy and publishes a new GitHub Release.
+# Installed copies of Notchy find it, download it in the background and offer "Update" on the island.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  VPK_VERSION: 1.2.161
+  PACK_ID: Notchy.Island
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Version (major.minor from the project + build number)
+        id: ver
+        shell: pwsh
+        run: |
+          [xml]$p = Get-Content Notchy.csproj
+          $base = @($p.Project.PropertyGroup.Version | Where-Object { $_ })[0].Trim()
+          $parts = $base.Split('.')
+          $v = "$($parts[0]).$($parts[1]).$env:GITHUB_RUN_NUMBER"
+          "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "Notchy $v"
+
+      - name: Build (self-contained, no .NET needed on the user's PC)
+        shell: pwsh
+        run: >
+          dotnet publish Notchy.csproj -c Release -r win-x64 --self-contained true
+          -p:Version=${{ steps.ver.outputs.version }}
+          -p:NotchyRepo=https://github.com/${{ github.repository }}
+          -o publish
+
+      - name: Install Velopack CLI
+        run: dotnet tool install -g vpk --version ${{ env.VPK_VERSION }}
+
+      - name: Previous release (for small delta updates)
+        continue-on-error: true
+        run: vpk download github --repoUrl https://github.com/${{ github.repository }} --token ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Release notes from the commit message
+        shell: pwsh
+        run: git log -1 --pretty=%B | Out-File -Encoding utf8 notes.md
+
+      - name: Pack installer + update packages
+        run: >
+          vpk pack --packId ${{ env.PACK_ID }} --packVersion ${{ steps.ver.outputs.version }}
+          --packDir publish --mainExe Notchy.exe --packTitle Notchy --packAuthors Notchy
+          --icon Notchy.ico --releaseNotes notes.md
+
+      - name: Publish GitHub Release
+        run: >
+          vpk upload github --repoUrl https://github.com/${{ github.repository }}
+          --publish --releaseName "Notchy ${{ steps.ver.outputs.version }}"
+          --tag v${{ steps.ver.outputs.version }} --token ${{ secrets.GITHUB_TOKEN }}
