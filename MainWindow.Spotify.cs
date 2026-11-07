@@ -200,9 +200,7 @@ public partial class MainWindow
         var accent = Bright(_musicAccent);
         LikeButton.Content = Glyph(_spLiked ? 0xEB52 : 0xE006);
         LikeButton.Foreground = _spLiked ? new SolidColorBrush(accent) : new SolidColorBrush(Color.FromArgb(0xB3, 255, 255, 255));
-        LikeButton.Effect = _spLiked
-            ? new DropShadowEffect { ShadowDepth = 0, BlurRadius = 12, Opacity = 0.9, Color = accent }
-            : null;
+        GlowUnder(LikeButton, accent, _spLiked, 12, 0.9);
         LikeButton.ToolTip = Loc.T(_spLiked ? "sp.unlike" : "sp.like");
         if (!animate) return;
         if (LikeButton.RenderTransform is not ScaleTransform st || st.IsFrozen)
@@ -259,12 +257,12 @@ public partial class MainWindow
         string rp = _spState?.Repeat ?? "off";
 
         ShuffleButton.Foreground = sh ? new SolidColorBrush(accent) : off;
-        ShuffleButton.Effect = sh ? new DropShadowEffect { ShadowDepth = 0, BlurRadius = 10, Opacity = 0.8, Color = accent } : null;
+        GlowUnder(ShuffleButton, accent, sh, 10, 0.8);
         ShuffleButton.ToolTip = Loc.T(sh ? "sp.shuffle.on" : "sp.shuffle.off");
 
         RepeatButton.Content = Glyph(rp == "track" ? 0xE8ED : 0xE8EE);
         RepeatButton.Foreground = rp != "off" ? new SolidColorBrush(accent) : off;
-        RepeatButton.Effect = rp != "off" ? new DropShadowEffect { ShadowDepth = 0, BlurRadius = 10, Opacity = 0.8, Color = accent } : null;
+        GlowUnder(RepeatButton, accent, rp != "off", 10, 0.8);
         RepeatButton.ToolTip = Loc.T("sp.repeat." + rp);
     }
 

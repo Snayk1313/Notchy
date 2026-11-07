@@ -21,6 +21,9 @@ public sealed class AppSettings
     /// <summary>Raised (on the UI thread) after any change made through the settings window.</summary>
     public static event Action? Changed;
 
+    /// <summary>No settings file yet when Notchy started: a new install.</summary>
+    public static bool WasFirstRun { get; private set; }
+
     public static AppSettings Current { get; private set; } = Load();
 
     // General
@@ -28,8 +31,11 @@ public sealed class AppSettings
     public AnimSpeed Speed { get; set; } = AnimSpeed.Normal;
     public bool GameMode { get; set; } = true;
     public bool AutoUpdate { get; set; } = true;
-    public int FocusMinutes { get; set; } = 25;
+    public int FocusMinutes { get; set; } = 30;
     public int BreakMinutes { get; set; } = 5;
+    public string FocusTask { get; set; } = "";
+    public string LastSeenNotes { get; set; } = ""; // the version whose news (WhatsNew.cs) were already shown
+    public bool FocusQuiet { get; set; } = true;
 
     // Island
     public IslandSize Size { get; set; } = IslandSize.Normal;
@@ -44,15 +50,17 @@ public sealed class AppSettings
     public bool BlurEnabled { get; set; } = false;
     public int BlurIntensity { get; set; } = 60;     // 0..100
     public bool IslandShadow { get; set; } = true;
-    public int SettingsUiSize { get; set; } = 1;     // settings window: 0 small, 1 medium, 2 large
     public int GlowLevel { get; set; } = 1;          // 0 off, 1 subtle, 2 medium, 3 strong
     public int GradientStrength { get; set; } = 35; // coloured gradient behind the expanded tabs, 0..100
     public int BlurTint { get; set; } = 30;          // 0..100 darkening over the glass
     public bool EyesUseAlbumColor { get; set; } = true;
     public string EyeColor { get; set; } = "#FFFFFF";
     public bool LivelyEyes { get; set; } = true;
+    /// <summary>The drop → light → waking eyes animation when Notchy opens.</summary>
+    public bool IntroAnimation { get; set; } = true;
     public bool ScrollVolume { get; set; } = true;
     public bool ShelfEnabled { get; set; } = true;
+    public bool TransferProgress { get; set; } = true;
     public bool BatteryAlerts { get; set; } = true;
     public int BatteryLowPercent { get; set; } = 20;
     public bool ClaudePod { get; set; } = true;
@@ -68,6 +76,7 @@ public sealed class AppSettings
     public bool ClaudeEnabled { get; set; } = true;
     public bool ClaudeSoundDone { get; set; } = true;
     public bool ClaudeSoundAttention { get; set; } = true;
+    public bool ClaudeAnswerOnIsland { get; set; } = true;
     public bool ClaudeWindowsNotifications { get; set; } = false;
     public bool ClaudeShowInCompact { get; set; } = true;
     public string ChatTranslateTo { get; set; } = "pt";  // Notchy Chat: pt / en / es
@@ -78,6 +87,7 @@ public sealed class AppSettings
 
     public static AppSettings Load()
     {
+        WasFirstRun = !File.Exists(FilePath);
         try
         {
             if (File.Exists(FilePath))

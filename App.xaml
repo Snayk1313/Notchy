@@ -5,7 +5,6 @@
     <Application.Resources>
         <FontFamily x:Key="IconFont">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
         <FontFamily x:Key="UiFont">Segoe UI Variable Display, Segoe UI</FontFamily>
-        <SolidColorBrush x:Key="Accent" Color="#A78BFA" />
         <SolidColorBrush x:Key="ClaudeOrange" Color="#E8825F" />
 
         <!-- Round icon button used on the island -->
@@ -66,9 +65,106 @@
             </Setter>
         </Style>
 
+        <!-- Orange Claude pill ("Abrir no Claude", "Permitir"): soft at rest, lit with a glow on hover.
+             The glow is a separate shape behind the button, so the text never goes through an effect. -->
+        <Style x:Key="ClaudePill" TargetType="Button">
+            <Setter Property="Foreground" Value="#FFFFD6C4" />
+            <Setter Property="Background" Value="#26E8825F" />
+            <Setter Property="BorderBrush" Value="#44E8825F" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Padding" Value="9,4,11,4" />
+            <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+            <Setter Property="RenderTransform">
+                <Setter.Value>
+                    <ScaleTransform />
+                </Setter.Value>
+            </Setter>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Grid>
+                            <Border x:Name="glow" CornerRadius="13" Background="{StaticResource ClaudeOrange}" Opacity="0">
+                                <Border.Effect>
+                                    <DropShadowEffect ShadowDepth="0" BlurRadius="16" Opacity="0.75" Color="#E8825F" RenderingBias="Quality" />
+                                </Border.Effect>
+                            </Border>
+                            <Border x:Name="bd" CornerRadius="13" Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="glow" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.2" />
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="glow" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.25" />
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
+                                <Setter Property="Foreground" Value="White" />
+                                <Setter TargetName="bd" Property="Background" Value="Transparent" />
+                                <Setter TargetName="bd" Property="BorderBrush" Value="Transparent" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleX" To="0.92" Duration="0:0:0.08" />
+                                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleY" To="0.92" Duration="0:0:0.08" />
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleX" To="1" Duration="0:0:0.25">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <BackEase Amplitude="0.6" EasingMode="EaseOut" />
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleY" To="1" Duration="0:0:0.25">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <BackEase Amplitude="0.6" EasingMode="EaseOut" />
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.4" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="PillButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
             <Setter Property="Background" Value="#1CFFFFFF" />
             <Setter Property="Padding" Value="10,4" />
+        </Style>
+
+        <!-- Quiet companion of ClaudePill ("Negar") -->
+        <Style x:Key="ClaudeGhost" TargetType="Button" BasedOn="{StaticResource PillButton}">
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="#CCFFFFFF" />
+            <Setter Property="Background" Value="#14FFFFFF" />
+            <Setter Property="Padding" Value="11,5" />
         </Style>
 
         <!-- Plain clickable card (no hover chrome) -->

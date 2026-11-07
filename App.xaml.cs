@@ -173,6 +173,7 @@ public partial class App : Application
 
     public static void Notify(string title, string text)
     {
+        if (SoundService.Hushed) return; // "Não perturbe" while focusing
         try
         {
             _tray?.ShowBalloonTip(4000, title, string.IsNullOrWhiteSpace(text) ? " " : text, System.Windows.Forms.ToolTipIcon.None);

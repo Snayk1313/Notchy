@@ -36,9 +36,25 @@ public sealed class ClaudeSession
     public bool NeedsAttention { get; set; }
     public string AttentionMessage { get; set; } = "";
     public HashSet<ClaudePhase> PhasesSeen { get; } = new();
+    public ClaudeHostInfo? Host { get; set; }
+
+    /// <summary>Permission requests waiting for an answer on the island (oldest first).</summary>
+    public List<PermissionAsk> Asks { get; } = new();
+    public PermissionAsk? Ask => Asks.Count > 0 ? Asks[0] : null;
 
     public bool IsWorking => TaskStart != null && TaskEnd == null;
     public TimeSpan Elapsed => TaskStart == null ? TimeSpan.Zero : (TaskEnd ?? DateTime.Now) - TaskStart.Value;
+}
+
+/// <summary>A tool waiting for permission: answered on the island through the hook's open connection.</summary>
+public sealed class PermissionAsk
+{
+    public string SessionId { get; init; } = "";
+    public string Tool { get; init; } = "";
+    public string Summary { get; init; } = "";
+    public string InputJson { get; init; } = "";
+    internal TcpClient? Client { get; init; }
+    internal bool Closed { get; set; }
 }
 
 /// <summary>
@@ -60,7 +76,6 @@ public sealed class ClaudeService
     public int JobsToday => Recent.Count(j => j.Finished.Date == DateTime.Today) + _extraToday;
     private int _extraToday; // jobs beyond the stored recent list
     private DateTime _extraDay = DateTime.Today;
-    public bool Listening => _listener != null;
     public DateTime LastEventAt { get; private set; } = DateTime.MinValue;
 
     public ClaudeService(Dispatcher ui)
@@ -112,48 +127,163 @@ public sealed class ClaudeService
 
     private void HandleClient(TcpClient client)
     {
+        bool keep = false;
         try
         {
-            using (client)
+            client.ReceiveTimeout = 2000;
+            var net = client.GetStream();
+            using var ms = new MemoryStream();
+            var buf = new byte[16384];
+            int read;
+            while ((read = net.Read(buf, 0, buf.Length)) > 0)
             {
-                client.ReceiveTimeout = 2000;
-                using var net = client.GetStream();
-                using var ms = new MemoryStream();
-                var buf = new byte[16384];
-                int read;
-                while ((read = net.Read(buf, 0, buf.Length)) > 0)
-                {
-                    ms.Write(buf, 0, read);
-                    if (ms.Length > 8_000_000) break;
-                }
-                string json = Encoding.UTF8.GetString(ms.ToArray()).TrimStart('\uFEFF', ' ', '\r', '\n', '\t'); // tolerate a BOM / leading whitespace
-                var doc = JsonDocument.Parse(json);
-                _ui.InvokeAsync(() =>
-                {
-                    using (doc)
-                    {
-                        try { Handle(doc.RootElement); } catch (Exception ex) { App.Log(ex); }
-                    }
-                });
+                // a permission request ends with a 0 byte and keeps the connection open for the answer
+                bool end = buf[read - 1] == 0;
+                ms.Write(buf, 0, end ? read - 1 : read);
+                if (end || ms.Length > 8_000_000) break;
             }
+            string json = Encoding.UTF8.GetString(ms.ToArray()).TrimStart('\uFEFF', ' ', '\r', '\n', '\t'); // tolerate a BOM / leading whitespace
+            var doc = JsonDocument.Parse(json);
+            PermissionAsk? ask = null;
+            var root = doc.RootElement;
+            if (Str(root, "hook_event_name") == "PermissionRequest" && AppSettings.Current.ClaudeEnabled && AppSettings.Current.ClaudeAnswerOnIsland
+                && !IsQuestion(Str(root, "tool_name")))
+            {
+                // the hook waits on this connection for the answer
+                var input = root.TryGetProperty("tool_input", out var ti) ? ti : default;
+                string tool = Str(root, "tool_name");
+                ask = new PermissionAsk
+                {
+                    SessionId = Str(root, "session_id") is { Length: > 0 } sid ? sid : "default",
+                    Tool = tool,
+                    Summary = AskSummary(tool, input),
+                    InputJson = input.ValueKind == JsonValueKind.Undefined ? "" : input.GetRawText(),
+                    Client = client
+                };
+                keep = true;
+                _ = WatchAsk(ask);
+            }
+            _ui.InvokeAsync(() =>
+            {
+                using (doc)
+                {
+                    try { Handle(doc.RootElement, ask); } catch (Exception ex) { App.Log(ex); }
+                }
+            });
         }
         catch
         {
             // malformed or timed-out payload
         }
+        finally
+        {
+            if (!keep) client.Dispose();
+        }
+    }
+
+    /// <summary>Notices when the hook goes away (answered in Claude itself, or timed out) and drops the question.</summary>
+    private async Task WatchAsk(PermissionAsk ask)
+    {
+        var started = DateTime.UtcNow;
+        while (!ask.Closed)
+        {
+            await Task.Delay(400).ConfigureAwait(false);
+            bool gone;
+            try
+            {
+                var sock = ask.Client!.Client;
+                gone = sock.Poll(0, SelectMode.SelectRead) && sock.Available == 0;
+            }
+            catch
+            {
+                gone = true;
+            }
+            if (gone || DateTime.UtcNow - started > TimeSpan.FromSeconds(600))
+            {
+                _ = _ui.InvokeAsync(() => DropAsk(ask));
+                return;
+            }
+        }
+    }
+
+    /// <summary>Answers a permission request from the island.</summary>
+    public void Answer(PermissionAsk ask, bool allow)
+    {
+        if (ask.Closed) return;
+        string decision = allow
+            ? "{\"behavior\":\"allow\"}"
+            : "{\"behavior\":\"deny\",\"message\":" + JsonSerializer.Serialize(Loc.T("claude.ask.denied")) + "}";
+        string json = "{\"hookSpecificOutput\":{\"hookEventName\":\"PermissionRequest\",\"decision\":" + decision + "}}";
+        try
+        {
+            var net = ask.Client!.GetStream();
+            net.WriteTimeout = 1000;
+            byte[] bytes = Encoding.UTF8.GetBytes(json);
+            net.Write(bytes, 0, bytes.Length);
+        }
+        catch (Exception ex)
+        {
+            App.Log(ex);
+        }
+        DropAsk(ask);
+    }
+
+    /// <summary>Forgets a question without answering it (Claude's own prompt stays in charge).</summary>
+    private void DropAsk(PermissionAsk ask)
+    {
+        if (!ask.Closed)
+        {
+            ask.Closed = true;
+            try { ask.Client?.Dispose(); } catch { }
+        }
+        if (_sessions.TryGetValue(ask.SessionId, out var s) && s.Asks.Remove(ask))
+        {
+            if (s.Asks.Count == 0) s.NeedsAttention = false;
+            Changed?.Invoke();
+        }
+    }
+
+    private static void DropAsks(ClaudeSession s, Func<PermissionAsk, bool> which)
+    {
+        foreach (var a in s.Asks.Where(which).ToList())
+        {
+            a.Closed = true;
+            try { a.Client?.Dispose(); } catch { }
+            s.Asks.Remove(a);
+        }
+    }
+
+    /// <summary>Tools that ask you something (a question with options, a plan to approve): answered in Claude, not Allow/Deny.</summary>
+    private static bool IsQuestion(string tool) => tool is "AskUserQuestion" or "ExitPlanMode";
+
+    /// <summary>What the tool wants to do, in one line: the command, the file, the address...</summary>
+    private static string AskSummary(string tool, JsonElement input)
+    {
+        string v = tool switch
+        {
+            "Bash" or "PowerShell" => Str(input, "command"),
+            "Edit" or "Write" or "MultiEdit" or "Read" => FileName(Str(input, "file_path")),
+            "NotebookEdit" => FileName(Str(input, "notebook_path")),
+            "WebFetch" => Str(input, "url"),
+            "WebSearch" => Str(input, "query"),
+            _ => Str(input, "description")
+        };
+        if (v.Length == 0) v = Str(input, "description");
+        v = Regex.Replace(v, @"\s+", " ").Trim();
+        return v.Length > 300 ? v[..300] + "…" : v;
     }
 
     /// <summary>Feeds a hook payload directly (used for previews/tests).</summary>
     public void Inject(string json)
     {
         using var doc = JsonDocument.Parse(json);
-        Handle(doc.RootElement);
+        Handle(doc.RootElement, null);
     }
 
     private static string Str(JsonElement e, string name) =>
         e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
 
-    private void Handle(JsonElement root)
+    private void Handle(JsonElement root, PermissionAsk? ask)
     {
         if (!AppSettings.Current.ClaudeEnabled) return;
 
@@ -171,6 +301,10 @@ public sealed class ClaudeService
         string cwd = Str(root, "cwd");
         if (!string.IsNullOrEmpty(cwd)) s.Cwd = cwd;
         s.LastEvent = DateTime.Now;
+        if (root.TryGetProperty("notchy_host", out var host) && host.ValueKind == JsonValueKind.Object &&
+            host.TryGetProperty("hwnd", out var hw) && hw.TryGetInt64(out long hwnd) &&
+            host.TryGetProperty("pid", out var hp) && hp.TryGetInt32(out int hpid))
+            s.Host = new ClaudeHostInfo(hpid, hwnd, Str(host, "exe"));
 
         switch (evt)
         {
@@ -179,6 +313,7 @@ public sealed class ClaudeService
                 break;
 
             case "UserPromptSubmit":
+                DropAsks(s, _ => true);
                 BeginTask(s);
                 s.Prompt = OneLine(Str(root, "prompt"));
                 s.Phase = ClaudePhase.Thinking;
@@ -193,8 +328,15 @@ public sealed class ClaudeService
 
             case "PostToolUse":
             case "PostToolUseFailure":
-                s.NeedsAttention = false;
+            {
+                // that tool got its answer (in Claude itself, if it's still on the island)
+                string tool = Str(root, "tool_name");
+                string done = root.TryGetProperty("tool_input", out var ti) ? ti.GetRawText() : "";
+                if (s.Asks.Any(a => a.Tool == tool && a.InputJson == done)) DropAsks(s, a => a.Tool == tool && a.InputJson == done);
+                else if (s.Asks.FirstOrDefault(a => a.Tool == tool) is { } same) DropAsks(s, a => ReferenceEquals(a, same));
+                s.NeedsAttention = s.Asks.Count > 0;
                 break;
+            }
 
             case "Notification":
             case "PermissionRequest":
@@ -205,6 +347,16 @@ public sealed class ClaudeService
                                   msg.Contains("permission", StringComparison.OrdinalIgnoreCase);
                 // "waiting for your input" after a finished task is not news.
                 if (!permission && !s.IsWorking) break;
+                if (ask != null) s.Asks.Add(ask);
+                if (evt == "PermissionRequest" && IsQuestion(Str(root, "tool_name")))
+                {
+                    s.NeedsAttention = true;
+                    s.AttentionMessage = Loc.T(Str(root, "tool_name") == "ExitPlanMode" ? "claude.plan" : "claude.question");
+                    AttentionNeeded?.Invoke(s);
+                    break;
+                }
+                // the "waiting for permission" reminder of a question already on the island isn't news
+                if (evt == "Notification" && s.Asks.Count > 0) break;
                 s.NeedsAttention = true;
                 s.AttentionMessage = permission && evt == "PermissionRequest"
                     ? Str(root, "tool_name")
@@ -214,6 +366,7 @@ public sealed class ClaudeService
             }
 
             case "Stop":
+                DropAsks(s, _ => true);
                 if (s.IsWorking)
                 {
                     s.TaskEnd = DateTime.Now;
@@ -226,6 +379,7 @@ public sealed class ClaudeService
                 break;
 
             case "SessionEnd":
+                DropAsks(s, _ => true);
                 _sessions.Remove(id);
                 break;
         }
@@ -431,10 +585,10 @@ public static class ClaudeHooks
 {
     private static readonly string[] Events =
     {
-        "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop", "SessionEnd"
+        "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Notification", "Stop", "SessionEnd"
     };
 
-    private static readonly string[] MatcherEvents = { "PreToolUse", "PostToolUse" };
+    private static readonly string[] MatcherEvents = { "PreToolUse", "PostToolUse", "PermissionRequest" };
 
     public static string SettingsPath => Environment.GetEnvironmentVariable("NOTCHY_CLAUDE_SETTINGS") ??
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "settings.json");
@@ -476,12 +630,39 @@ public static class ClaudeHooks
                 var root = JsonNode.Parse(File.ReadAllText(SettingsPath));
                 var stop = root?["hooks"]?["Stop"] as JsonArray;
                 var ours = stop?.SelectMany(g => (g?["hooks"] as JsonArray) ?? new JsonArray()).FirstOrDefault(IsOurs);
-                return ours != null && ours["command"]?.GetValue<string>() != Command;
+                if (ours == null) return false;
+                if (ours["command"]?.GetValue<string>() != Command) return true;
+                // installed by an older Notchy, without the permission hook: needs a refresh too
+                var perm = root?["hooks"]?["PermissionRequest"] as JsonArray;
+                return perm == null || !perm.Any(g => (g?["hooks"] as JsonArray)?.Any(IsOurs) == true);
             }
             catch
             {
                 return false;
             }
+        }
+    }
+
+    /// <summary>
+    /// Hooks put in by an older version of this same Notchy lack the permission hook: add it on start
+    /// (only when they already point here, so a different copy of the app is never taken over).
+    /// </summary>
+    public static void AddMissingPermissionHook()
+    {
+        try
+        {
+            if (!File.Exists(SettingsPath)) return;
+            var root = JsonNode.Parse(File.ReadAllText(SettingsPath));
+            var stop = root?["hooks"]?["Stop"] as JsonArray;
+            var ours = stop?.SelectMany(g => (g?["hooks"] as JsonArray) ?? new JsonArray()).FirstOrDefault(IsOurs);
+            if (ours == null || ours["command"]?.GetValue<string>() != Command) return;
+            var perm = root?["hooks"]?["PermissionRequest"] as JsonArray;
+            if (perm != null && perm.Any(g => (g?["hooks"] as JsonArray)?.Any(IsOurs) == true)) return;
+            Install();
+        }
+        catch (Exception ex)
+        {
+            App.Log(ex);
         }
     }
 
@@ -509,7 +690,7 @@ public static class ClaudeHooks
             {
                 ["type"] = "command",
                 ["command"] = Command,
-                ["timeout"] = 5
+                ["timeout"] = evt == "PermissionRequest" ? 600 : 5 // waits for the answer on the island
             });
             arr.Add(group);
         }

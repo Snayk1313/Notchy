@@ -55,7 +55,7 @@ public partial class MainWindow
 
     private bool HasContext => _ctxText != null || _ctxImage != null;
     private double ChatContentHeight => _chatView == ChatView.Answer ? 292 : HasContext ? 262 : 214;
-    private bool ChatKeepsOpen => _chatInput != null && (_chatInput.IsKeyboardFocused || _draggingEyes || _chatPinned);
+    private bool ChatKeepsOpen => (_chatInput != null && (_chatInput.IsKeyboardFocused || _draggingEyes || _chatPinned)) || FocusTaskBox.IsKeyboardFocused;
 
     // =====================================================================================
     // build
@@ -188,12 +188,12 @@ public partial class MainWindow
     private Button Chip(string action, int glyph, Color color)
     {
         var icon = new TextBlock { Text = G(glyph), FontFamily = (FontFamily)FindResource("IconFont"), FontSize = 13, Foreground = new SolidColorBrush(color), VerticalAlignment = VerticalAlignment.Center };
-        icon.Effect = new DropShadowEffect { ShadowDepth = 0, BlurRadius = 8, Opacity = 0.6, Color = color };
         var label = new TextBlock { FontFamily = (FontFamily)FindResource("UiFont"), FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, Margin = new Thickness(7, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
         _chipLabels[action] = label;
         var content = new StackPanel { Orientation = Orientation.Horizontal };
         content.Children.Add(icon);
         content.Children.Add(label);
+        GlowUnder(icon, color, true, 8, 0.6);
         var b = new Button { Style = (Style)FindResource("PillButton"), Content = content, Padding = new Thickness(11, 6, 12, 6), Margin = new Thickness(3) };
         // Grab the selection the moment the button goes down, before anything can move the focus.
         if (action != "lens") b.PreviewMouseLeftButtonDown += (_, _) => BeginSelectionCapture(action);
@@ -837,6 +837,7 @@ public partial class MainWindow
 
     private void OnChatFinished(string text, bool isError)
     {
+        if (!isError) NavDone(Tab.Chat);
         _answer = isError ? "" : text;
         _thinking.Visibility = Visibility.Collapsed;
         FaceReact(isError ? Mood.Sad : Mood.Happy, isError ? 2.5 : 1.4);
@@ -846,10 +847,11 @@ public partial class MainWindow
             RenderAnswer(text, streaming: false, error: isError);
         _hasConversation = !isError;
         _copyButton.Visibility = isError ? Visibility.Collapsed : Visibility.Visible;
-        _replaceButton.Visibility = !isError && _lastAction == "spelling" && _ctxText != null &&
+        // spelling and translation answer with just the new text, so it can go back where it came from
+        _replaceButton.Visibility = !isError && _lastAction is "spelling" or "translate" && _ctxText != null && _ctxImage == null &&
                                     (_ctxText.FromSelection || _ctxText.Editable) && _ctxText.Window != IntPtr.Zero
             ? Visibility.Visible : Visibility.Collapsed;
-        if (_lastAction == "spelling")
+        if (_lastAction is "spelling" or "translate")
             ChatLog($"   finished: error={isError} replace={_replaceButton.Visibility} (fromSelection={_ctxText?.FromSelection}, editable={_ctxText?.Editable}, sourceWindow={(_ctxText?.Window ?? IntPtr.Zero) != IntPtr.Zero})");
 
         if (_state != IslandState.Expanded || _tab != Tab.Chat)

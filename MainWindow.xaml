@@ -76,26 +76,120 @@
                         <DropShadowEffect ShadowDepth="0" BlurRadius="6" Opacity="0.9" Color="#E8825F" />
                     </Path.Effect>
                 </Path>
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                    <StackPanel.RenderTransform>
-                        <TranslateTransform x:Name="PodLook" />
-                    </StackPanel.RenderTransform>
-                    <StackPanel.Effect>
-                        <DropShadowEffect ShadowDepth="0" BlurRadius="8" Opacity="0.8" Color="#E8825F" />
-                    </StackPanel.Effect>
-                    <Grid Width="10" Height="12" Margin="1,0">
-                        <Ellipse x:Name="PodEyeL" Width="6" Height="10" Fill="#FFD9C4" RenderTransformOrigin="0.5,0.5" />
-                        <Path x:Name="PodHappyL" Data="M0,7 Q4.5,0 9,7" Stroke="#FFD9C4" StrokeThickness="2.4"
-                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" HorizontalAlignment="Center"
-                              VerticalAlignment="Center" Visibility="Collapsed" />
+                <!-- the eyes can leave by the top edge (and come down from it): "behind the screen" -->
+                <Grid ClipToBounds="True" IsHitTestVisible="False">
+                    <Grid>
+                        <Grid.RenderTransform>
+                            <TranslateTransform x:Name="PodTrip" />
+                        </Grid.RenderTransform>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <StackPanel.RenderTransform>
+                                <TranslateTransform x:Name="PodLook" />
+                            </StackPanel.RenderTransform>
+                            <StackPanel.Effect>
+                                <DropShadowEffect ShadowDepth="0" BlurRadius="8" Opacity="0.8" Color="#E8825F" />
+                            </StackPanel.Effect>
+                            <Grid Width="10" Height="12" Margin="1,0">
+                                <Ellipse x:Name="PodEyeL" Width="6" Height="10" Fill="#FFD9C4" RenderTransformOrigin="0.5,0.5" />
+                                <Path x:Name="PodHappyL" Data="M0,7 Q4.5,0 9,7" Stroke="#FFD9C4" StrokeThickness="2.4"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" HorizontalAlignment="Center"
+                                      VerticalAlignment="Center" Visibility="Collapsed" />
+                            </Grid>
+                            <Grid Width="10" Height="12" Margin="1,0">
+                                <Ellipse x:Name="PodEyeR" Width="6" Height="10" Fill="#FFD9C4" RenderTransformOrigin="0.5,0.5" />
+                                <Path x:Name="PodHappyR" Data="M0,7 Q4.5,0 9,7" Stroke="#FFD9C4" StrokeThickness="2.4"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" HorizontalAlignment="Center"
+                                      VerticalAlignment="Center" Visibility="Collapsed" />
+                            </Grid>
+                        </StackPanel>
                     </Grid>
-                    <Grid Width="10" Height="12" Margin="1,0">
-                        <Ellipse x:Name="PodEyeR" Width="6" Height="10" Fill="#FFD9C4" RenderTransformOrigin="0.5,0.5" />
-                        <Path x:Name="PodHappyR" Data="M0,7 Q4.5,0 9,7" Stroke="#FFD9C4" StrokeThickness="2.4"
-                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" HorizontalAlignment="Center"
-                              VerticalAlignment="Center" Visibility="Collapsed" />
+                </Grid>
+            </Grid>
+        </Border>
+
+        <!-- while the eyes pass from one bubble to the other behind the screen, a faint glow runs along its top edge -->
+        <Border x:Name="EyeTripGlow" HorizontalAlignment="Center" VerticalAlignment="Top" Width="34" Height="2.6"
+                CornerRadius="1.3" Opacity="0" IsHitTestVisible="False" Background="#FF9A6E">
+            <Border.RenderTransform>
+                <TranslateTransform x:Name="EyeTripGlowX" />
+            </Border.RenderTransform>
+            <Border.Effect>
+                <DropShadowEffect x:Name="EyeTripGlowShadow" ShadowDepth="0" BlurRadius="10" Opacity="1" Color="#FF9A6E" />
+            </Border.Effect>
+        </Border>
+
+        <!-- the green download bubble next to the island (music / Claude / Focus + a download) -->
+        <Border x:Name="DownloadPod" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,-30,0,0"
+                Width="70" Height="64" CornerRadius="17" Background="Black" BorderThickness="0"
+                Opacity="0" Visibility="Collapsed" Cursor="Hand" RenderTransformOrigin="0.5,0"
+                MouseLeftButtonUp="DownloadPod_Click" MouseEnter="DownloadPod_MouseEnter" MouseLeave="Island_MouseLeave">
+            <Border.RenderTransform>
+                <TransformGroup>
+                    <ScaleTransform x:Name="DlPodScale" />
+                    <TranslateTransform x:Name="DlPodX" />
+                    <TranslateTransform x:Name="DlPodSlide" />
+                </TransformGroup>
+            </Border.RenderTransform>
+            <Grid x:Name="DlPodContent" Margin="0,30,0,0" Height="34" VerticalAlignment="Top">
+                <Path x:Name="DlPodTrack" Stroke="#5ED67D" StrokeThickness="1.6" Opacity="0.3" IsHitTestVisible="False" />
+                <Path x:Name="DlPodArc" Stroke="#7CF0A0" StrokeThickness="2.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                      StrokeDashCap="Round" IsHitTestVisible="False">
+                    <Path.Effect>
+                        <DropShadowEffect ShadowDepth="0" BlurRadius="6" Opacity="0.9" Color="#5ED67D" />
+                    </Path.Effect>
+                </Path>
+                <!-- the island's download icon, only while the bubble turns into the island (or back) -->
+                <TextBlock x:Name="DlPodIcon" FontFamily="{StaticResource IconFont}" FontSize="13" Foreground="#5ED67D"
+                           HorizontalAlignment="Left" VerticalAlignment="Center" Margin="22,0,0,0" Opacity="0" IsHitTestVisible="False" />
+                <!-- the bubble itself has no eyes (one pair on screen is enough): the %, a check when done -->
+                <Grid x:Name="DlPodInfo" IsHitTestVisible="False">
+                    <TextBlock x:Name="DlPodPct" FontSize="11" FontWeight="Bold" Foreground="#5ED67D"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    <TextBlock x:Name="DlPodMid" FontFamily="{StaticResource IconFont}" Text="&#xE896;" FontSize="12" Foreground="#5ED67D"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed" />
+                    <Path x:Name="DlPodMark" Stroke="#7CF0A0" StrokeThickness="2.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          StrokeLineJoin="Round" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed">
+                        <Path.Effect>
+                            <DropShadowEffect ShadowDepth="0" BlurRadius="6" Opacity="0.9" Color="#5ED67D" />
+                        </Path.Effect>
+                    </Path>
+                </Grid>
+                <!-- the eyes can leave by the top edge (and come down from it): "behind the screen" -->
+                <Grid ClipToBounds="True" IsHitTestVisible="False">
+                    <Grid>
+                        <Grid.RenderTransform>
+                            <TranslateTransform x:Name="DlPodTrip" />
+                        </Grid.RenderTransform>
+                        <StackPanel x:Name="DlPodEyes" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0">
+                                    <StackPanel.RenderTransform>
+                                        <TranslateTransform x:Name="DlPodLook" />
+                                    </StackPanel.RenderTransform>
+                                    <StackPanel.Effect>
+                                        <DropShadowEffect ShadowDepth="0" BlurRadius="9" Opacity="0.85" Color="#5ED67D" />
+                                    </StackPanel.Effect>
+                                    <Grid Width="10" Height="12" Margin="1,0">
+                                        <Ellipse x:Name="DlEyeL" Width="6" Height="10" Fill="#9CF5B6" RenderTransformOrigin="0.5,0.5">
+                                            <Ellipse.RenderTransform>
+                                                <ScaleTransform x:Name="DlEyeLScale" />
+                                            </Ellipse.RenderTransform>
+                                        </Ellipse>
+                                        <Path x:Name="DlHappyL" Data="M0,7 Q4.5,0 9,7" Stroke="#9CF5B6" StrokeThickness="2.4"
+                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" Visibility="Collapsed" />
+                                    </Grid>
+                                    <Grid Width="10" Height="12" Margin="1,0">
+                                        <Ellipse x:Name="DlEyeR" Width="6" Height="10" Fill="#9CF5B6" RenderTransformOrigin="0.5,0.5">
+                                            <Ellipse.RenderTransform>
+                                                <ScaleTransform x:Name="DlEyeRScale" />
+                                            </Ellipse.RenderTransform>
+                                        </Ellipse>
+                                        <Path x:Name="DlHappyR" Data="M0,7 Q4.5,0 9,7" Stroke="#9CF5B6" StrokeThickness="2.4"
+                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" Visibility="Collapsed" />
+                                    </Grid>
+                                </StackPanel>
                     </Grid>
-                </StackPanel>
+                </Grid>
             </Grid>
         </Border>
 
@@ -164,6 +258,14 @@
                             <TextBlock x:Name="CompactIcon" FontFamily="{StaticResource IconFont}" FontSize="14" Foreground="White"
                                        VerticalAlignment="Center" Visibility="Collapsed" />
                             <Border x:Name="CompactArt" Width="22" Height="22" CornerRadius="6" Background="#2A2A2A" />
+                            <StackPanel x:Name="CompactFocusEyes" Orientation="Horizontal" VerticalAlignment="Center" Visibility="Collapsed">
+                                <Rectangle Width="6" Height="10" RadiusX="3" RadiusY="3" Fill="#B79CFF" Margin="0,0,5,0" RenderTransformOrigin="0.5,0.5">
+                                    <Rectangle.RenderTransform><ScaleTransform x:Name="CompactFocusEyeL" /></Rectangle.RenderTransform>
+                                </Rectangle>
+                                <Rectangle Width="6" Height="10" RadiusX="3" RadiusY="3" Fill="#B79CFF" RenderTransformOrigin="0.5,0.5">
+                                    <Rectangle.RenderTransform><ScaleTransform x:Name="CompactFocusEyeR" /></Rectangle.RenderTransform>
+                                </Rectangle>
+                            </StackPanel>
                         </StackPanel>
                         <Grid Grid.Column="1" Margin="10,0" ClipToBounds="True">
                             <!-- StackPanel gives the text all the room it wants; the Grid clips it, so long lines can slide -->
@@ -181,6 +283,111 @@
                             <TextBlock x:Name="CompactRight" FontSize="12" FontWeight="SemiBold" Foreground="#CCFFFFFF"
                                        VerticalAlignment="Center" Visibility="Collapsed" />
                         </Grid>
+                    </Grid>
+
+                    <!-- COMPACT, after an update with notes: "✦ What's new in Notchy 2.0", happy golden eyes (MainWindow.WhatsNew.cs) -->
+                    <Grid x:Name="WhatsNewPanel" Height="34" VerticalAlignment="Top" HorizontalAlignment="Center" Opacity="0" IsHitTestVisible="False">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock x:Name="WhatsNewSpark" Text="✦" FontFamily="Segoe UI Symbol" FontSize="13" Foreground="#FFD36B"
+                                       VerticalAlignment="Center" Margin="0,0,8,0" RenderTransformOrigin="0.5,0.5">
+                                <TextBlock.RenderTransform>
+                                    <TransformGroup>
+                                        <ScaleTransform x:Name="WhatsNewSparkScale" />
+                                        <RotateTransform x:Name="WhatsNewSparkRotate" />
+                                    </TransformGroup>
+                                </TextBlock.RenderTransform>
+                            </TextBlock>
+                            <TextBlock x:Name="WhatsNewText" FontSize="12.5" FontWeight="SemiBold" Foreground="White" TextWrapping="NoWrap" VerticalAlignment="Center" />
+                            <StackPanel Orientation="Horizontal" Margin="9,1,0,0" VerticalAlignment="Center">
+                                <StackPanel.RenderTransform>
+                                    <TranslateTransform x:Name="WhatsNewEyesBob" />
+                                </StackPanel.RenderTransform>
+                                <StackPanel.Effect>
+                                    <DropShadowEffect ShadowDepth="0" BlurRadius="6" Opacity="0.9" Color="#FFD36B" />
+                                </StackPanel.Effect>
+                                <Path Data="M0,6 Q4.5,0 9,6" Stroke="#FFD36B" StrokeThickness="2.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Margin="0,0,3,0" />
+                                <Path Data="M0,6 Q4.5,0 9,6" Stroke="#FFD36B" StrokeThickness="2.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                            </StackPanel>
+                        </StackPanel>
+                        <Border x:Name="WhatsNewLine" Height="2" CornerRadius="1" VerticalAlignment="Bottom" Margin="26,0,26,1" Opacity="0.5">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                    <GradientStop Color="#00FFD36B" Offset="0" />
+                                    <GradientStop Color="#FFFFD36B" Offset="0.5" />
+                                    <GradientStop Color="#00FFD36B" Offset="1" />
+                                </LinearGradientBrush>
+                            </Border.Background>
+                        </Border>
+                    </Grid>
+
+                    <!-- COMPACT, download / copy alone on the island: icon, green eyes, % (MainWindow.Transfer.cs) -->
+                    <Grid x:Name="TransferPanel" Width="200" Height="34" VerticalAlignment="Top" HorizontalAlignment="Center"
+                          Opacity="0" IsHitTestVisible="False">
+                        <TextBlock x:Name="TransferIcon" FontFamily="{StaticResource IconFont}" FontSize="13" Foreground="#5ED67D"
+                                   HorizontalAlignment="Left" VerticalAlignment="Center" Margin="22,0,0,0" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <StackPanel.RenderTransform>
+                                <TranslateTransform x:Name="TransferLook" />
+                            </StackPanel.RenderTransform>
+                            <StackPanel.Effect>
+                                <DropShadowEffect ShadowDepth="0" BlurRadius="9" Opacity="0.85" Color="#5ED67D" />
+                            </StackPanel.Effect>
+                            <Grid Width="10" Height="12" Margin="1,0">
+                                <Ellipse x:Name="TransferEyeL" Width="6" Height="10" Fill="#9CF5B6" RenderTransformOrigin="0.5,0.5">
+                                    <Ellipse.RenderTransform>
+                                        <ScaleTransform x:Name="TransferEyeLScale" />
+                                    </Ellipse.RenderTransform>
+                                </Ellipse>
+                                <Path x:Name="TransferHappyL" Data="M0,7 Q4.5,0 9,7" Stroke="#9CF5B6" StrokeThickness="2.4"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" HorizontalAlignment="Center"
+                                      VerticalAlignment="Center" Visibility="Collapsed" />
+                            </Grid>
+                            <Grid Width="10" Height="12" Margin="1,0">
+                                <Ellipse x:Name="TransferEyeR" Width="6" Height="10" Fill="#9CF5B6" RenderTransformOrigin="0.5,0.5">
+                                    <Ellipse.RenderTransform>
+                                        <ScaleTransform x:Name="TransferEyeRScale" />
+                                    </Ellipse.RenderTransform>
+                                </Ellipse>
+                                <Path x:Name="TransferHappyR" Data="M0,7 Q4.5,0 9,7" Stroke="#9CF5B6" StrokeThickness="2.4"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" HorizontalAlignment="Center"
+                                      VerticalAlignment="Center" Visibility="Collapsed" />
+                            </Grid>
+                        </StackPanel>
+                        <TextBlock x:Name="TransferPercent" Foreground="#5ED67D" FontWeight="Bold" FontSize="12.5"
+                                   HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,20,0" />
+                    </Grid>
+
+                    <!-- COMPACT, Claude working alone on the island: just orange eyes (MainWindow.ClaudeFace.cs) -->
+                    <Grid x:Name="ClaudePanel" Width="160" Height="34" VerticalAlignment="Top" HorizontalAlignment="Center"
+                          Opacity="0" IsHitTestVisible="False">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <StackPanel.RenderTransform>
+                                <TranslateTransform x:Name="ClaudeLook" />
+                            </StackPanel.RenderTransform>
+                            <StackPanel.Effect>
+                                <DropShadowEffect x:Name="ClaudeEyesGlow" ShadowDepth="0" BlurRadius="9" Opacity="0.85" Color="#FFB894" />
+                            </StackPanel.Effect>
+                            <Grid Width="10" Height="12" Margin="1,0">
+                                <Ellipse x:Name="ClaudeEyeL" Width="6" Height="10" Fill="#FFB894" RenderTransformOrigin="0.5,0.5">
+                                    <Ellipse.RenderTransform>
+                                        <ScaleTransform x:Name="ClaudeEyeLScale" />
+                                    </Ellipse.RenderTransform>
+                                </Ellipse>
+                                <Path x:Name="ClaudeHappyL" Data="M0,7 Q4.5,0 9,7" Stroke="#FFB894" StrokeThickness="2.4"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" HorizontalAlignment="Center"
+                                      VerticalAlignment="Center" Visibility="Collapsed" />
+                            </Grid>
+                            <Grid Width="10" Height="12" Margin="1,0">
+                                <Ellipse x:Name="ClaudeEyeR" Width="6" Height="10" Fill="#FFB894" RenderTransformOrigin="0.5,0.5">
+                                    <Ellipse.RenderTransform>
+                                        <ScaleTransform x:Name="ClaudeEyeRScale" />
+                                    </Ellipse.RenderTransform>
+                                </Ellipse>
+                                <Path x:Name="ClaudeHappyR" Data="M0,7 Q4.5,0 9,7" Stroke="#FFB894" StrokeThickness="2.4"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" HorizontalAlignment="Center"
+                                      VerticalAlignment="Center" Visibility="Collapsed" />
+                            </Grid>
+                        </StackPanel>
                     </Grid>
 
                     <!-- VOLUME OSD -->
@@ -217,7 +424,11 @@
                         <Grid Grid.Row="0" Margin="20,4,12,0">
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Left">
                                 <TextBlock x:Name="HeaderA" FontSize="13" FontWeight="Bold" Foreground="White" />
-                                <TextBlock x:Name="HeaderB" FontSize="13" FontWeight="Bold" Foreground="#FFB060" />
+                                <Grid>
+                                    <!-- the glow (a copy underneath), then the crisp word on top -->
+                                    <TextBlock x:Name="HeaderBGlow" FontSize="13" FontWeight="Bold" Foreground="#FFB060" IsHitTestVisible="False" />
+                                    <TextBlock x:Name="HeaderB" FontSize="13" FontWeight="Bold" Foreground="#FFB060" />
+                                </Grid>
                             </StackPanel>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
                                 <Ellipse x:Name="HeaderClaudeDot" Width="6" Height="6" Fill="{StaticResource ClaudeOrange}"
@@ -234,7 +445,7 @@
                         </Grid>
 
                         <!-- tab content -->
-                        <Grid x:Name="TabHost" Grid.Row="1" Margin="20,2,20,0">
+                        <Grid Grid.Row="1" Margin="20,2,20,0">
 
                             <!-- HOME -->
                             <Grid x:Name="HomeTab" Height="118" VerticalAlignment="Top">
@@ -256,7 +467,7 @@
                                             <TextBlock Text="Claude Code" FontSize="11" FontWeight="SemiBold" Foreground="#D9FFFFFF" />
                                             <Grid Width="28" Height="28" HorizontalAlignment="Right" VerticalAlignment="Top">
                                                 <Ellipse Fill="#33FFFFFF" />
-                                                <TextBlock x:Name="HomeClaudeIcon" Text="✻" FontFamily="Segoe UI Symbol" FontSize="15" Foreground="White"
+                                                <TextBlock Text="✻" FontFamily="Segoe UI Symbol" FontSize="15" Foreground="White"
                                                            HorizontalAlignment="Center" VerticalAlignment="Center" RenderTransformOrigin="0.5,0.52">
                                                     <TextBlock.RenderTransform>
                                                         <RotateTransform x:Name="HomeClaudeSpin" />
@@ -314,7 +525,7 @@
                             </Grid>
 
                             <!-- CLAUDE -->
-                            <Grid x:Name="ClaudeTab" Height="134" VerticalAlignment="Top" Visibility="Collapsed">
+                            <Grid x:Name="ClaudeTab" Height="150" VerticalAlignment="Top" Visibility="Collapsed">
                                 <Grid x:Name="ClaudeActive">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
@@ -334,8 +545,16 @@
                                             <TextBlock x:Name="ClaudeProject" FontSize="11.5" Foreground="#CCFFFFFF" Margin="7,0,0,0"
                                                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                                         </StackPanel>
-                                        <TextBlock x:Name="ClaudeTimer" FontSize="38" FontWeight="Bold" Foreground="White" Margin="0,0,0,-2" />
+                                        <TextBlock x:Name="ClaudeTimer" FontSize="32" FontWeight="Bold" Foreground="White" Margin="0,0,0,-2" />
                                         <TextBlock x:Name="ClaudeStatus" FontSize="11.5" Foreground="#B3FFFFFF" TextTrimming="CharacterEllipsis" />
+                                        <Button x:Name="ClaudeOpenButton" Style="{StaticResource ClaudePill}" HorizontalAlignment="Left"
+                                                Margin="0,8,0,0" Click="ClaudeOpen_Click">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="✻" FontFamily="Segoe UI Symbol" FontSize="11" Margin="0,0,6,0" VerticalAlignment="Center"
+                                                           Foreground="{StaticResource ClaudeOrange}" x:Name="ClaudeOpenStar" />
+                                                <TextBlock x:Name="ClaudeOpenText" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Button>
                                     </StackPanel>
 
                                     <Border x:Name="ClaudeFileCard" Grid.Column="1" CornerRadius="12" Background="#16FFFFFF"
@@ -357,6 +576,39 @@
                                             <Border CornerRadius="6" Background="#2234C759" Margin="0,6,0,0" Padding="4,3">
                                                 <StackPanel x:Name="ClaudeDiff" />
                                             </Border>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- a tool waiting for permission: answered right here -->
+                                    <Border x:Name="ClaudeAskCard" Grid.Column="1" CornerRadius="12" Background="#1CE8825F"
+                                            BorderBrush="#40E8825F" BorderThickness="1" Padding="10,8" VerticalAlignment="Top" Margin="0,2,0,0"
+                                            Visibility="Collapsed">
+                                        <StackPanel>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <Border CornerRadius="4" Background="{StaticResource ClaudeOrange}" Padding="5,1" VerticalAlignment="Center">
+                                                    <TextBlock x:Name="ClaudeAskTool" FontSize="9" FontWeight="Bold" Foreground="White" />
+                                                </Border>
+                                                <TextBlock x:Name="ClaudeAskWants" Grid.Column="1" FontSize="11" Foreground="#CCFFFFFF" Margin="7,0,6,0"
+                                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock x:Name="ClaudeAskMore" Grid.Column="2" FontSize="10" Foreground="#77FFFFFF" VerticalAlignment="Center" />
+                                            </Grid>
+                                            <Border CornerRadius="6" Background="#33000000" Margin="0,6,0,0" Padding="6,4">
+                                                <TextBlock x:Name="ClaudeAskWhat" FontFamily="Cascadia Mono, Consolas" FontSize="10.5" Foreground="#E6FFFFFF"
+                                                           TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="30" />
+                                            </Border>
+                                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                                                <Button x:Name="ClaudeDenyButton" Style="{StaticResource ClaudeGhost}" Click="ClaudeDeny_Click" Margin="0,0,6,0">
+                                                    <TextBlock x:Name="ClaudeDenyText" />
+                                                </Button>
+                                                <Button x:Name="ClaudeAllowButton" Style="{StaticResource ClaudePill}" Click="ClaudeAllow_Click" Padding="12,4">
+                                                    <TextBlock x:Name="ClaudeAllowText" />
+                                                </Button>
+                                            </StackPanel>
                                         </StackPanel>
                                     </Border>
 
@@ -498,49 +750,137 @@
                             </Grid>
 
                             <!-- FOCUS -->
-                            <Grid x:Name="FocusTab" Height="128" VerticalAlignment="Top" Visibility="Collapsed">
+                            <!-- FOCUS: a ring with Notchy's eyes, the time (scroll it, or use the little dial), quick lengths,
+                                 what you're focusing on, and today's numbers (MainWindow.Focus.cs) -->
+                            <Grid x:Name="FocusTab" Height="150" VerticalAlignment="Top" Visibility="Collapsed">
                                 <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="100" />
                                     <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="124" />
                                 </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="*" />
-                                    <RowDefinition Height="14" />
-                                </Grid.RowDefinitions>
-                                <StackPanel VerticalAlignment="Center">
-                                    <StackPanel Orientation="Horizontal">
-                                        <Border x:Name="FocusModeFocus" CornerRadius="9" Padding="9,2" Margin="0,0,4,0">
-                                            <TextBlock x:Name="FocusModeFocusText" FontSize="10.5" FontWeight="SemiBold" />
-                                        </Border>
-                                        <Border x:Name="FocusModeBreak" CornerRadius="9" Padding="9,2">
-                                            <TextBlock x:Name="FocusModeBreakText" FontSize="10.5" FontWeight="SemiBold" />
-                                        </Border>
+
+                                <!-- the ring and its face -->
+                                <Grid Width="96" Height="96" VerticalAlignment="Center" HorizontalAlignment="Left">
+                                    <Ellipse Width="88" Height="88" Stroke="#18FFFFFF" StrokeThickness="6.5" />
+                                    <Path x:Name="FocusRingArc" Width="96" Height="96" StrokeThickness="6.5" Stroke="#B79CFF"
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                                    <Ellipse Width="64" Height="64" Fill="#0AFFFFFF" />
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <StackPanel.RenderTransform>
+                                            <TranslateTransform x:Name="FocusFaceLook" />
+                                        </StackPanel.RenderTransform>
+                                        <Rectangle x:Name="FocusEyeL" Width="8.5" Height="14" RadiusX="4.25" RadiusY="4.25" Fill="#B79CFF" Margin="0,0,6,0"
+                                                   RenderTransformOrigin="0.5,0.5">
+                                            <Rectangle.RenderTransform><ScaleTransform x:Name="FocusEyeLScale" /></Rectangle.RenderTransform>
+                                        </Rectangle>
+                                        <Rectangle x:Name="FocusEyeR" Width="8.5" Height="14" RadiusX="4.25" RadiusY="4.25" Fill="#B79CFF" Margin="6,0,0,0"
+                                                   RenderTransformOrigin="0.5,0.5">
+                                            <Rectangle.RenderTransform><ScaleTransform x:Name="FocusEyeRScale" /></Rectangle.RenderTransform>
+                                        </Rectangle>
                                     </StackPanel>
-                                    <TextBlock x:Name="FocusTime" FontSize="46" FontWeight="Bold" Foreground="White" Margin="0,0,0,-4" />
-                                    <TextBlock x:Name="FocusSub" FontSize="11.5" Foreground="#B3FFFFFF" />
-                                </StackPanel>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Button Style="{StaticResource IconButton}" Content="&#xE72C;" FontSize="15" Padding="10"
-                                            Click="FocusReset_Click" />
-                                    <Button x:Name="FocusPlayButton" Style="{StaticResource CircleButton}" Width="54" Height="54"
-                                            FontSize="18" Margin="8,0" Content="&#xE768;" Click="FocusPlay_Click" />
-                                    <Button Style="{StaticResource IconButton}" Content="&#xE893;" FontSize="15" Padding="10"
-                                            Click="FocusSkip_Click" />
-                                </StackPanel>
-                                <Border Grid.Row="1" Grid.ColumnSpan="2" Height="4" CornerRadius="2" Background="#26FFFFFF"
-                                        VerticalAlignment="Center">
-                                    <Border x:Name="FocusProgress" CornerRadius="2" Background="#B79CFF" RenderTransformOrigin="0,0.5">
-                                        <Border.RenderTransform>
-                                            <ScaleTransform x:Name="FocusProgressScale" ScaleX="0" />
-                                        </Border.RenderTransform>
+                                    <Canvas x:Name="FocusZz" IsHitTestVisible="False" Opacity="0">
+                                        <TextBlock x:Name="FocusZ1" Text="z" FontSize="11" FontWeight="Bold" Foreground="#AAFFFFFF" Canvas.Left="64" Canvas.Top="20" />
+                                        <TextBlock x:Name="FocusZ2" Text="z" FontSize="8" FontWeight="Bold" Foreground="#88FFFFFF" Canvas.Left="72" Canvas.Top="11" />
+                                    </Canvas>
+                                </Grid>
+
+                                <!-- task, time, dial, lengths, buttons -->
+                                <Grid Grid.Column="1" Margin="2,0,10,0">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="*" />
+                                    </Grid.RowDefinitions>
+                                    <Grid>
+                                        <TextBox x:Name="FocusTaskBox" Background="Transparent" BorderThickness="0" Foreground="White" CaretBrush="White"
+                                                 FontSize="12" Padding="0,3,0,3" FocusVisualStyle="{x:Null}" MaxLength="80" />
+                                        <TextBlock x:Name="FocusTaskHint" FontSize="12" Foreground="#66FFFFFF" Margin="2,3,0,0" IsHitTestVisible="False" />
+                                        <Rectangle Height="1" VerticalAlignment="Bottom" StrokeDashArray="3 3" Stroke="#33FFFFFF" StrokeThickness="1" />
+                                    </Grid>
+                                    <!-- the time: minutes are a little reel that rolls when they change -->
+                                    <StackPanel x:Name="FocusTimeRow" Grid.Row="1" Orientation="Horizontal" Margin="0,3,0,0" Background="Transparent"
+                                                Cursor="SizeNS" HorizontalAlignment="Left">
+                                        <Canvas x:Name="FocusReel" Height="44" ClipToBounds="True" />
+                                        <TextBlock x:Name="FocusSeconds" FontSize="38" FontWeight="Bold" Foreground="White" VerticalAlignment="Center" />
+                                        <TextBlock x:Name="FocusUnit" FontSize="11.5" FontWeight="SemiBold" Foreground="#77FFFFFF" Margin="7,0,0,9"
+                                                   VerticalAlignment="Bottom" />
+                                    </StackPanel>
+                                    <!-- a small dial that slides with the time -->
+                                    <Grid x:Name="FocusDial" Grid.Row="2" Width="132" Height="10" HorizontalAlignment="Left" Margin="0,-2,0,0"
+                                          ClipToBounds="True" Background="Transparent" Cursor="SizeWE">
+                                        <Grid.OpacityMask>
+                                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                                <GradientStop Color="#00000000" Offset="0" />
+                                                <GradientStop Color="#FF000000" Offset="0.28" />
+                                                <GradientStop Color="#FF000000" Offset="0.72" />
+                                                <GradientStop Color="#00000000" Offset="1" />
+                                            </LinearGradientBrush>
+                                        </Grid.OpacityMask>
+                                        <Canvas x:Name="FocusTicks">
+                                            <Canvas.RenderTransform><TranslateTransform x:Name="FocusTicksX" /></Canvas.RenderTransform>
+                                        </Canvas>
+                                        <Rectangle x:Name="FocusNeedle" Width="2" Height="10" RadiusX="1" RadiusY="1" Fill="#B79CFF"
+                                                   HorizontalAlignment="Left" Margin="65,0,0,0" />
+                                    </Grid>
+                                    <StackPanel x:Name="FocusChips" Grid.Row="3" Orientation="Horizontal" Margin="0,5,0,0" />
+                                    <StackPanel Grid.Row="4" Orientation="Horizontal" VerticalAlignment="Bottom">
+                                        <Button Style="{StaticResource IconButton}" Content="&#xE72C;" FontSize="12" Width="30" Height="30" Padding="0"
+                                                Background="#14FFFFFF" Click="FocusReset_Click" />
+                                        <Button x:Name="FocusPlayButton" Style="{StaticResource CircleButton}" Width="40" Height="40"
+                                                FontSize="14" Margin="8,0" Content="&#xE768;" Click="FocusPlay_Click" />
+                                        <Button Style="{StaticResource IconButton}" Content="&#xE893;" FontSize="12" Width="30" Height="30" Padding="0"
+                                                Background="#14FFFFFF" Click="FocusSkip_Click" />
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- today -->
+                                <Grid Grid.Column="2">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="*" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Border CornerRadius="14" Background="#0EFFFFFF" BorderBrush="#12FFFFFF" BorderThickness="1" Padding="10,8,10,7">
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="*" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <TextBlock x:Name="FocusTodayLabel" FontSize="10" Foreground="#77FFFFFF" />
+                                            <TextBlock x:Name="FocusTodayText" Grid.Row="1" FontSize="15" FontWeight="Bold" Foreground="White" />
+                                            <TextBlock x:Name="FocusStreakText" Grid.Row="2" FontSize="10.5" Foreground="#FFD49A" Margin="0,1,0,0"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <Grid x:Name="FocusWeek" Grid.Row="3" Height="26" VerticalAlignment="Bottom" Margin="0,4,0,0" />
+                                            <Grid x:Name="FocusWeekLabels" Grid.Row="4" Margin="0,2,0,0" />
+                                        </Grid>
                                     </Border>
-                                </Border>
+                                    <Border x:Name="FocusQuietPill" Grid.Row="1" CornerRadius="11" Padding="8,3,9,3" Margin="0,6,0,0" Cursor="Hand"
+                                            HorizontalAlignment="Stretch" MouseLeftButtonUp="FocusQuiet_Click" Background="#10FFFFFF">
+                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                            <TextBlock x:Name="FocusQuietMoon" Text="&#xE708;" FontFamily="{StaticResource IconFont}" FontSize="10"
+                                                       VerticalAlignment="Center" Margin="0,1,5,0" />
+                                            <TextBlock x:Name="FocusQuietText" FontSize="10.5" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Border>
+                                </Grid>
                             </Grid>
 
                             <!-- NOTCHY CHAT (built in MainWindow.Chat.cs) -->
                             <Grid x:Name="ChatTab" VerticalAlignment="Top" Visibility="Collapsed" />
 
+                            <!-- WHAT'S NEW (MainWindow.WhatsNew.cs): highlights and the full notes, after an update -->
+                            <Grid x:Name="NewsTab" Height="186" VerticalAlignment="Top" Visibility="Collapsed" />
+
                             <!-- SHELF -->
+                            <!-- DOWNLOADS (MainWindow.Transfer.cs) -->
+                            <Grid x:Name="DownloadsTab" Height="96" VerticalAlignment="Top" Visibility="Collapsed">
+                                <StackPanel x:Name="DownloadsList" />
+                            </Grid>
+
                             <Grid x:Name="ShelfTab" Height="118" VerticalAlignment="Top" Visibility="Collapsed">
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="*" />
@@ -563,8 +903,62 @@
                                     </Border.BorderBrush>
                                     <Grid>
                                         <StackPanel x:Name="ShelfEmpty" HorizontalAlignment="Center" VerticalAlignment="Center">
-                                            <TextBlock FontFamily="{StaticResource IconFont}" Text="&#xE896;" FontSize="20" Foreground="#99FFFFFF"
-                                                       HorizontalAlignment="Center" />
+                                            <Canvas x:Name="ShelfFace" Width="28" Height="26" HorizontalAlignment="Center">
+                                                <Canvas.LayoutTransform>
+                                                    <ScaleTransform ScaleX="1.25" ScaleY="1.25" />
+                                                </Canvas.LayoutTransform>
+                                                <!-- a little file that falls into the box (hidden once it's inside) -->
+                                                <Canvas>
+                                                    <Canvas.Clip>
+                                                        <RectangleGeometry Rect="0,-20,28,30.2" />
+                                                    </Canvas.Clip>
+                                                    <Path x:Name="ShelfFallingFile" Opacity="0" Stroke="#6EE7C4" StrokeThickness="1.4" Fill="#336EE7C4"
+                                                          StrokeLineJoin="Round"
+                                                          Data="M11.6,0 H15.2 L17.4,2.2 V7 A1,1 0 0 1 16.4,8 H11.6 A1,1 0 0 1 10.6,7 V1 A1,1 0 0 1 11.6,0 Z">
+                                                        <Path.RenderTransform>
+                                                            <TranslateTransform x:Name="ShelfFileY" />
+                                                        </Path.RenderTransform>
+                                                    </Path>
+                                                </Canvas>
+                                                <Path Data="M5,10.5 V21.5 A2,2 0 0 0 7,23.5 H21 A2,2 0 0 0 23,21.5 V10.5" Stroke="#99FFFFFF"
+                                                      StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+                                                <Rectangle Canvas.Left="3" Canvas.Top="5.5" Width="22" Height="5" RadiusX="1.5" RadiusY="1.5"
+                                                           Stroke="#99FFFFFF" StrokeThickness="1.6">
+                                                    <Rectangle.RenderTransform>
+                                                        <RotateTransform x:Name="ShelfLid" CenterX="0" CenterY="5" />
+                                                    </Rectangle.RenderTransform>
+                                                </Rectangle>
+                                                <StackPanel Canvas.Left="9" Canvas.Top="13.2" Orientation="Horizontal">
+                                                    <StackPanel.RenderTransform>
+                                                        <TranslateTransform x:Name="ShelfLook" />
+                                                    </StackPanel.RenderTransform>
+                                                    <StackPanel.Effect>
+                                                        <DropShadowEffect ShadowDepth="0" BlurRadius="6" Opacity="0.9" Color="#6EE7C4" />
+                                                    </StackPanel.Effect>
+                                                    <Grid Width="4" Height="6" Margin="0.5,0">
+                                                        <Rectangle x:Name="ShelfEyeL" Width="2.3" Height="4.4" RadiusX="1.15" RadiusY="1.15" Fill="#6EE7C4"
+                                                                   RenderTransformOrigin="0.5,0.5">
+                                                            <Rectangle.RenderTransform>
+                                                                <ScaleTransform x:Name="ShelfEyeLScale" />
+                                                            </Rectangle.RenderTransform>
+                                                        </Rectangle>
+                                                        <Path x:Name="ShelfHappyL" Data="M0,3 Q1.8,0 3.6,3" Stroke="#6EE7C4" StrokeThickness="1.3"
+                                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" HorizontalAlignment="Center"
+                                                              VerticalAlignment="Center" Visibility="Collapsed" />
+                                                    </Grid>
+                                                    <Grid Width="4" Height="6" Margin="0.5,0">
+                                                        <Rectangle x:Name="ShelfEyeR" Width="2.3" Height="4.4" RadiusX="1.15" RadiusY="1.15" Fill="#6EE7C4"
+                                                                   RenderTransformOrigin="0.5,0.5">
+                                                            <Rectangle.RenderTransform>
+                                                                <ScaleTransform x:Name="ShelfEyeRScale" />
+                                                            </Rectangle.RenderTransform>
+                                                        </Rectangle>
+                                                        <Path x:Name="ShelfHappyR" Data="M0,3 Q1.8,0 3.6,3" Stroke="#6EE7C4" StrokeThickness="1.3"
+                                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" HorizontalAlignment="Center"
+                                                              VerticalAlignment="Center" Visibility="Collapsed" />
+                                                    </Grid>
+                                                </StackPanel>
+                                            </Canvas>
                                             <TextBlock x:Name="ShelfEmptyText" FontSize="11.5" Foreground="#99FFFFFF" Margin="0,6,0,0"
                                                        HorizontalAlignment="Center" />
                                         </StackPanel>
@@ -573,6 +967,13 @@
                                             <StackPanel x:Name="ShelfItems" Orientation="Horizontal" VerticalAlignment="Center" />
                                         </ScrollViewer>
                                     </Grid>
+                                </Border>
+                                <!-- a teal glow along the edge when something is put on the shelf -->
+                                <Border x:Name="ShelfGlow" CornerRadius="14" BorderThickness="1.5" BorderBrush="#6EE7C4" Opacity="0"
+                                        IsHitTestVisible="False">
+                                    <Border.Effect>
+                                        <DropShadowEffect ShadowDepth="0" BlurRadius="12" Opacity="0.9" Color="#6EE7C4" />
+                                    </Border.Effect>
                                 </Border>
                                 <Grid Grid.Row="1">
                                     <TextBlock x:Name="ShelfHint" Style="{StaticResource Small}" VerticalAlignment="Center" />
@@ -601,5 +1002,47 @@
                 </Grid>
             </Grid>
         </Border>
+
+        <!-- Claude working: an orange light running around the island's edge (MainWindow.ClaudeFace.cs) -->
+        <Path x:Name="ClaudeTrack" HorizontalAlignment="Center" VerticalAlignment="Top" IsHitTestVisible="False"
+              Visibility="Collapsed" StrokeThickness="2.2" StrokeLineJoin="Round" RenderTransformOrigin="0.5,0" />
+        <Path x:Name="ClaudeLight" HorizontalAlignment="Center" VerticalAlignment="Top" IsHitTestVisible="False"
+              Visibility="Collapsed" StrokeThickness="2.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+              StrokeLineJoin="Round" RenderTransformOrigin="0.5,0">
+            <Path.Effect>
+                <DropShadowEffect ShadowDepth="0" BlurRadius="10" Opacity="1" Color="#E8825F" />
+            </Path.Effect>
+        </Path>
+
+        <!-- download / copy progress: a green light that fills the island's outline (MainWindow.Transfer.cs) -->
+        <Path x:Name="TransferTrack" HorizontalAlignment="Center" VerticalAlignment="Top" IsHitTestVisible="False"
+              Visibility="Collapsed" StrokeThickness="2.2" StrokeLineJoin="Round" RenderTransformOrigin="0.5,0" />
+        <Path x:Name="TransferLight" HorizontalAlignment="Center" VerticalAlignment="Top" IsHitTestVisible="False"
+              Visibility="Collapsed" StrokeThickness="2.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+              StrokeLineJoin="Round" RenderTransformOrigin="0.5,0">
+            <Path.Effect>
+                <DropShadowEffect x:Name="TransferLightGlow" ShadowDepth="0" BlurRadius="10" Opacity="1" />
+            </Path.Effect>
+        </Path>
+
+        <!-- focus running on the small island: the light fills the edge as time goes by (MainWindow.Focus.cs) -->
+        <Path x:Name="FocusTrack" HorizontalAlignment="Center" VerticalAlignment="Top" IsHitTestVisible="False"
+              Visibility="Collapsed" StrokeThickness="2.2" StrokeLineJoin="Round" RenderTransformOrigin="0.5,0" />
+        <Path x:Name="FocusLight" HorizontalAlignment="Center" VerticalAlignment="Top" IsHitTestVisible="False"
+              Visibility="Collapsed" StrokeThickness="2.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+              StrokeLineJoin="Round" RenderTransformOrigin="0.5,0">
+            <Path.Effect>
+                <DropShadowEffect x:Name="FocusLightGlow" ShadowDepth="0" BlurRadius="10" Opacity="1" />
+            </Path.Effect>
+        </Path>
+
+        <!-- opening animation: the light that runs around the island's edge (MainWindow.Intro.cs) -->
+        <Path x:Name="IntroLight" HorizontalAlignment="Center" VerticalAlignment="Top" IsHitTestVisible="False"
+              Visibility="Collapsed" StrokeThickness="2.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+              StrokeLineJoin="Round" RenderTransformOrigin="0.5,0">
+            <Path.Effect>
+                <DropShadowEffect x:Name="IntroLightGlow" ShadowDepth="0" BlurRadius="10" Opacity="1" />
+            </Path.Effect>
+        </Path>
     </Grid>
 </Window>

@@ -27,7 +27,7 @@ public partial class MainWindow
 
     // pod
     private readonly TranslateTransform _podSlide = new();
-    private bool _podShown, _podAttentionAnim, _podLookAnim, _podHappy;
+    private bool _podShown, _podAttentionAnim, _podHappy;
     private DateTime _podDoneUntil = DateTime.MinValue;
 
     // eyes
@@ -66,9 +66,10 @@ public partial class MainWindow
             n.button.Visibility = S.ShelfEnabled ? Visibility.Visible : Visibility.Collapsed;
         if (!S.ShelfEnabled && _tab == Tab.Shelf) SelectTab(Tab.Home, animate: false);
 
+        ApplyTransferSettings();
         ClaudePod.Height = 34 + _topHidden;
         BuildPodOutline();
-        if (!S.ClaudePod && _podShown) HidePod();
+        if (!S.ClaudePod && _podShown && _podKind == PodKind.Claude) HidePod();
         PodScale.ScaleX = PodScale.ScaleY = _podShown ? S.SizeScale : PodScale.ScaleX;
         UpdatePodPosition();
 
@@ -84,7 +85,8 @@ public partial class MainWindow
     /// <summary>Called every frame from OnFrame.</summary>
     private void UpdateExtrasFrame()
     {
-        UpdateLivelyEyes();
+        if (!_introActive) UpdateLivelyEyes();
+        UpdateIslandFaceGate();
         UpdatePod();
 
         if (_happyShown && DateTime.Now > _happyUntil) SetHappy(false);
@@ -96,7 +98,7 @@ public partial class MainWindow
             UpdateState();
         }
 
-        if (_tick % 60 == 30) CheckBattery();
+        if (_slowTick && _tick % 60 == 30) CheckBattery();
     }
 
     // =====================================================================================
@@ -131,6 +133,7 @@ public partial class MainWindow
             var clear = new SolidColorBrush(Color.FromArgb(0x02, 0, 0, 0));
             Island.Background = clear;
             ClaudePod.Background = clear;
+            DownloadPod.Background = clear;
         }
     }
 
@@ -155,10 +158,15 @@ public partial class MainWindow
                 cornerRadius * k * dpi.DpiScaleX);
         }
 
-        var island = show ? Px(Island, Island.CornerRadius.TopLeft) : (new Rect(), 0);
+        // an island pulled all the way up (while a bubble takes its place) has nothing on screen: no blur, no shadow
+        bool islandOnScreen = Island.ActualHeight - _topHidden > 0.5;
+        var island = show && islandOnScreen ? Px(Island, Island.CornerRadius.TopLeft) : (new Rect(), 0);
         bool podVisible = show && ClaudePod.Visibility == Visibility.Visible;
         var pod = podVisible ? Px(ClaudePod, ClaudePod.CornerRadius.TopLeft) : (new Rect(), 0);
-        _backdrop.Update(island.Item1, island.Item2, pod.Item1, pod.Item2, podVisible ? ClaudePod.Opacity : 0);
+        bool dlVisible = show && DownloadPod.Visibility == Visibility.Visible;
+        var dl = dlVisible ? Px(DownloadPod, DownloadPod.CornerRadius.TopLeft) : (new Rect(), 0);
+        _backdrop.Update(island.Item1, island.Item2, pod.Item1, pod.Item2, podVisible ? ClaudePod.Opacity : 0,
+            dl.Item1, dl.Item2, dlVisible ? DownloadPod.Opacity : 0);
     }
 
     // =====================================================================================
@@ -182,12 +190,15 @@ public partial class MainWindow
 
     private void UpdateEyeColor()
     {
+        // the opening animation colours the eyes itself, and keeps its colour while the eyes fade out
+        if (_introActive || DateTime.Now < _eyeColorHoldUntil) return;
         var c = _claude.Active;
-        bool paused = _media.HasSession && !string.IsNullOrEmpty(_media.Title) && !_media.IsPlaying;
+        bool music = _media.HasSession && !string.IsNullOrEmpty(_media.Title);
         Color color;
         if (c?.NeedsAttention == true && S.ClaudeShowInCompact) color = ClaudeColor;
         else if (!S.EyesUseAlbumColor) color = ParseColor(S.EyeColor);
-        else if (paused) color = Soften(Bright(_musicAccent));
+        else if (music && !_media.IsPlaying) color = Soften(Bright(_musicAccent));
+        else if (music) color = Bright(_musicAccent);
         else color = Colors.White;
 
         var brush = new SolidColorBrush(color);
@@ -234,7 +245,7 @@ public partial class MainWindow
         if (!S.LivelyEyes)
         {
             PauseBlinking(false);
-            if (_state == IslandState.Idle) MaybeGlance();
+            if (_state == IslandState.Idle && _slowTick) MaybeGlance();
             return;
         }
 
@@ -244,7 +255,7 @@ public partial class MainWindow
         double targetScale = sleepy ? 0.28 : 1;
         PauseBlinking(sleepy); // closed eyes don't blink
         if (Math.Abs(EyesSleep.ScaleY - targetScale) > 0.005)
-            EyesSleep.ScaleY += (targetScale - EyesSleep.ScaleY) * (sleepy ? 0.03 : 0.25);
+            EyesSleep.ScaleY += (targetScale - EyesSleep.ScaleY) * Ease(sleepy ? 0.03 : 0.25);
 
         if (_state != IslandState.Idle || !IdleEyes.IsVisible) return;
 
@@ -266,15 +277,19 @@ public partial class MainWindow
             EyesLook.BeginAnimation(TranslateTransform.XProperty, null);
             EyesLook.BeginAnimation(TranslateTransform.YProperty, null);
         }
-        EyesLook.X += (tx - EyesLook.X) * 0.16;
-        EyesLook.Y += (ty - EyesLook.Y) * 0.16;
+        double ek = Ease(0.16);
+        EyesLook.X += (tx - EyesLook.X) * ek;
+        EyesLook.Y += (ty - EyesLook.Y) * ek;
     }
 
     // =====================================================================================
     // separate Claude island ("pod")
     // =====================================================================================
 
-    private bool PodWanted(bool includeDone = true)
+    /// <summary>Someone wants the bubble: Claude first, else the focus timer (MainWindow.FocusPod.cs).</summary>
+    private bool PodWanted(bool includeDone = true) => ClaudePodWanted(includeDone) || FocusPodWanted();
+
+    private bool ClaudePodWanted(bool includeDone = true)
     {
         if (!S.ClaudePod || !S.ClaudeShowInCompact || _hiddenForFullscreen) return false;
         if (_state != IslandState.Compact || _compactMode != CompactMode.Music) return false;
@@ -284,6 +299,7 @@ public partial class MainWindow
 
     private void UpdatePodPosition()
     {
+        if (_podMorphing) return;
         double scale = S.SizeScale;
         double islandW = Island.ActualWidth * scale;
         const double podW = 70, gap = 8;
@@ -292,10 +308,50 @@ public partial class MainWindow
 
     private void UpdatePod()
     {
-        bool want = PodWanted();
-        if (want && !_podShown) ShowPod();
-        else if (!want && _podShown) HidePod();
-        if (!_podShown) return;
+        bool claudeWants = ClaudePodWanted();
+        bool want = claudeWants || FocusPodWanted();
+        var kind = claudeWants ? PodKind.Claude : PodKind.Focus;
+        if (want && !_podShown && !_podMorphing && kind == PodKind.Focus)
+        {
+            // music came back while the focus had the island: the island becomes the bubble
+            if (IslandJustLeft(m => m == CompactMode.Focus)) MorphFocusIslandIntoPod();
+            // otherwise it just pops in (after the music island's eyes have gone)
+            else if (!CompactFaceVisible && !EyeTripActive)
+            {
+                SetPodKind(PodKind.Focus);
+                ShowPod();
+            }
+        }
+        else if (want && !_podShown && !_podMorphing)
+        {
+            if (_podKind != PodKind.Claude) SetPodKind(PodKind.Claude);
+            // music came back while Claude had the island: the island becomes the bubble
+            if (IslandJustLeft(IsClaudeMode)) MorphClaudeIslandIntoPod();
+            else if (EyeTripActive) { } // the eyes are on their way: the trip brings the bubble in
+            else if (CompactFaceVisible) { } // the music island's eyes go away first
+            else if (DownloadPodHasEyes) StartEyeTrip(forward: false); // the download's eyes go to Claude
+            else ShowPod();
+        }
+        else if (!want && _podShown && !_podMorphing && !EyeTripActive && !PodSwapping && _podKind == PodKind.Focus)
+        {
+            // music stopped and the focus takes the island: the bubble becomes the island
+            if (_state == IslandState.Compact && _compactMode == CompactMode.Focus) MorphFocusPod();
+            else HidePod();
+        }
+        else if (want && _podShown && !_podMorphing && !EyeTripActive && !PodSwapping && kind != _podKind)
+        {
+            // Claude starts (or is done) while the bubble is the focus' (or the other way): the eyes swap behind the screen
+            StartPodSwap(kind);
+        }
+        else if (!want && _podShown && !_podMorphing && !EyeTripActive && !PodSwapping)
+        {
+            // music stopped and Claude takes the island: the bubble becomes the island
+            if (_state == IslandState.Compact && IsClaudeMode(_compactMode)) MorphClaudePod();
+            // Claude is done and a download is still going: its eyes go to the download's bubble
+            else if (_dlPodShown && !_dlPodMorphing && _dlPodEyesU < 0.5) StartEyeTrip(forward: true);
+            else HidePod();
+        }
+        if (!_podShown || _podKind != PodKind.Claude || PodSwapping) return;
 
         var c = _claude.Active;
         bool attention = c?.NeedsAttention == true;
@@ -329,57 +385,27 @@ public partial class MainWindow
             PodEyeL.Fill = PodEyeR.Fill = eye;
         }
 
-        // working: focused "- -" eyes + a little bar running around the outline
+        // working: a little bar running around the outline
         bool working = !attention && !done;
         if (working != _podWorking)
         {
             _podWorking = working;
             SetPodWorking(working);
         }
-
-        // working: eyes look left and right
-        bool look = !attention && !done && S.LivelyEyes;
-        if (look != _podLookAnim)
-        {
-            _podLookAnim = look;
-            if (look)
-            {
-                var ease = new SineEase { EasingMode = EasingMode.EaseInOut };
-                var anim = new DoubleAnimationUsingKeyFrames { Duration = TimeSpan.FromSeconds(2.6), RepeatBehavior = RepeatBehavior.Forever };
-                anim.KeyFrames.Add(new EasingDoubleKeyFrame(-3, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(0.35)), ease));
-                anim.KeyFrames.Add(new EasingDoubleKeyFrame(-3, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(1.1))));
-                anim.KeyFrames.Add(new EasingDoubleKeyFrame(3, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(1.5)), ease));
-                anim.KeyFrames.Add(new EasingDoubleKeyFrame(3, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(2.25))));
-                anim.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(2.6)), ease));
-                PodLook.BeginAnimation(TranslateTransform.XProperty, anim);
-            }
-            else
-            {
-                PodLook.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(200)));
-            }
-        }
     }
 
     private bool _podWorking;
-    private double _podArcUnits;
 
     private void SetPodWorking(bool on)
     {
         var d = TimeSpan.FromMilliseconds(Dur(240));
-        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
-        foreach (var eye in new[] { PodEyeL, PodEyeR })
-        {
-            eye.BeginAnimation(HeightProperty, new DoubleAnimation(on ? 3 : 10, d) { EasingFunction = ease });
-            eye.BeginAnimation(WidthProperty, new DoubleAnimation(on ? 8 : 6, d) { EasingFunction = ease });
-        }
+        // (the eyes themselves act out what Claude is doing: MainWindow.ClaudeFace.cs)
 
         if (on)
         {
             BuildPodOutline();
             PodArc.Visibility = Visibility.Visible;
-            PodArc.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, d));
-            PodArc.BeginAnimation(System.Windows.Shapes.Shape.StrokeDashOffsetProperty,
-                new DoubleAnimation(0, -_podArcUnits, TimeSpan.FromSeconds(1.25)) { RepeatBehavior = RepeatBehavior.Forever });
+            PodArc.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, d)); // (the light itself: DrawClaudePod)
         }
         else
         {
@@ -388,46 +414,30 @@ public partial class MainWindow
             {
                 if (_podWorking) return;
                 PodArc.Visibility = Visibility.Collapsed;
-                PodArc.BeginAnimation(System.Windows.Shapes.Shape.StrokeDashOffsetProperty, null);
             };
             PodArc.BeginAnimation(OpacityProperty, fade);
         }
     }
 
-    /// <summary>Outline geometry for the pod: the faint track and the running bar.</summary>
-    /// <summary>
-    /// The orange outline is an oval pill floating inside the pod's dark body (which itself is glued to the
-    /// top of the screen); the "working" bar runs around that pill.
-    /// </summary>
+    /// <summary>The pod's outline is drawn every frame (DrawClaudePod): just make it redraw now.</summary>
     private void BuildPodOutline()
     {
-        static string F(double v) => v.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
-        const double padX = 6, padY = 5;
-        double w = ClaudePod.Width, h = 34;
-        double l = padX, r = w - padX, t = padY, b = h - padY;
-        double rad = (b - t) / 2; // fully round ends = oval pill
-        string pill =
-            $"M {F(l + rad)},{F(t)} H {F(r - rad)} A {F(rad)},{F(rad)} 0 0 1 {F(r - rad)},{F(b)} " +
-            $"H {F(l + rad)} A {F(rad)},{F(rad)} 0 0 1 {F(l + rad)},{F(t)} Z";
-        double perimeter = 2 * (r - l - 2 * rad) + 2 * Math.PI * rad;
-
-        PodTrack.Data = Geometry.Parse(pill);
-        PodArc.Data = Geometry.Parse(pill);
-
-        // dash lengths are in multiples of the stroke thickness
-        _podArcUnits = perimeter / PodArc.StrokeThickness;
-        double dash = _podArcUnits * 0.22;
-        PodArc.StrokeDashArray = new DoubleCollection { dash, _podArcUnits - dash };
+        _podShapeW = -1;
+        PodArc.StrokeDashArray = null;
+        DrawClaudePod(AnimNow);
     }
 
     private void ShowPod()
     {
         _podShown = true;
-        _podWorking = !(_claude.Active?.NeedsAttention != true && !(DateTime.Now < _podDoneUntil)); // force refresh
-        BuildPodOutline();
-        _podAttentionAnim = !(_claude.Active?.NeedsAttention == true); // force refresh
-        _podLookAnim = !_podLookAnim;
-        _podHappy = !(DateTime.Now < _podDoneUntil);
+        if (_podKind == PodKind.Claude)
+        {
+            _podWorking = !(_claude.Active?.NeedsAttention != true && !(DateTime.Now < _podDoneUntil)); // force refresh
+            BuildPodOutline();
+            _podAttentionAnim = !(_claude.Active?.NeedsAttention == true); // force refresh
+            _podHappy = !(DateTime.Now < _podDoneUntil);
+        }
+        else BuildPodOutline();
         ClaudePod.Visibility = Visibility.Visible;
         UpdatePodPosition();
 
@@ -460,8 +470,9 @@ public partial class MainWindow
     {
         e.Handled = true;
         SoundService.Play(Sfx.Click);
-        _podOpenRequest = true;
-        SelectTab(Tab.Claude, animate: false);
+        if (_podKind == PodKind.Focus) _userTab = Tab.Focus; // the focus bubble opens the Focus tab
+        else _podOpenRequest = true;
+        SelectTab(_podKind == PodKind.Focus ? Tab.Focus : Tab.Claude, animate: false);
         _clickOpened = true;
         _hoverRequested = false;
         _hoverTimer.Stop();
@@ -560,6 +571,7 @@ public partial class MainWindow
         if (_draggingOut || e.Data.GetData(DataFormats.FileDrop) is not string[] files) return;
 
         int added = 0;
+        bool wasEmpty = _shelf.Count == 0;
         foreach (var f in files)
         {
             if (_shelf.Contains(f, StringComparer.OrdinalIgnoreCase)) continue;
@@ -572,7 +584,7 @@ public partial class MainWindow
             SoundService.Play(Sfx.Expand);
             Happy();
             SaveShelf();
-            RenderShelf();
+            ShelfStored(wasEmpty);
         }
 
         // stay open a moment so you can see the new item

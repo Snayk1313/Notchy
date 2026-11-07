@@ -142,9 +142,27 @@ public class Visualizer : FrameworkElement
         {
             if (_rand.NextDouble() < 0.4)
                 _targets[i] = energy * (0.3 + _rand.NextDouble() * 0.8);
-            _levels[i] += (_targets[i] - _levels[i]) * 0.35;
         }
-        InvalidateVisual();
+    }
+
+    private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
+    private double _lastStep = -1;
+
+    /// <summary>Every frame: the bars glide toward the levels picked by <see cref="Tick"/> (35% per 62.5 ms, as before).</summary>
+    public void Step()
+    {
+        double now = _clock.Elapsed.TotalMilliseconds;
+        double dt = _lastStep < 0 ? 62.5 : Math.Min(now - _lastStep, 250);
+        _lastStep = now;
+        double k = 1 - Math.Pow(0.65, dt / 62.5);
+        bool moved = false;
+        for (int i = 0; i < BarCount; i++)
+        {
+            double d = (_targets[i] - _levels[i]) * k;
+            if (Math.Abs(d) > 0.0005) moved = true;
+            _levels[i] += d;
+        }
+        if (moved) InvalidateVisual();
     }
 
     protected override void OnRender(DrawingContext dc)

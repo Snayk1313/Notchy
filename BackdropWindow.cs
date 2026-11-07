@@ -17,7 +17,7 @@ public sealed class BackdropWindow
 {
     public IntPtr Hwnd { get; private set; }
     private DesktopWindowTarget? _target;
-    private BackdropShape? _island, _pod;
+    private BackdropShape? _island, _pod, _pod2;
     private bool _blur = true, _shadow = true;
     private int _amount = 100, _tint = 30;
     private Vector2 _hostSize;
@@ -86,6 +86,7 @@ public sealed class BackdropWindow
             _hostSize = new Vector2(1, 1);
             _island = new BackdropShape(root, _hostSize);
             _pod = new BackdropShape(root, _hostSize);
+            _pod2 = new BackdropShape(root, _hostSize); // the download bubble
             Apply();
         }
         catch (Exception ex)
@@ -112,6 +113,7 @@ public sealed class BackdropWindow
         _hostSize = new Vector2(px.Width, px.Height);
         _island?.SetHostSize(_hostSize);
         _pod?.SetHostSize(_hostSize);
+        _pod2?.SetHostSize(_hostSize);
     }
 
     public void KeepBelow(IntPtr islandHwnd)
@@ -132,13 +134,13 @@ public sealed class BackdropWindow
 
     private void Apply()
     {
-        if (_island == null || _pod == null) return;
+        if (_island == null || _pod == null || _pod2 == null) return;
         byte alpha = (byte)Math.Round(_tint / 100.0 * 0.85 * 255);
         var tint = Windows.UI.Color.FromArgb(_blur ? alpha : (byte)0, 0x14, 0x14, 0x18);
         // Mixing sharp + blurred only *looks* blurred near full opacity, so ease the slider
         // in: the effect grows evenly across 0..100 instead of all at the top end.
         float a = _amount / 100f;
-        foreach (var s in new[] { _island, _pod })
+        foreach (var s in new[] { _island, _pod, _pod2 })
         {
             s.SetBlurAmount(_blur ? 1f - MathF.Pow(1f - a, 3.2f) : 0f);
             s.SetTint(tint);
@@ -147,11 +149,13 @@ public sealed class BackdropWindow
     }
 
     /// <summary>Shapes in window pixels. A shape with width 0 is hidden.</summary>
-    public void Update(Rect island, double islandRadius, Rect pod, double podRadius, double podOpacity)
+    public void Update(Rect island, double islandRadius, Rect pod, double podRadius, double podOpacity,
+        Rect pod2 = default, double pod2Radius = 0, double pod2Opacity = 0)
     {
-        if (_island == null || _pod == null) return;
+        if (_island == null || _pod == null || _pod2 == null) return;
         Set(_island, island, islandRadius, 1);
         Set(_pod, pod, podRadius, podOpacity);
+        Set(_pod2, pod2, pod2Radius, pod2Opacity);
     }
 
     private static void Set(BackdropShape s, Rect r, double radius, double opacity)

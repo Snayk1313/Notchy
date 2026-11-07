@@ -59,6 +59,36 @@ public partial class MainWindow
 
     }
 
+    // ---- one pair of eyes at a time: while a bubble next to the music island has eyes (Claude's, or the
+    //      download's), the island shows the song's name where it would show its eyes. They come back only once
+    //      the bubble is completely gone, and a bubble with eyes waits for them to be gone before it appears.
+
+    private bool _islandFaceBlocked;
+
+    private bool BubbleEyesAround =>
+        EyeTripActive
+        || (ClaudePod.Visibility == Visibility.Visible && ClaudePod.Opacity > 0.01)
+        || (DownloadPod.Visibility == Visibility.Visible && DownloadPod.Opacity > 0.01 && DlPodEyes.Opacity > 0.01)
+        || (PodWanted() && !_podShown)                                            // about to appear
+        || (DownloadPodWanted(ActiveTransfer) && !_dlPodShown && !ClaudeOnScreen); // about to appear, with eyes
+
+    /// <summary>The music island's eyes are (still) on screen, even fading out.</summary>
+    private bool CompactFaceVisible => _compactFaceOn || _compactFace.Opacity > 0.01;
+
+    /// <summary>What the music island says now: the lyric line, or the song's name while a bubble has the eyes.</summary>
+    private string MusicCompactShown => _compactInstrumental && _islandFaceBlocked ? _musicTitleText : _musicCompactText;
+
+    /// <summary>Every frame, before the bubbles are updated.</summary>
+    private void UpdateIslandFaceGate()
+    {
+        bool blocked = BubbleEyesAround;
+        if (blocked == _islandFaceBlocked) return;
+        _islandFaceBlocked = blocked;
+        if (_compactMode != CompactMode.Music) return;
+        SetCompactText(MusicCompactShown);
+        ShowCompactFace(_compactInstrumental && !blocked);
+    }
+
     private void ShowCompactFace(bool on)
     {
         if (on == _compactFaceOn) return;
@@ -150,6 +180,22 @@ public partial class MainWindow
         _face.BaseMood = mood;
         _face.Update(dt, sway);
 
+        // a tab that already has eyes (the shelf's box, the downloads' sleepy cloud, the focus ring) doesn't need a second pair up here
+        bool tabHasEyes = (_tab == Tab.Shelf && ShelfEmpty.Visibility == Visibility.Visible)
+                          || (_tab == Tab.Downloads && _dlEmpty) || _tab == Tab.Focus || _tab == Tab.News;
+        double faceTarget = tabHasEyes ? 0 : 1;
+        if (_face.LayoutTransform is not ScaleTransform fs)
+        {
+            fs = new ScaleTransform(1, 1);
+            _face.LayoutTransform = fs;
+        }
+        double k = Math.Clamp(dt * 14, 0, 1);
+        fs.ScaleX += (faceTarget - fs.ScaleX) * k;
+        if (Math.Abs(fs.ScaleX - faceTarget) < 0.01) fs.ScaleX = faceTarget;
+        _face.Opacity = fs.ScaleX;
+        _face.Margin = new Thickness(0, 0, 8 * fs.ScaleX, 0);
+        _face.Visibility = fs.ScaleX < 0.01 ? Visibility.Collapsed : Visibility.Visible;
+
         // waveform shortcut
         bool showWave = hasMusic && _tab != Tab.Music;
         _headerWave.Visibility = showWave ? Visibility.Visible : Visibility.Collapsed;
@@ -162,7 +208,8 @@ public partial class MainWindow
                 _headerWaveViz.Effect = new DropShadowEffect { ShadowDepth = 0, BlurRadius = 6, Opacity = 0.7, Color = accent };
             }
             _headerWave.ToolTip = Loc.T("tab.music") + (hasMusic ? " · " + _media.Title : "");
-            if (_tick % 2 == 0) _headerWaveViz.Tick(peak, playing, _audio.HasMeter);
+            if (_slowTick && _tick % 2 == 0) _headerWaveViz.Tick(peak, playing, _audio.HasMeter);
+            _headerWaveViz.Step();
         }
     }
 }

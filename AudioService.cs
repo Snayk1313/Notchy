@@ -203,6 +203,112 @@ public sealed class AudioService
         return 0f;
     }
 
+    // ---------------------------------------------------------------- peak of the playing app only
+
+    private string _meterApp = "\0";
+    private DateTime _meterAt = DateTime.MinValue;
+    private readonly System.Collections.Generic.List<IAudioMeterInformation> _appMeters = new();
+
+    /// <summary>
+    /// Peak of the app that is playing the media (its own audio sessions), so other apps (Premiere, games,
+    /// calls...) don't move the waveform. Falls back to the whole output when its session can't be found.
+    /// </summary>
+    public float GetSourcePeak(string appId, out bool fromApp)
+    {
+        fromApp = false;
+        if (string.IsNullOrEmpty(appId) || _sessions == null) return GetPeak();
+        if (appId != _meterApp || (DateTime.UtcNow - _meterAt).TotalSeconds > 2) FindAppMeters(appId);
+        if (_appMeters.Count == 0) return GetPeak();
+        float max = 0;
+        try
+        {
+            foreach (var m in _appMeters)
+                if (m.GetPeakValue(out float p) == 0 && p > max) max = p;
+        }
+        catch
+        {
+            _meterAt = DateTime.MinValue; // session gone: look again next time
+            return GetPeak();
+        }
+        fromApp = true;
+        return max;
+    }
+
+    private void FindAppMeters(string appId)
+    {
+        _meterApp = appId;
+        _meterAt = DateTime.UtcNow;
+        _appMeters.Clear();
+        try
+        {
+            if (_sessions!.GetSessionEnumerator(out IAudioSessionEnumerator list) != 0 || list == null) return;
+            list.GetCount(out int count);
+            for (int i = 0; i < count; i++)
+            {
+                if (list.GetSession(i, out IAudioSessionControl ctl) != 0 || ctl is not IAudioSessionControl2 ctl2) continue;
+                ctl2.GetProcessId(out uint pid);
+                if (pid == 0 || !SessionBelongsTo(pid, appId)) continue;
+                if (ctl is IAudioMeterInformation meter) _appMeters.Add(meter);
+            }
+        }
+        catch
+        {
+            _appMeters.Clear();
+        }
+    }
+
+    [DllImport("kernel32.dll")] private static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+    [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr h);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool QueryFullProcessImageName(IntPtr h, int flags, System.Text.StringBuilder name, ref int size);
+
+    private static string ProcessPath(uint pid)
+    {
+        IntPtr h = OpenProcess(0x1000 /* QUERY_LIMITED_INFORMATION */, false, pid);
+        if (h == IntPtr.Zero) return "";
+        try
+        {
+            var sb = new System.Text.StringBuilder(1024);
+            int size = sb.Capacity;
+            return QueryFullProcessImageName(h, 0, sb, ref size) ? sb.ToString() : "";
+        }
+        finally
+        {
+            CloseHandle(h);
+        }
+    }
+
+    /// <summary>
+    /// Does the audio session of process <paramref name="pid"/> belong to the media app <paramref name="appId"/>
+    /// (its AppUserModelID: "Spotify.exe", "MSEdge", "Chrome", "Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic"...)?
+    /// </summary>
+    private static bool SessionBelongsTo(uint pid, string appId)
+    {
+        string path = ProcessPath(pid);
+        if (path.Length == 0) return false;
+        string exe = System.IO.Path.GetFileNameWithoutExtension(path);
+        string id = appId.Trim();
+
+        // Store apps: the package folder ("Microsoft.ZuneMusic_11.x_x64__8wekyb3d8bbwe") holds the exe
+        int bang = id.IndexOf('!');
+        if (bang > 0)
+        {
+            string family = id[..bang];
+            int us = family.LastIndexOf('_');
+            if (us > 0 && path.Contains(family[..us], StringComparison.OrdinalIgnoreCase) &&
+                path.Contains(family[(us + 1)..], StringComparison.OrdinalIgnoreCase)) return true;
+            if (exe.Equals(id[(bang + 1)..], StringComparison.OrdinalIgnoreCase)) return true;
+        }
+
+        string name = System.IO.Path.GetFileNameWithoutExtension(id.Contains('\\') ? id : id.Replace('/', '\\'));
+        if (exe.Equals(name, StringComparison.OrdinalIgnoreCase)) return true;
+        if (id.Contains("spotify", StringComparison.OrdinalIgnoreCase)) return exe.Equals("Spotify", StringComparison.OrdinalIgnoreCase);
+        // Firefox reports a hash of its install folder as its id
+        if (id.Length == 16 && System.Text.RegularExpressions.Regex.IsMatch(id, "^[0-9A-Fa-f]{16}$"))
+            return exe.Equals("firefox", StringComparison.OrdinalIgnoreCase);
+        return false;
+    }
+
     public bool TryGet(out float volume, out bool muted)
     {
         volume = 0;

@@ -5,7 +5,7 @@ using System.Windows.Media;
 
 namespace Notchy;
 
-public enum Sfx { Expand, Collapse, Click, Toggle, Done, Attention, FocusEnd, Like }
+public enum Sfx { Expand, Collapse, Click, Toggle, Done, Attention, FocusEnd, Like, Hello, Wave }
 
 /// <summary>
 /// Soft, short UI sounds synthesized at startup (no third-party audio files).
@@ -46,13 +46,17 @@ public static class SoundService
     /// <summary>Call once at startup so the first sound has no delay.</summary>
     public static void Warmup() => EnsureReady();
 
+    /// <summary>True while you focus with "Não perturbe" on: only the end-of-focus sound plays.</summary>
+    public static bool Hushed { get; set; }
+
     public static void Play(Sfx sfx)
     {
         var st = AppSettings.Current;
         if (!st.SoundsEnabled) return;
+        if (Hushed && sfx != Sfx.FocusEnd) return;
         bool allowed = sfx switch
         {
-            Sfx.Expand or Sfx.Collapse => st.SoundOpenClose,
+            Sfx.Expand or Sfx.Collapse or Sfx.Hello or Sfx.Wave => st.SoundOpenClose,
             Sfx.Click or Sfx.Toggle or Sfx.Like => st.SoundClicks,
             Sfx.FocusEnd => st.SoundFocus,
             Sfx.Done => st.ClaudeSoundDone,
@@ -134,6 +138,25 @@ public static class SoundService
                 Tone(b, 0.07, 1975.5, 0.45, 0.20, 0.16, bell: true);
                 return b;
             }
+            case Sfx.Hello: // opening: a soft "bloop" as the drop becomes the island, then a quiet rising shimmer
+            {
+                var b = Buffer(1.0);
+                Tone(b, 0.00, 392.00, 0.22, 0.22, 0.09);
+                Tone(b, 0.05, 587.33, 0.26, 0.20, 0.11);
+                Tone(b, 0.16, 1174.66, 0.55, 0.10, 0.22, bell: true);
+                Tone(b, 0.24, 1567.98, 0.70, 0.09, 0.28, bell: true);
+                return b;
+            }
+            case Sfx.Wave: // the opening "hi": a soft air swish on each swing of the little hand (0.18 s apart)
+            {
+                var b = Buffer(1.0);
+                for (int k = 0; k < 5; k++)
+                {
+                    Swish(b, k * 0.18, 0.15, k % 2 == 0 ? 0.055 : 0.045);
+                    Tone(b, k * 0.18 + 0.05, k % 2 == 0 ? 1760 : 1568, 0.08, 0.018, 0.03, harmonics: false);
+                }
+                return b;
+            }
             case Sfx.FocusEnd: // three-note chime
             {
                 var b = Buffer(1.6);
@@ -147,6 +170,26 @@ public static class SoundService
     }
 
     private static float[] Buffer(double seconds) => new float[(int)(seconds * Rate)];
+
+    /// <summary>Adds a short band-passed noise "whoosh" that swells and fades (air moving).</summary>
+    private static void Swish(float[] buf, double start, double length, double amp)
+    {
+        var rnd = new Random(7 + (int)(start * 1000));
+        int s0 = (int)(start * Rate), n = (int)(length * Rate);
+        double lo = 0, hi = 0;
+        // one-pole filters: keep roughly 700 Hz - 4 kHz, the "fff" of a quick movement
+        double aHi = Math.Exp(-2 * Math.PI * 4000 / Rate), aLo = Math.Exp(-2 * Math.PI * 700 / Rate);
+        for (int i = 0; i < n && s0 + i < buf.Length; i++)
+        {
+            double x = rnd.NextDouble() * 2 - 1;
+            hi = (1 - aHi) * x + aHi * hi;
+            lo = (1 - aLo) * hi + aLo * lo;
+            double band = hi - lo;
+            double p = (double)i / n;
+            double env = Math.Pow(Math.Sin(Math.PI * Math.Pow(p, 0.7)), 2);
+            buf[s0 + i] += (float)(band * env * amp * 3);
+        }
+    }
 
     /// <summary>Adds a sine tone with soft attack and exponential decay.</summary>
     private static void Tone(float[] buf, double start, double freq, double length, double amp, double decay,

@@ -6,93 +6,9 @@ namespace Notchy;
 
 internal static class Native
 {
-    // ---------------------------------------------------------------- blur behind (DWM accent)
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct AccentPolicy
-    {
-        public int AccentState;
-        public int AccentFlags;
-        public uint GradientColor; // AABBGGRR
-        public int AnimationId;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct WindowCompositionAttribData
-    {
-        public int Attribute;
-        public IntPtr Data;
-        public int SizeOfData;
-    }
-
-    [DllImport("user32.dll")]
-    private static extern int SetWindowCompositionAttribute(IntPtr hwnd, ref WindowCompositionAttribData data);
-
-    /// <summary>state 0 = off, 3 = blur behind, 4 = acrylic. tint is AABBGGRR.</summary>
-    public static void SetAccent(IntPtr hwnd, int state, uint tint)
-    {
-        var accent = new AccentPolicy { AccentState = state, AccentFlags = state == 4 ? 2 : 0, GradientColor = tint };
-        int size = Marshal.SizeOf(accent);
-        IntPtr ptr = Marshal.AllocHGlobal(size);
-        try
-        {
-            Marshal.StructureToPtr(accent, ptr, false);
-            var data = new WindowCompositionAttribData { Attribute = 19 /* WCA_ACCENT_POLICY */, Data = ptr, SizeOfData = size };
-            SetWindowCompositionAttribute(hwnd, ref data);
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(ptr);
-        }
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct MARGINS { public int Left, Right, Top, Bottom; }
-
-    [DllImport("dwmapi.dll")] private static extern int DwmExtendFrameIntoClientArea(IntPtr hwnd, ref MARGINS m);
-
-    /// <summary>Lets DWM honour the alpha channel of a normal window's client area.</summary>
-    public static void ExtendFrame(IntPtr hwnd)
-    {
-        var m = new MARGINS { Left = -1, Right = -1, Top = -1, Bottom = -1 };
-        DwmExtendFrameIntoClientArea(hwnd, ref m);
-    }
+    // ---------------------------------------------------------------- windows
 
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
-
-    /// <summary>Windows 11 rounded corners for a borderless window.</summary>
-    public static void RoundCorners(IntPtr hwnd)
-    {
-        int round = 2; // DWMWCP_ROUND
-        DwmSetWindowAttribute(hwnd, 33 /* DWMWA_WINDOW_CORNER_PREFERENCE */, ref round, sizeof(int));
-    }
-
-    /// <summary>Windows 11 system backdrop: 2 = Mica, 3 = Acrylic (Start menu / flyouts), 4 = Mica Alt.</summary>
-    public static void SystemBackdrop(IntPtr hwnd, int type)
-    {
-        int dark = 1;
-        DwmSetWindowAttribute(hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, ref dark, sizeof(int));
-        DwmSetWindowAttribute(hwnd, 38 /* DWMWA_SYSTEMBACKDROP_TYPE */, ref type, sizeof(int));
-    }
-
-    [DllImport("user32.dll")] private static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint key, byte alpha, uint flags);
-    [DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(POINT p);
-
-    /// <summary>Layered (alpha 255) so WS_EX_TRANSPARENT really lets clicks through.</summary>
-    public static void MakeLayeredOpaque(IntPtr hwnd)
-    {
-        long ex = (long)GetWindowLongPtr(hwnd, GWL_EXSTYLE);
-        SetWindowLongPtr(hwnd, GWL_EXSTYLE, new IntPtr(ex | 0x80000 /* WS_EX_LAYERED */));
-        SetLayeredWindowAttributes(hwnd, 0, 255, 0x2 /* LWA_ALPHA */);
-    }
-
-    public static IntPtr WindowAt(int x, int y) => WindowFromPoint(new POINT { X = x, Y = y });
-
-    public static bool IsLayeredTransparent(IntPtr hwnd)
-    {
-        long ex = (long)GetWindowLongPtr(hwnd, GWL_EXSTYLE);
-        return (ex & 0x80000) != 0 && (ex & 0x20) != 0;
-    }
 
     /// <summary>Allows composition's HostBackdropBrush in this window.</summary>
     public static void UseHostBackdrop(IntPtr hwnd)
@@ -100,32 +16,6 @@ internal static class Native
         int on = 1;
         DwmSetWindowAttribute(hwnd, 17 /* DWMWA_USE_HOSTBACKDROPBRUSH */, ref on, sizeof(int));
     }
-
-    [DllImport("gdi32.dll")] private static extern IntPtr CreateRoundRectRgn(int x1, int y1, int x2, int y2, int w, int h);
-    [DllImport("user32.dll")] private static extern int SetWindowRgn(IntPtr hwnd, IntPtr rgn, bool redraw);
-
-    [DllImport("gdi32.dll")] private static extern IntPtr CreateRectRgn(int x1, int y1, int x2, int y2);
-    [DllImport("gdi32.dll")] private static extern int CombineRgn(IntPtr dest, IntPtr a, IntPtr b, int mode);
-    [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr o);
-
-    /// <summary>Window region = union of rounded rects (device px). An empty list => empty region (nothing clickable).</summary>
-    public static void SetRegion(IntPtr hwnd, (int x, int y, int w, int h, int r)[] shapes)
-    {
-        IntPtr total = CreateRectRgn(0, 0, 0, 0);
-        foreach (var (x, y, w, h, r) in shapes)
-        {
-            if (w <= 0 || h <= 0) continue;
-            IntPtr one = CreateRoundRectRgn(x, y, x + w + 1, y + h + 1, r * 2, r * 2);
-            CombineRgn(total, total, one, 2 /* RGN_OR */);
-            DeleteObject(one);
-        }
-        SetWindowRgn(hwnd, total, true); // system owns the region now
-    }
-
-    public static void SetRoundRegion(IntPtr hwnd, int w, int h, int r) =>
-        SetWindowRgn(hwnd, CreateRoundRectRgn(0, 0, w + 1, h + 1, r * 2, r * 2), true);
-
-    public static void ShowNoActivate(IntPtr hwnd, bool show) => ShowWindow(hwnd, show ? 4 /* SW_SHOWNOACTIVATE */ : 0 /* SW_HIDE */);
 
     /// <summary>Moves/resizes a window (device pixels) and keeps it right below <paramref name="above"/>.</summary>
     public static void MoveBelow(IntPtr hwnd, IntPtr above, int x, int y, int w, int h) =>

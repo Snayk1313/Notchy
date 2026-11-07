@@ -16,8 +16,8 @@ namespace Notchy;
 public partial class MainWindow : Window
 {
     private enum IslandState { None, Idle, Compact, Volume, Expanded }
-    private enum Tab { Home, Claude, Music, Chat, Focus, Shelf }
-    private enum CompactMode { None, Music, MusicPaused, Claude, ClaudeDone, ClaudeAttention, Focus, FocusDone, Battery, BatteryLow, Update }
+    private enum Tab { Home, Claude, Music, Chat, Focus, Shelf, Downloads, News }
+    private enum CompactMode { None, Music, MusicPaused, Claude, ClaudeDone, ClaudeAttention, Focus, FocusDone, Battery, BatteryLow, Update, Transfer, TransferDone, TransferFailed, WhatsNew }
 
     private static readonly Color ClaudeColor = Color.FromRgb(0xE8, 0x82, 0x5F);
     private static readonly Color FocusColor = Color.FromRgb(0xB7, 0x9C, 0xFF);
@@ -59,12 +59,18 @@ public partial class MainWindow : Window
     private int _lineIdx = int.MinValue;
     private bool _lyricsLoading;
     private string _trackKey = "";
+    /// <summary>A new song shows its name on the compact island until then (unless a lyric line starts first).</summary>
+    private DateTime _titleUntil;
+    private bool _titleWindowShown;
+    private const double TitleSeconds = 5;
     private CancellationTokenSource? _lyricsCts;
     private string _compactShown = "\0";
     private string _lyricShown = "\0";
     private string _musicCompactText = "";
+    private string _musicTitleText = ""; // "title — artist": shown instead of the eyes while a bubble has eyes
 
     private readonly Dictionary<Tab, (Button button, TextBlock label)> _nav = new();
+    private readonly Dictionary<Tab, FrameworkElement> _navContent = new(); // icon + name (glows when selected)
     private readonly Border[] _stepFills = new Border[4];
     private readonly TextBlock[] _stepLabels = new TextBlock[4];
 
@@ -99,6 +105,13 @@ public partial class MainWindow : Window
         InitFace();
         InitAudioOut();
         InitUpdates();
+        InitCardGlow();
+        InitCardTilt();
+        InitTransfers();
+        InitClaudeFace();
+        InitShelfFace();
+        InitWhatsNew();
+        InitFocusTab();
         UpdateOutputIcon();
         _menu = BuildMenu();
         BuildNav();
@@ -111,14 +124,22 @@ public partial class MainWindow : Window
             // The ••• menu grabs the mouse, which looks like "left the island". Ignore that while it's
             // open; when it closes, menu.Closed checks where the cursor really is.
             if (_menu.IsOpen || _devicesMenuOpen?.IsOpen == true || _outMenuOpen?.IsOpen == true) return;
+            if (!_hoverRequested && CursorInKeepOpenArea())
+            {
+                // a tab switch made the island smaller under a still mouse: wait until it really moves away
+                _hoverTimer.Interval = TimeSpan.FromMilliseconds(120);
+                _hoverTimer.Start();
+                return;
+            }
             bool dragging = ProgressSlider.IsDragging || VolumeSlider.IsDragging;
             if (S.Open == OpenMode.Hover) _hoverActive = _hoverRequested || dragging;
             if (!_hoverRequested && !dragging) _clickOpened = false;
             UpdateState();
         };
 
-        _frame = new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(16) };
-        _frame.Tick += OnFrame;
+        // the real frame loop follows the screen (StartFrameLoop); this only covers when nothing renders
+        _frame = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        _frame.Tick += (_, _) => FrameFallback();
 
         AppSettings.Changed += ApplySettings;
 
@@ -131,8 +152,10 @@ public partial class MainWindow : Window
         Loaded += async (_, _) =>
         {
             PositionWindow();
-            UpdateState();
+            if (S.IntroAnimation) PlayIntro();
+            else UpdateState();
             _frame.Start();
+            StartFrameLoop();
             _claude.Start();
             try
             {
@@ -162,6 +185,20 @@ public partial class MainWindow : Window
 
     private double Dur(double ms) => ms * S.SpeedFactor;
 
+    /// <summary>
+    /// Audio level for the waveforms and the dancing eyes: only the app playing the media (Spotify, the
+    /// browser, a video player...), not everything else that makes sound. Read once per frame.
+    /// </summary>
+    private float MusicPeak()
+    {
+        if (_peakTick == _tick) return _peakValue;
+        _peakTick = _tick;
+        _peakValue = _media.HasSession ? _audio.GetSourcePeak(_media.SourceAppId, out _) : _audio.GetPeak();
+        return _peakValue;
+    }
+    private long _peakTick = -1;
+    private float _peakValue;
+
     // =====================================================================================
     // settings / language
     // =====================================================================================
@@ -180,6 +217,7 @@ public partial class MainWindow : Window
         Island.Background = new SolidColorBrush(Color.FromArgb(alpha, 0, 0, 0));
         ClaudePod.Background = Island.Background;
         ClaudePod.Margin = Island.Margin;
+        DownloadPod.Background = Island.Background;
         PodContent.Margin = new Thickness(0, _topHidden, 0, 0);
         ApplyExtrasSettings();
         if (_nav.Count > 0) ApplyGlowEffects();
@@ -213,6 +251,7 @@ public partial class MainWindow : Window
                 Tab.Claude => "Claude",
                 Tab.Music => Loc.T("tab.music"),
                 Tab.Shelf => Loc.T("tab.shelf"),
+                Tab.Downloads => Loc.T("tab.downloads"),
                 Tab.Chat => "Notchy",
                 _ => "Focus"
             };
@@ -224,8 +263,7 @@ public partial class MainWindow : Window
 
         HomeMusicLabel.Text = Loc.T("tab.music");
         ClaudeRecentTitle.Text = Loc.T("claude.recent").ToUpperInvariant();
-        FocusModeFocusText.Text = Loc.T("focus.focus");
-        FocusModeBreakText.Text = Loc.T("focus.break");
+        ApplyFocusTexts();
         SourceButton.ToolTip = Loc.T("music.openapp");
         MoreButton.ToolTip = Loc.T("menu.options");
         UpdateHeader();
@@ -239,8 +277,17 @@ public partial class MainWindow : Window
     // state machine
     // =====================================================================================
 
+    private CompactMode _leftMode = CompactMode.None; // what the minimized island showed before its last change
+    private DateTime _leftAt;
+
+    /// <summary>The minimized island was showing that kind of mode a moment ago (and now shows the music).</summary>
+    private bool IslandJustLeft(Func<CompactMode, bool> kind) =>
+        _state == IslandState.Compact && _compactMode == CompactMode.Music && kind(_leftMode)
+        && (DateTime.UtcNow - _leftAt).TotalMilliseconds < 400 && !_introActive;
+
     private void UpdateState()
     {
+        if (_introActive) return; // the opening animation hands over when it ends
         IslandState next;
         if (_forcedState is { } forced) next = forced;
         else if (_hoverActive || _clickOpened || _menu.IsOpen || _devicesMenuOpen?.IsOpen == true || _dragOver || ChatKeepsOpen) next = IslandState.Expanded;
@@ -251,6 +298,7 @@ public partial class MainWindow : Window
             var mode = DecideCompact();
             if (mode != _compactMode)
             {
+                if (_state == IslandState.Compact) (_leftMode, _leftAt) = (_compactMode, DateTime.UtcNow);
                 _compactMode = mode;
                 ConfigureCompact();
                 if (_state == IslandState.Compact && mode != CompactMode.None)
@@ -269,15 +317,18 @@ public partial class MainWindow : Window
         IslandState.Idle => new Size(120, 30),
         IslandState.Volume => new Size(300, 34),
         IslandState.Expanded => new Size(480, TabHeight(_tab)),
-        _ => new Size(CompactWidth(_compactMode), 34)
+        _ => new Size(CompactWidth(_compactMode), IsTransferMode(_compactMode) ? TransferHeight : 34)
     };
 
     private double TabHeight(Tab t) => 34 + 40 + 2 + t switch
     {
         Tab.Home => 118,
-        Tab.Claude => 134,
+        Tab.Claude => 150,
         Tab.Music => 186 + (_lyricTwoLines ? LyricExtraHeight : 0),
         Tab.Shelf => 118,
+        Tab.Downloads => _dlTabHeight,
+        Tab.Focus => 150,
+        Tab.News => 186,
         Tab.Chat => ChatContentHeight,
         _ => 128
     };
@@ -286,8 +337,10 @@ public partial class MainWindow : Window
     {
         CompactMode.Music => _musicCompactWidth,
         CompactMode.MusicPaused => 300,
-        CompactMode.Claude => 360,
-        CompactMode.Focus => 250,
+        CompactMode.Claude or CompactMode.ClaudeDone or CompactMode.ClaudeAttention => ClaudeIslandWidth,
+        CompactMode.Focus => 190,
+        CompactMode.WhatsNew => WhatsNewWidth(),
+        CompactMode.Transfer or CompactMode.TransferDone or CompactMode.TransferFailed => TransferWidth,
         _ => 320
     };
 
@@ -302,10 +355,14 @@ public partial class MainWindow : Window
         if (expanding && prev != IslandState.Expanded)
         {
             Tab target;
-            if (_podOpenRequest || _claude.Active?.NeedsAttention == true) target = Tab.Claude;
+            if (_whatsNewPending && !_dlOpenRequest && !_podOpenRequest) target = Tab.News; // the update's news first
+            else if (S.TransferProgress && (_dlOpenRequest || (_compactMode == CompactMode.Transfer && ActiveTransfer?.Kind == TransferKind.Download)))
+                target = Tab.Downloads;
+            else if (_podOpenRequest || _claude.Active?.NeedsAttention == true) target = Tab.Claude;
             else if (_userTab is Tab ut && (ut != Tab.Shelf || S.ShelfEnabled)) target = ut;
             else target = SmartTab();
             _podOpenRequest = false;
+            _dlOpenRequest = false;
             if (!_dragOver) SelectTab(target, animate: false);
             if (playSound && prev != IslandState.None) SoundService.Play(Sfx.Expand);
             UpdateClock();
@@ -318,7 +375,10 @@ public partial class MainWindow : Window
         AnimateIslandSize(TargetSize(state), expanding || prev == IslandState.Expanded);
 
         Fade(IdlePanel, state == IslandState.Idle);
-        Fade(CompactPanel, state == IslandState.Compact);
+        Fade(CompactPanel, state == IslandState.Compact && !IsTransferMode(_compactMode) && !IsClaudeMode(_compactMode) && _compactMode != CompactMode.WhatsNew);
+        Fade(WhatsNewPanel, state == IslandState.Compact && _compactMode == CompactMode.WhatsNew);
+        Fade(ClaudePanel, state == IslandState.Compact && IsClaudeMode(_compactMode));
+        Fade(TransferPanel, state == IslandState.Compact && IsTransferMode(_compactMode));
         Fade(VolumePanel, state == IslandState.Volume);
         Fade(ExpandedPanel, expanding);
         AccentGlow.BeginAnimation(OpacityProperty,
@@ -336,8 +396,16 @@ public partial class MainWindow : Window
             : bigMove ? new QuarticEase { EasingMode = EasingMode.EaseOut }
             : new CubicEase { EasingMode = EasingMode.EaseOut };
         var duration = TimeSpan.FromMilliseconds(Dur(bigMove ? 460 : 340));
-        Island.BeginAnimation(WidthProperty, new DoubleAnimation(size.Width, duration) { EasingFunction = ease });
-        Island.BeginAnimation(HeightProperty, new DoubleAnimation(size.Height + _topHidden, duration) { EasingFunction = ease });
+        if (_podEntering)
+        {
+            // the island is hiding while a bubble moves out of its place: it comes down when that's done
+            Island.BeginAnimation(WidthProperty, new DoubleAnimation(size.Width, TimeSpan.Zero));
+        }
+        else
+        {
+            Island.BeginAnimation(WidthProperty, new DoubleAnimation(size.Width, duration) { EasingFunction = ease });
+            Island.BeginAnimation(HeightProperty, new DoubleAnimation(size.Height + _topHidden, duration) { EasingFunction = ease });
+        }
         // The compact content takes its final width right away (so nothing is cut at the edges) and the
         // island animates around it. Animating the content's width too made long lyric lines re-layout on
         // every frame and shake.
@@ -345,6 +413,8 @@ public partial class MainWindow : Window
         {
             CompactPanel.BeginAnimation(WidthProperty, null);
             CompactPanel.Width = size.Width;
+            TransferPanel.Width = size.Width;
+            ClaudePanel.Width = size.Width;
         }
     }
 
@@ -417,9 +487,9 @@ public partial class MainWindow : Window
     // frame loop
     // =====================================================================================
 
-    private void OnFrame(object? sender, EventArgs e)
+    private void OnFrame()
     {
-        _tick++;
+        BeginFrame();
         _focus.Tick();
         var pos = _media.Position;
 
@@ -433,41 +503,55 @@ public partial class MainWindow : Window
                     ElapsedText.Text = Format(pos);
                     RemainingText.Text = dur > TimeSpan.Zero ? "-" + Format(dur - pos) : "";
                     break;
-                case Tab.Claude when _tick % 6 == 0:
+                case Tab.Claude when _slowTick && _tick % 6 == 0:
                     UpdateClaudeTimer();
                     break;
             }
-            if (_tick % 6 == 0)
+            if (_slowTick && _tick % 6 == 0)
             {
                 UpdateFocusUi();
-                UpdateHomeLive();
+                if (_tab == Tab.Home) UpdateHomeLive();
             }
         }
 
         UpdateLyrics(pos);
 
-        if (_state == IslandState.Expanded) UpdateFace(_audio.GetPeak());
+        if (_state == IslandState.Expanded) UpdateFace(MusicPeak());
         else if (_compactFaceOn) UpdateCompactFace();
 
-        if (_tick % 2 == 0)
+        bool compactViz = _state == IslandState.Compact && CompactViz.Visibility == Visibility.Visible;
+        bool expandedViz = _state == IslandState.Expanded && _tab == Tab.Music;
+        if (_slowTick && _tick % 2 == 0)
         {
-            float peak = _audio.GetPeak();
-            if (_state == IslandState.Compact && CompactViz.Visibility == Visibility.Visible)
-                CompactViz.Tick(peak, _media.IsPlaying, _audio.HasMeter);
-            if (_state == IslandState.Expanded && _tab == Tab.Music)
-                ExpandedViz.Tick(peak, _media.IsPlaying, _audio.HasMeter);
+            float peak = MusicPeak();
+            if (compactViz) CompactViz.Tick(peak, _media.IsPlaying, _audio.HasMeter);
+            if (expandedViz) ExpandedViz.Tick(peak, _media.IsPlaying, _audio.HasMeter);
         }
+        if (compactViz) CompactViz.Step();
+        if (expandedViz) ExpandedViz.Step();
 
-        if (_state == IslandState.Compact && _tick % 10 == 0) UpdateCompactRight();
+        if (_state == IslandState.Compact && _slowTick && _tick % 10 == 0) UpdateCompactRight();
         UpdateExtrasFrame();
+        if (_slowTick && _tick % 30 == 0) PollTransfers();
+        UpdateTransferLight();
+        UpdateClaudeFace();
+        if (_slowTick && _tick % 15 == 0 && IsTransferMode(_compactMode)) UpdateTransferPanel();
+        UpdateTransferEyes();
+        UpdateEyeTrip();
+        UpdateShelfFace();
+        UpdateNavActivity();
+        UpdateFocusFrame();
+        UpdateFocusPod();
+        UpdateWhatsNewFrame();
+        if (_state == IslandState.Expanded && _tab == Tab.Downloads) UpdateDownloadsTab(texts: _slowTick && _tick % 2 == 0);
 
-        if (_tick % 6 == 0) PollVolume();
-        if (_tick % 60 == 0)
+        if (_slowTick && _tick % 6 == 0) PollVolume();
+        if (_slowTick && _tick % 60 == 0)
         {
             UpdateClock();
             CheckFullscreen();
         }
-        if (_tick % 180 == 0)
+        if (_slowTick && _tick % 180 == 0)
         {
             _media.PickSession();
             _audio.EnsureDevice();
@@ -526,6 +610,7 @@ public partial class MainWindow : Window
         AddNav(Tab.Chat, ((char)0xE8BD).ToString());
         AddNav(Tab.Focus, "\uE916");
         AddNav(Tab.Shelf, "\uE7B8");
+        AddNav(Tab.Downloads, "\uE896");
     }
 
     private void AddNav(Tab tab, string glyph, bool symbol = false)
@@ -546,7 +631,7 @@ public partial class MainWindow : Window
             Visibility = Visibility.Collapsed
         };
         var content = new StackPanel { Orientation = Orientation.Horizontal };
-        content.Children.Add(icon);
+        content.Children.Add(MakeNavIcon(tab, icon));
         content.Children.Add(label);
 
         var button = new Button { Style = (Style)FindResource("NavButton"), Content = content, Margin = new Thickness(2, 0, 2, 0) };
@@ -557,6 +642,7 @@ public partial class MainWindow : Window
         };
         NavBar.Children.Add(button);
         _nav[tab] = (button, label);
+        _navContent[tab] = content;
     }
 
     private Tab SmartTab()
@@ -575,6 +661,8 @@ public partial class MainWindow : Window
         Tab.Music => MusicTab,
         Tab.Chat => ChatTab,
         Tab.Shelf => ShelfTab,
+        Tab.Downloads => DownloadsTab,
+        Tab.News => NewsTab,
         _ => FocusTab
     };
 
@@ -582,6 +670,7 @@ public partial class MainWindow : Window
     {
         var old = _tab;
         _tab = tab;
+        if (old != tab && _state == IslandState.Expanded) RememberKeepOpenArea();
         if (animate && old != tab && _state == IslandState.Expanded)
         {
             FaceReact(Mood.Curious, 0.45);
@@ -631,6 +720,9 @@ public partial class MainWindow : Window
         if (tab == Tab.Focus) UpdateFocusUi();
         if (tab == Tab.Home) UpdateHomeLive();
         if (tab == Tab.Music) _ = PollSpotifyAsync();
+        if (tab == Tab.Downloads) UpdateDownloadsTab(force: true);
+        if (tab == Tab.News) OnNewsShown();
+        NavPill.Opacity = _nav.ContainsKey(tab) ? 1 : 0; // the news tab has no button in the menu
 
         if (_state == IslandState.Expanded)
         {
@@ -668,7 +760,9 @@ public partial class MainWindow : Window
         Tab.Music => Bright(_musicAccent),
         Tab.Focus => FocusColor,
         Tab.Shelf => ShelfColor,
+        Tab.Downloads => DoneGreen,
         Tab.Chat => ChatColor,
+        Tab.News => NewsGold,
         _ => Colors.White
     };
 
@@ -679,13 +773,15 @@ public partial class MainWindow : Window
             Tab.Claude => ("Claude", " Code"),
             Tab.Music => ("Music", " Player"),
             Tab.Focus => ("Focus", " " + Loc.T("focus.mode")),
-            Tab.Shelf => (Loc.T("shelf.title.a"), " " + Loc.T("shelf.title.b")),
+            Tab.Shelf => ("File", " Shelf"),
+            Tab.Downloads => ("Download", " Center"),
             Tab.Chat => ("Notchy", " Chat"),
+            Tab.News => (Loc.T("news.title"), " " + WhatsNew.Version),
             _ => ("Notchy", "")
         };
         HeaderA.Text = a;
-        HeaderB.Text = b;
-        HeaderB.Foreground = new SolidColorBrush(TabColor(_tab));
+        HeaderB.Text = HeaderBGlow.Text = b;
+        HeaderB.Foreground = HeaderBGlow.Foreground = new SolidColorBrush(TabColor(_tab));
     }
 
     private void ApplyGlow()
@@ -695,7 +791,9 @@ public partial class MainWindow : Window
             Tab.Claude => Color.FromRgb(0x6B, 0x33, 0x22),
             Tab.Focus => Color.FromRgb(0x3E, 0x2A, 0x86),
             Tab.Shelf => Color.FromRgb(0x1C, 0x4A, 0x40),
+            Tab.Downloads => Color.FromRgb(0x1C, 0x4A, 0x2A),
             Tab.Chat => Color.FromRgb(0x4A, 0x2E, 0x12),
+            Tab.News => Color.FromRgb(0x4A, 0x3A, 0x12),
             Tab.Music when S.MusicColor => Dark(_musicAccent),
             _ => Color.FromRgb(0x26, 0x26, 0x2B)
         };
@@ -736,6 +834,17 @@ public partial class MainWindow : Window
             if (DateTime.UtcNow < _transientUntil) return _transient;
             _transient = CompactMode.None;
         }
+        var mode = DecideCompactWithoutTransfer();
+        // nothing else going on: the download / copy gets the whole compact island
+        if (mode == CompactMode.None && ActiveTransfer != null) return CompactMode.Transfer;
+        // nothing at all: an update's news, until they're seen
+        if (mode == CompactMode.None && _whatsNewPending) return CompactMode.WhatsNew;
+        return mode;
+    }
+
+    /// <summary>What the compact island would show if no download/copy were running.</summary>
+    private CompactMode DecideCompactWithoutTransfer()
+    {
 
         var c = S.ClaudeShowInCompact ? _claude.Active : null;
         bool hasMusic = _media.HasSession && !string.IsNullOrEmpty(_media.Title);
@@ -759,6 +868,13 @@ public partial class MainWindow : Window
     private void ConfigureCompact()
     {
         var m = _compactMode;
+        // Claude / download alone have their own panels: leave the generic one as it was while it fades out
+        if (IsClaudeMode(m) || IsTransferMode(m) || m == CompactMode.WhatsNew)
+        {
+            if (IsTransferMode(m)) UpdateTransferPanel();
+            ShowCompactFace(false);
+            return;
+        }
         var c = _claude.Active;
         bool art = m is CompactMode.Music or CompactMode.MusicPaused;
 
@@ -768,7 +884,9 @@ public partial class MainWindow : Window
         CompactAlertDot.Visibility = m == CompactMode.ClaudeAttention || (c?.NeedsAttention == true && S.ClaudeShowInCompact && !(art && S.ClaudePod))
             ? Visibility.Visible : Visibility.Collapsed;
 
-        CompactIcon.Visibility = m is CompactMode.ClaudeDone or CompactMode.Focus or CompactMode.FocusDone or CompactMode.Battery or CompactMode.BatteryLow or CompactMode.Update
+        CompactFocusEyes.Visibility = m == CompactMode.Focus ? Visibility.Visible : Visibility.Collapsed;
+        CompactIcon.Visibility = m is CompactMode.ClaudeDone or CompactMode.FocusDone or CompactMode.Battery or CompactMode.BatteryLow or CompactMode.Update
+            or CompactMode.Transfer or CompactMode.TransferDone
             ? Visibility.Visible : Visibility.Collapsed;
         CompactIcon.Text = m switch
         {
@@ -778,6 +896,8 @@ public partial class MainWindow : Window
             CompactMode.Focus => "\uE916",
             CompactMode.FocusDone => "\uEA8F",
             CompactMode.Update => ((char)0xE896).ToString(),
+            CompactMode.Transfer => ActiveTransfer?.Kind == TransferKind.Copy ? "\uE8C8" : "\uE896",
+            CompactMode.TransferDone => "\uE73E",
             _ => ""
         };
         CompactIcon.Foreground = new SolidColorBrush(m switch
@@ -787,6 +907,8 @@ public partial class MainWindow : Window
             CompactMode.Battery => _batteryCharging ? Color.FromRgb(0x5E, 0xD6, 0x7D) : Colors.White,
             CompactMode.BatteryLow => Color.FromRgb(0xFF, 0x5F, 0x57),
             CompactMode.Update => UpdateColor,
+            CompactMode.Transfer => DoneGreen,
+            CompactMode.TransferDone => DoneGreen,
             _ => Colors.White
         });
         CompactRight.Foreground = new SolidColorBrush(m switch
@@ -800,7 +922,7 @@ public partial class MainWindow : Window
         CompactEyes.Visibility = eyes ? Visibility.Visible : Visibility.Collapsed;
         CompactText.Visibility = eyes ? Visibility.Collapsed : Visibility.Visible;
 
-        ShowCompactFace(m == CompactMode.Music && _compactInstrumental);
+        ShowCompactFace(m == CompactMode.Music && _compactInstrumental && !_islandFaceBlocked);
 
         CompactViz.Visibility = art ? Visibility.Visible : Visibility.Collapsed;
         CompactRight.Visibility = art ? Visibility.Collapsed : Visibility.Visible;
@@ -808,6 +930,7 @@ public partial class MainWindow : Window
         UpdateCompactText();
         UpdateCompactRight();
         FitCompactText();
+        if (IsTransferMode(m)) UpdateTransferPanel();
         ApplyGlowEffects();
     }
 
@@ -816,10 +939,11 @@ public partial class MainWindow : Window
         var c = _claude.Active;
         string text = _compactMode switch
         {
-            CompactMode.Music => _musicCompactText,
+            CompactMode.Music => MusicCompactShown,
             CompactMode.Claude when c != null => ClaudeShortStatus(c),
-            CompactMode.ClaudeDone or CompactMode.ClaudeAttention or CompactMode.FocusDone or CompactMode.Battery or CompactMode.BatteryLow or CompactMode.Update => _transientText,
-            CompactMode.Focus => _focus.Mode == FocusMode.Focus ? Loc.T("focus.focusing") : Loc.T("focus.onbreak"),
+            CompactMode.ClaudeDone or CompactMode.ClaudeAttention or CompactMode.FocusDone or CompactMode.Battery or CompactMode.BatteryLow or CompactMode.Update
+                or CompactMode.TransferDone => _transientText,
+            CompactMode.Focus => "", // the eyes say it
             _ => ""
         };
         SetCompactText(text);
@@ -832,7 +956,9 @@ public partial class MainWindow : Window
         {
             CompactMode.Claude when c != null => FormatTimer(c.Elapsed),
             CompactMode.Focus => FormatTimer(_focus.Remaining),
-            CompactMode.ClaudeDone or CompactMode.FocusDone or CompactMode.ClaudeAttention or CompactMode.Battery or CompactMode.BatteryLow or CompactMode.Update => _transientRight,
+            CompactMode.ClaudeDone or CompactMode.FocusDone or CompactMode.ClaudeAttention or CompactMode.Battery or CompactMode.BatteryLow or CompactMode.Update
+                or CompactMode.TransferDone => _transientRight,
+            CompactMode.Transfer when ActiveTransfer is { } t => (t.Progress is double tp ? $"{Math.Floor(tp * 100)}%" : ""),
             _ => ""
         };
         if (_compactMode == CompactMode.Claude && c != null) SetCompactText(ClaudeShortStatus(c));
@@ -970,6 +1096,7 @@ public partial class MainWindow : Window
         if (key != _trackKey)
         {
             _trackKey = key;
+            _titleUntil = has ? DateTime.UtcNow.AddSeconds(TitleSeconds) : default;
             LoadLyrics();
         }
         UpdateState();
@@ -1033,10 +1160,12 @@ public partial class MainWindow : Window
             var t = pos + TimeSpan.FromMilliseconds(250);
             for (int i = 0; i < _lines.Count && _lines[i].Time <= t; i++) idx = i;
         }
-        if (idx == _lineIdx) return;
-        _lineIdx = idx;
-
         bool has = _media.HasSession && !string.IsNullOrEmpty(_media.Title);
+        bool titleWindow = has && DateTime.UtcNow < _titleUntil;
+        if (idx == _lineIdx && titleWindow == _titleWindowShown) return;
+        _lineIdx = idx;
+        _titleWindowShown = titleWindow;
+
         string fallback = has ? (string.IsNullOrEmpty(_media.Artist) ? _media.Title : $"{_media.Title} — {_media.Artist}") : "";
         string current, next, compact;
 
@@ -1065,11 +1194,13 @@ public partial class MainWindow : Window
 
         // no line being sung right now (intro, solo, instrumental): little eyes swaying instead of the title
         bool instrumental = has && S.LyricsEnabled && _lines != null && !(idx >= 0 && current != "♪");
+        // a new song first shows its name for a few seconds; a lyric line that starts earlier replaces it
+        if (instrumental && titleWindow) instrumental = false;
         if (instrumental) compact = "";
         if (instrumental != _compactInstrumental)
         {
             _compactInstrumental = instrumental;
-            if (_compactMode == CompactMode.Music) ShowCompactFace(instrumental);
+            if (_compactMode == CompactMode.Music) ShowCompactFace(instrumental && !_islandFaceBlocked);
         }
 
         LyricNext.Text = next;
@@ -1081,7 +1212,8 @@ public partial class MainWindow : Window
             FitExpandedLyric();
         }
         _musicCompactText = compact;
-        if (_compactMode == CompactMode.Music) SetCompactText(compact);
+        _musicTitleText = fallback;
+        if (_compactMode == CompactMode.Music) SetCompactText(MusicCompactShown);
     }
 
     private string LineText(int i) => string.IsNullOrWhiteSpace(_lines![i].Text) ? "♪" : _lines[i].Text;
@@ -1146,10 +1278,12 @@ public partial class MainWindow : Window
 
     private void OnClaudeDone(ClaudeSession s)
     {
+        if (!_claude.AnyWorking) NavDone(Tab.Claude); // the check only when Claude is really done (no other session busy)
         string dur = FormatTimer(s.Elapsed);
         Happy();
-        if (_podShown) PodDone();
-        else ShowTransient(CompactMode.ClaudeDone, Loc.T("claude.done.compact"), dur, 5);
+        ClaudeFaceDone();
+        if (_podShown && _podKind == PodKind.Claude) PodDone();
+        else ShowTransient(CompactMode.ClaudeDone, Loc.T("claude.done.compact"), dur, 3.2);
         SoundService.Play(Sfx.Done);
         if (S.ClaudeWindowsNotifications)
             App.Notify(Loc.T("claude.done.title"), $"{s.Project} · {dur}" + (s.Prompt.Length > 0 ? $"\n{s.Prompt}" : ""));
@@ -1158,7 +1292,7 @@ public partial class MainWindow : Window
     private void OnClaudeAttention(ClaudeSession s)
     {
         FaceReact(Mood.Worried, 3);
-        if (!PodWanted(includeDone: false)) ShowTransient(CompactMode.ClaudeAttention, Loc.T("claude.attention.compact"), "", 6);
+        if (!ClaudePodWanted(includeDone: false)) ShowTransient(CompactMode.ClaudeAttention, Loc.T("claude.attention.compact"), "", 6);
         SoundService.Play(Sfx.Attention);
         if (S.ClaudeWindowsNotifications)
             App.Notify(Loc.T("claude.attention.title"), s.AttentionMessage);
@@ -1238,7 +1372,22 @@ public partial class MainWindow : Window
         ClaudeStatus.Foreground = c.NeedsAttention ? (Brush)FindResource("ClaudeOrange") : new SolidColorBrush(Color.FromArgb(0xB3, 255, 255, 255));
         UpdateClaudeTimer();
 
-        var edit = c.LastEdit;
+        // open where the session lives; a question waiting for permission takes the right side
+        ClaudeOpenText.Text = Loc.T("claude.open");
+        var ask = c.Ask;
+        ClaudeAskCard.Visibility = ask == null ? Visibility.Collapsed : Visibility.Visible;
+        if (ask != null)
+        {
+            ClaudeAskTool.Text = ask.Tool.Contains("__") ? ask.Tool[(ask.Tool.LastIndexOf("__", StringComparison.Ordinal) + 2)..] : ask.Tool;
+            ClaudeAskWants.Text = Loc.T("claude.ask.wants");
+            ClaudeAskMore.Text = c.Asks.Count > 1 ? Loc.F("claude.ask.more", c.Asks.Count - 1) : "";
+            ClaudeAskWhat.Text = ask.Summary.Length > 0 ? ask.Summary : ask.Tool;
+            ClaudeAskWhat.ToolTip = ask.Summary.Length > 60 ? ask.Summary : null;
+            ClaudeAllowText.Text = Loc.T("claude.ask.allow");
+            ClaudeDenyText.Text = Loc.T("claude.ask.deny");
+        }
+
+        var edit = ask == null ? c.LastEdit : null;
         ClaudeFileCard.Visibility = edit == null ? Visibility.Collapsed : Visibility.Visible;
         if (edit != null)
         {
@@ -1362,24 +1511,53 @@ public partial class MainWindow : Window
 
     private void ClaudeConnect_Click(object sender, RoutedEventArgs e) => App.OpenSettings("claude");
 
-    /// <summary>Plays a fake 8-second Claude task (from the settings "Simulate" button).</summary>
+    private bool _simulatingClaude;
+
+    /// <summary>
+    /// Plays a fake Claude task through every stage (from the settings "Simulate" button):
+    /// thinking, reading, editing, running a command, testing, asking for permission, then done.
+    /// </summary>
     public async void SimulateClaudeTask()
     {
-        const string sid = "\"session_id\":\"notchy-demo\",\"cwd\":\"C:\\\\Projetos\\\\Notchy\"";
-        void Send(string body) => _claude.Inject("{" + sid + "," + body + "}");
+        if (_simulatingClaude) return;
+        _simulatingClaude = true;
+        try
+        {
+            const string sid = "\"session_id\":\"notchy-demo\",\"cwd\":\"C:/Projetos/Notchy\"";
+            void Send(string body) => _claude.Inject("{" + sid + "," + body + "}");
+            const int stage = 3500;
 
-        Send("\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"Demonstração do Notchy\"");
-        await Task.Delay(1200);
-        Send("\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"TodoWrite\",\"tool_input\":{\"todos\":[{\"status\":\"in_progress\"},{\"status\":\"pending\"},{\"status\":\"pending\"}]}");
-        Send("\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"C:\\\\Projetos\\\\Notchy\\\\App.xaml\"}");
-        await Task.Delay(1600);
-        Send("\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"TodoWrite\",\"tool_input\":{\"todos\":[{\"status\":\"completed\"},{\"status\":\"in_progress\"},{\"status\":\"pending\"}]}");
-        Send("\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"C:\\\\Projetos\\\\Notchy\\\\Island.cs\",\"new_string\":\"public class Island\\n{\\n    public string Name = \\\"Notchy\\\";\"}}");
-        await Task.Delay(2200);
-        Send("\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"TodoWrite\",\"tool_input\":{\"todos\":[{\"status\":\"completed\"},{\"status\":\"completed\"},{\"status\":\"in_progress\"}]}");
-        Send("\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"dotnet build\"}");
-        await Task.Delay(2200);
-        Send("\"hook_event_name\":\"Stop\"");
+            // thinking
+            Send("\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"Demonstração do Notchy\"");
+            Send("\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"TodoWrite\",\"tool_input\":{\"todos\":[{\"status\":\"in_progress\"},{\"status\":\"pending\"},{\"status\":\"pending\"}]}");
+            await Task.Delay(stage);
+            // reading
+            Send("\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"C:/Projetos/Notchy/App.xaml\"}");
+            await Task.Delay(stage);
+            // editing
+            Send("\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"TodoWrite\",\"tool_input\":{\"todos\":[{\"status\":\"completed\"},{\"status\":\"in_progress\"},{\"status\":\"pending\"}]}");
+            Send("\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"C:/Projetos/Notchy/Island.cs\",\"new_string\":\"public class Island\\n{\\n    public string Name = \\\"Notchy\\\";\"}");
+            await Task.Delay(stage);
+            // running a command
+            Send("\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}");
+            await Task.Delay(stage);
+            // testing
+            Send("\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"TodoWrite\",\"tool_input\":{\"todos\":[{\"status\":\"completed\"},{\"status\":\"completed\"},{\"status\":\"in_progress\"}]}");
+            Send("\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"dotnet test\"}");
+            await Task.Delay(stage);
+            // asking for permission
+            Send("\"hook_event_name\":\"Notification\",\"message\":\"Claude needs your permission to use Bash\"");
+            await Task.Delay(stage + 1000);
+            // allowed: one more step, then done
+            Send("\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"Bash\"");
+            Send("\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit\"}");
+            await Task.Delay(1500);
+            Send("\"hook_event_name\":\"Stop\"");
+        }
+        finally
+        {
+            _simulatingClaude = false;
+        }
     }
 
     // =====================================================================================
@@ -1388,6 +1566,7 @@ public partial class MainWindow : Window
 
     private void OnFocusFinished(FocusMode finished)
     {
+        NavDone(Tab.Focus);
         SoundService.Play(Sfx.FocusEnd);
         Happy();
         ShowTransient(CompactMode.FocusDone,
@@ -1395,31 +1574,6 @@ public partial class MainWindow : Window
         if (S.ClaudeWindowsNotifications)
             App.Notify("Focus", finished == FocusMode.Focus ? Loc.T("focus.done") : Loc.T("focus.breakdone"));
         UpdateFocusUi();
-    }
-
-    private void UpdateFocusUi()
-    {
-        string time = FormatTimer(_focus.Remaining);
-        FocusTime.Text = time;
-        HomeFocusBig.Text = time;
-        string sub = _focus.Running
-            ? (_focus.Mode == FocusMode.Focus ? Loc.T("focus.focusing") : Loc.T("focus.onbreak"))
-            : _focus.Started ? Loc.T("focus.paused") : Loc.T("focus.ready");
-        if (_focus.CompletedToday > 0 && !_focus.Running) sub += " · " + Loc.F("focus.today", _focus.CompletedToday);
-        FocusSub.Text = sub;
-        HomeFocusSub.Text = sub;
-        string glyph = _focus.Running ? "\uE769" : "\uE768";
-        FocusPlayButton.Content = glyph;
-        HomeFocusPlay.Content = glyph;
-
-        bool focusMode = _focus.Mode == FocusMode.Focus;
-        FocusModeFocus.Background = new SolidColorBrush(focusMode ? Color.FromArgb(0x40, FocusColor.R, FocusColor.G, FocusColor.B) : Colors.Transparent);
-        FocusModeBreak.Background = new SolidColorBrush(!focusMode ? Color.FromArgb(0x40, 0x5E, 0xD6, 0x7D) : Colors.Transparent);
-        FocusModeFocusText.Foreground = new SolidColorBrush(focusMode ? FocusColor : Color.FromArgb(0x88, 255, 255, 255));
-        FocusModeBreakText.Foreground = new SolidColorBrush(!focusMode ? Color.FromRgb(0x5E, 0xD6, 0x7D) : Color.FromArgb(0x88, 255, 255, 255));
-        FocusProgress.Background = new SolidColorBrush(focusMode ? FocusColor : Color.FromRgb(0x5E, 0xD6, 0x7D));
-        FocusProgressScale.ScaleX = _focus.Progress;
-        if (FocusProgress.Background is SolidColorBrush fb) Glow(FocusProgress, fb.Color);
     }
 
     private void FocusPlay_Click(object sender, RoutedEventArgs e)
@@ -1549,10 +1703,36 @@ public partial class MainWindow : Window
             return;
         }
         _hoverRequested = true;
+        _keepOpenArea = null;
         _hoverTimer.Stop();
         if (S.Open == OpenMode.Click) return;
         _hoverTimer.Interval = TimeSpan.FromMilliseconds(Math.Max(0, S.HoverDelayMs));
         _hoverTimer.Start();
+    }
+
+    private Rect? _keepOpenArea;
+
+    /// <summary>
+    /// Switching tabs resizes the island; if the new tab is smaller the mouse can end up outside it without
+    /// moving. Until the mouse leaves the area the island had before the switch, that doesn't count as leaving.
+    /// </summary>
+    private void RememberKeepOpenArea()
+    {
+        if (Island.ActualWidth < 1) return;
+        var r = Island.TransformToAncestor(this).TransformBounds(new Rect(0, _topHidden, Island.ActualWidth, Island.ActualHeight - _topHidden));
+        // a moment ago the island may have been bigger still (quick switches): keep the union
+        _keepOpenArea = _keepOpenArea is Rect prev ? Rect.Union(prev, r) : r;
+    }
+
+    private bool CursorInKeepOpenArea()
+    {
+        if (_keepOpenArea is not Rect r || _state != IslandState.Expanded) return false;
+        Native.GetCursorPos(out var p);
+        var pt = PointFromScreen(new Point(p.X, p.Y));
+        r.Inflate(6, 6);
+        if (r.Contains(pt)) return true;
+        _keepOpenArea = null; // it moved away: back to normal
+        return false;
     }
 
     private void Island_MouseLeave(object sender, MouseEventArgs e)

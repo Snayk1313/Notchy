@@ -32,7 +32,6 @@ public static class Updater
 
     public static UpdateInfo? Pending { get; private set; }
     public static string? PendingVersion => Pending?.TargetFullRelease.Version.ToString();
-    public static string? PendingNotes => Pending?.TargetFullRelease.NotesMarkdown;
 
     /// <summary>Raised (on a worker thread) when an update has been downloaded and is ready to apply.</summary>
     public static event Action? Ready;

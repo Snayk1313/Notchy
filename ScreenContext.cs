@@ -12,8 +12,11 @@ namespace Notchy;
 /// <param name="Editable">Text of a whole editable field (message box, input...): Replace rewrites the field.</param>
 /// <param name="Field">That field, to put the focus back in it.</param>
 /// <param name="Ocr">Read from the screen image (the app doesn't expose its text); Drop* = where the eyes were dropped.</param>
+/// <param name="Edit">A classic Win32 text box (Notepad...): read and replaced with its own messages, no clipboard.</param>
+/// <param name="SelStart">Selected range in <paramref name="Edit"/> (-1 = the whole box).</param>
 public sealed record CapturedText(string Text, string App, IntPtr Window, bool FromSelection, bool Editable = false,
-    AutomationElement? Field = null, bool Ocr = false, int DropX = 0, int DropY = 0);
+    AutomationElement? Field = null, bool Ocr = false, int DropX = 0, int DropY = 0,
+    IntPtr Edit = default, int SelStart = -1, int SelEnd = -1);
 
 /// <summary>
 /// Reads text from whatever is under a screen point using Windows UI Automation (the accessibility
@@ -98,6 +101,11 @@ public static class ScreenContext
     {
         IntPtr root = RootWindowAt(x, y);
         string app = AppName(root);
+
+        // classic Win32 text box (Notepad, old dialogs...): UI Automation sees it as an empty pane
+        IntPtr hit = WindowFromPoint(new Native.POINT { X = x, Y = y });
+        if (IsWin32Edit(hit)) return FromWin32Edit(hit, app, root, preferSelection: true);
+
         try
         {
             var pt = new System.Windows.Point(x, y);
@@ -235,14 +243,6 @@ public static class ScreenContext
         return s.Length > MaxChars ? s[..MaxChars] : s;
     }
 
-    /// <summary>Whitespace-insensitive "a contains b".</summary>
-    public static bool LooselyContains(string a, string b)
-    {
-        static string N(string x) => System.Text.RegularExpressions.Regex.Replace(x.Replace(ObjectChar, ""), @"\s+", " ").Trim().ToLowerInvariant();
-        string na = N(a), nb = N(b);
-        return nb.Length > 0 && na.Contains(nb);
-    }
-
     // ------------------------------------------------------------------ OCR fallback
 
     /// <summary>Reads the paragraph under (x, y) with Windows.Media.Ocr (offline, built into Windows).</summary>
@@ -339,6 +339,13 @@ public static class ScreenContext
     /// <summary>The selected text of the focused control, via UI Automation (no keys sent).</summary>
     public static Task<CapturedText?> FocusedSelectionAsync(IntPtr window) => Task.Run(() =>
     {
+        // classic Win32 text box with the keyboard focus: its own selection, no Ctrl+C needed
+        IntPtr focus = FocusedChild(window);
+        if (IsWin32Edit(focus))
+        {
+            var t = FromWin32Edit(focus, AppName(window), window, preferSelection: true);
+            return t is { FromSelection: true } ? t : null;
+        }
         try
         {
             var el = AutomationElement.FocusedElement;
@@ -389,19 +396,8 @@ public static class ScreenContext
         }
         if (changed && previous != null)
         {
-            // always give the clipboard back, whatever was copied
-            for (int i = 0; i < 3; i++)
-            {
-                try
-                {
-                    System.Windows.Clipboard.SetText(previous);
-                    break;
-                }
-                catch
-                {
-                    await Task.Delay(50);
-                }
-            }
+            // always give the clipboard back, whatever was copied (without a duplicate in Win+V)
+            SetClipboardPrivately(previous);
         }
         copied = copied?.Trim();
         return string.IsNullOrEmpty(copied) || copied!.Length < 2 ? null : new CapturedText(Clip(copied), AppName(window), window, true);
@@ -421,12 +417,21 @@ public static class ScreenContext
 
     [DllImport("user32.dll")] private static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
 
-    /// <summary>Puts text on the clipboard, brings the source app back and pastes over its selection.</summary>
+    /// <summary>
+    /// Writes <paramref name="text"/> over the captured selection / text box. Win32 text boxes are edited
+    /// directly (no clipboard); other apps get a paste, with the text kept out of the clipboard history.
+    /// </summary>
     public static async Task ReplaceSelectionAsync(CapturedText source, string text)
     {
+        if (source.Edit != IntPtr.Zero && await Task.Run(() => ReplaceInWin32Edit(source, text)))
+        {
+            Native.FocusWindow(source.Window);
+            return;
+        }
+
         string? previous = null;
         try { if (System.Windows.Clipboard.ContainsText()) previous = System.Windows.Clipboard.GetText(); } catch { }
-        System.Windows.Clipboard.SetText(text);
+        SetClipboardPrivately(text);
         Native.FocusWindow(source.Window);
         await Task.Delay(180);
         if (!source.FromSelection && source.Editable)
@@ -455,9 +460,150 @@ public static class ScreenContext
         SendCtrl(0x56 /* V */);
         // give the clipboard back once the app has pasted
         await Task.Delay(450);
-        if (previous != null)
+        if (previous != null) SetClipboardPrivately(previous);
+    }
+
+    /// <summary>
+    /// Clipboard text that Windows' clipboard history (Win+V) and cloud clipboard skip: Notchy's temporary
+    /// pastes and the restore of what you had copied would otherwise pile up there.
+    /// </summary>
+    public static void SetClipboardPrivately(string text)
+    {
+        var data = new System.Windows.DataObject();
+        data.SetData(System.Windows.DataFormats.UnicodeText, text);
+        data.SetData(System.Windows.DataFormats.Text, text);
+        data.SetData("ExcludeClipboardContentFromMonitorProcessing", new System.IO.MemoryStream(new byte[] { 0, 0, 0, 0 }));
+        data.SetData("CanIncludeInClipboardHistory", new System.IO.MemoryStream(BitConverter.GetBytes(0)));
+        data.SetData("CanUploadToCloudClipboard", new System.IO.MemoryStream(BitConverter.GetBytes(0)));
+        for (int i = 0; i < 3; i++)
         {
-            try { System.Windows.Clipboard.SetText(previous); } catch { }
+            try
+            {
+                System.Windows.Clipboard.SetDataObject(data, true);
+                return;
+            }
+            catch
+            {
+                System.Threading.Thread.Sleep(50);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ classic Win32 text boxes
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr h, System.Text.StringBuilder s, int max);
+    [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr h, int index);
+    [DllImport("user32.dll")] private static extern bool GetGUIThreadInfo(int threadId, ref GUITHREADINFO info);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr SendMessageTimeout(IntPtr h, uint msg, IntPtr w, IntPtr l, uint flags, uint timeout, out IntPtr result);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageTimeoutW")]
+    private static extern IntPtr SendMessageTimeoutText(IntPtr h, uint msg, IntPtr w, System.Text.StringBuilder l, uint flags, uint timeout, out IntPtr result);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageTimeoutW")]
+    private static extern IntPtr SendMessageTimeoutString(IntPtr h, uint msg, IntPtr w, string l, uint flags, uint timeout, out IntPtr result);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct GUITHREADINFO
+    {
+        public int cbSize, flags;
+        public IntPtr hwndActive, hwndFocus, hwndCapture, hwndMenuOwner, hwndMoveSize, hwndCaret;
+        public RECT rcCaret;
+    }
+
+    private const uint WM_GETTEXT = 0x0D, WM_GETTEXTLENGTH = 0x0E, EM_GETSEL = 0xB0, EM_SETSEL = 0xB1, EM_REPLACESEL = 0xC2;
+    private const uint SMTO_ABORTIFHUNG = 0x2;
+    private const int GWL_STYLE = -16, ES_READONLY = 0x800;
+
+    /// <summary>The control with the keyboard focus inside <paramref name="window"/> (another app's thread).</summary>
+    private static IntPtr FocusedChild(IntPtr window)
+    {
+        if (window == IntPtr.Zero) return IntPtr.Zero;
+        var info = new GUITHREADINFO { cbSize = Marshal.SizeOf<GUITHREADINFO>() };
+        int tid = GetWindowThreadProcessId(window, out _);
+        return GetGUIThreadInfo(tid, ref info) ? info.hwndFocus : IntPtr.Zero;
+    }
+
+    /// <summary>A Win32 Edit / RichEdit you can type in (Notepad, WordPad, dialogs...).</summary>
+    private static bool IsWin32Edit(IntPtr h)
+    {
+        if (h == IntPtr.Zero) return false;
+        var sb = new System.Text.StringBuilder(64);
+        GetClassName(h, sb, sb.Capacity);
+        string cls = sb.ToString();
+        bool edit = cls.Equals("Edit", StringComparison.OrdinalIgnoreCase) ||
+                    cls.StartsWith("RichEdit", StringComparison.OrdinalIgnoreCase) ||
+                    cls.StartsWith("RICHEDIT", StringComparison.OrdinalIgnoreCase);
+        return edit && (GetWindowLong(h, GWL_STYLE) & ES_READONLY) == 0;
+    }
+
+    private static string? EditText(IntPtr h)
+    {
+        if (SendMessageTimeout(h, WM_GETTEXTLENGTH, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG, 500, out IntPtr len) == IntPtr.Zero) return null;
+        int n = (int)len;
+        if (n <= 0) return "";
+        var sb = new System.Text.StringBuilder(n + 1);
+        if (SendMessageTimeoutText(h, WM_GETTEXT, (IntPtr)(n + 1), sb, SMTO_ABORTIFHUNG, 800, out _) == IntPtr.Zero) return null;
+        return sb.ToString();
+    }
+
+    /// <summary>Selection of a Win32 text box. EM_GETSEL packs it in the result (exact up to 65535 chars).</summary>
+    private static (int start, int end) EditSelection(IntPtr h, int length)
+    {
+        if (SendMessageTimeout(h, EM_GETSEL, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG, 500, out IntPtr r) == IntPtr.Zero) return (0, 0);
+        long v = (long)r;
+        int start = (int)(v & 0xFFFF), end = (int)((v >> 16) & 0xFFFF);
+        if (length > 0xFFFF || start > end || end > length) return (0, 0); // too long to trust the packed values
+        return (start, end);
+    }
+
+    private static CapturedText? FromWin32Edit(IntPtr edit, string app, IntPtr root, bool preferSelection)
+    {
+        string? all = EditText(edit);
+        if (all == null) return null;
+        var (s, e) = EditSelection(edit, all.Length);
+        if (preferSelection && e - s > 1)
+        {
+            string sel = all.Substring(s, e - s);
+            if (sel.Trim().Length > 1) return new CapturedText(Clip(sel), app, root, true, true, null, Edit: edit, SelStart: s, SelEnd: e);
+        }
+        if (all.Trim().Length > 1 && all.Length <= MaxChars)
+            return new CapturedText(Clip(all), app, root, false, true, null, Edit: edit);
+        return null;
+    }
+
+    /// <summary>Selects the captured range again (if the text there is unchanged) and replaces it, with undo.</summary>
+    private static bool ReplaceInWin32Edit(CapturedText source, string text)
+    {
+        try
+        {
+            IntPtr h = source.Edit;
+            string? all = EditText(h);
+            if (all == null) return false;
+            int s, e;
+            if (source.SelStart >= 0)
+            {
+                s = source.SelStart;
+                e = source.SelEnd;
+                // the box changed since: find the captured text again
+                if (e > all.Length || Clip(all.Substring(s, e - s)) != source.Text)
+                {
+                    int at = all.IndexOf(source.Text, StringComparison.Ordinal);
+                    if (at < 0) return false;
+                    s = at;
+                    e = at + source.Text.Length;
+                }
+            }
+            else
+            {
+                s = 0;
+                e = -1; // everything
+            }
+            // keep the line breaks the box uses (Notepad wants \r\n)
+            if (all.Contains("\r\n")) text = text.Replace("\r\n", "\n").Replace("\n", "\r\n");
+            SendMessageTimeout(h, EM_SETSEL, (IntPtr)s, (IntPtr)e, SMTO_ABORTIFHUNG, 500, out _);
+            return SendMessageTimeoutString(h, EM_REPLACESEL, (IntPtr)1 /* can undo */, text, SMTO_ABORTIFHUNG, 1000, out _) != IntPtr.Zero;
+        }
+        catch
+        {
+            return false;
         }
     }
 }

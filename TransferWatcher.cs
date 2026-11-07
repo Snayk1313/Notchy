@@ -1,0 +1,753 @@
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Windows.Automation;
+
+namespace Notchy;
+
+public enum TransferKind { Download, Copy }
+
+/// <summary>
+/// What is being transferred right now (one summary for everything running).
+/// Progress, Total, Speed and Eta are null when they can't be known.
+/// </summary>
+public sealed record TransferInfo(TransferKind Kind, string Name, int Count, double? Progress, long Bytes, long? Total,
+    double? BytesPerSecond, TimeSpan? Eta)
+{
+    /// <summary>Downloads: the in-progress file (".crdownload", ".part"...) of the newest download.</summary>
+    public string PartialPath { get; init; } = "";
+    /// <summary>Downloads: the browser's process name ("zen", "firefox", "msedge", "opera"...), "" if unknown.</summary>
+    public string Browser { get; init; } = "";
+}
+
+/// <summary>One file being downloaded (the Downloads tab lists them when there are several).</summary>
+public sealed record DownloadFile(string PartialPath, string Name, long Bytes, double BytesPerSecond);
+
+/// <summary>
+/// Notices file transfers without any browser extension or hook:
+/// - downloads: the browsers' in-progress files (.crdownload for Chrome/Edge/Brave, .opdownload for Opera,
+///   .part for Firefox) that are still growing, in whatever folder or disk they're saved to: the Downloads folder,
+///   the in-progress downloads Zen/Firefox list in their own downloads.json (exact place, nothing to search), and
+///   for the Chromium browsers Windows' own notice when such a file is created anywhere (only while one of them
+///   is open; only file creations/renames wake us, not writes). The size so far and the speed come from
+///   the file itself; the total comes from the browser's own download UI (Edge's toolbar button says "11%",
+///   Opera's download popup "8%", the downloads panel "7,1 MB de 60,0 MB"). Once the total is known it stays,
+///   so the percentage keeps going even after that popup closes.
+/// - copies/moves: Explorer's progress dialog (percentage in its title, file name and speed inside it).
+/// <see cref="Poll"/> does blocking work (UI Automation): call it off the UI thread.
+/// </summary>
+public sealed class TransferWatcher
+{
+    private static readonly string[] PartialExtensions = { ".crdownload", ".opdownload", ".part", ".partial", ".download" };
+    private static readonly string[] Browsers = { "msedge", "chrome", "opera", "brave", "vivaldi", "arc", "yandex" };
+    private static readonly Regex Percent = new(@"(\d{1,3}(?:[.,]\d+)?)\s*%", RegexOptions.Compiled);
+    private static readonly Regex SizeOfSize = new(@"([\d.,]+)\s*(B|KB|MB|GB|TB)\s+\S{1,4}\s+([\d.,]+)\s*(B|KB|MB|GB|TB)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex Size = new(@"([\d.,]+)\s*(bytes|B|KB|MB|GB|TB)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private sealed class Growing
+    {
+        public long Size;
+        public DateTime Changed;
+        public double Speed;
+    }
+
+    private readonly Dictionary<string, Growing> _files = new(StringComparer.OrdinalIgnoreCase);
+    private readonly string? _downloads = DownloadsFolder();
+    private DateTime _lastPoll = DateTime.UtcNow;
+    private bool _primed;
+    private string _lastPath = "", _lastName = "";
+
+    public TransferInfo? Current { get; private set; }
+
+    /// <summary>Every download in progress (usually one).</summary>
+    public IReadOnlyList<DownloadFile> Files { get; private set; } = Array.Empty<DownloadFile>();
+
+    /// <summary>Raised (on the polling thread) when a transfer is over: kind, name, final file (downloads).</summary>
+    public event Action<TransferKind, string, string?>? Finished;
+
+    /// <summary>Raised (on the polling thread) when a download stopped without a file (failed / canceled).</summary>
+    public event Action<string>? Failed;
+
+    public void Poll()
+    {
+        var now = DateTime.UtcNow;
+        double dt = Math.Max(0.05, (now - _lastPoll).TotalSeconds);
+        _lastPoll = now;
+
+        var copy = ExplorerCopy(now);
+        var download = Downloads(now, dt);
+        var next = copy ?? download; // a copy has a real percentage, it wins
+
+        var prev = Current;
+        Current = next;
+        if (prev != null && (next == null || next.Kind != prev.Kind))
+        {
+            // a download "ends" also when it's paused or fails: only a finished file counts
+            if (prev.Kind == TransferKind.Copy) Finished?.Invoke(prev.Kind, prev.Name, null);
+            else if (FinishedFile(prev) is string finalPath) Finished?.Invoke(prev.Kind, Path.GetFileName(finalPath), finalPath);
+            else if (!File.Exists(prev.PartialPath)) Failed?.Invoke(prev.Name); // gone without a result: failed / canceled
+        }
+    }
+
+    // ------------------------------------------------------------------ downloads
+
+    /// <summary>
+    /// The file a download became, or null if it didn't finish (paused / failed). Chrome renames
+    /// "name.crdownload" → "name"; Edge keeps "Unconfirmed 123.crdownload" until the very end, so then it's
+    /// the file that just appeared in the folder with (about) the size we saw.
+    /// </summary>
+    private string? FinishedFile(TransferInfo prev)
+    {
+        if (_lastPath == "") return null;
+        // Firefox/Zen create the final (empty) file at the start: it only counts once it has the data
+        string direct = _ffFinal ?? StripPartial(_lastPath);
+        try
+        {
+            var fi = new FileInfo(direct);
+            if (fi.Exists && fi.Length >= prev.Bytes * 0.9) return fi.FullName;
+            if (CleanName(_lastPath) != "" && _ffFinal == null) return null;
+            string? folder = Path.GetDirectoryName(_lastPath);
+            if (folder == null) return null;
+            var fresh = new DirectoryInfo(folder).EnumerateFiles()
+                .Where(f => !PartialExtensions.Contains(f.Extension, StringComparer.OrdinalIgnoreCase) &&
+                            (DateTime.Now - f.LastWriteTime).TotalSeconds < 15 && f.Length >= prev.Bytes * 0.9)
+                .OrderByDescending(f => f.LastWriteTime).FirstOrDefault();
+            return fresh?.FullName;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private TransferInfo? Downloads(DateTime now, double dt)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var path in PartialFiles(now))
+            {
+                string ext = Path.GetExtension(path);
+                if (!PartialExtensions.Any(e => e.Equals(ext, StringComparison.OrdinalIgnoreCase))) continue;
+                long size;
+                try { size = new FileInfo(path).Length; } catch { continue; }
+                seen.Add(path);
+                if (!_files.TryGetValue(path, out var g))
+                {
+                    // a file that was already there when we started counts only once it grows
+                    _files[path] = new Growing { Size = size, Changed = _primed ? now : DateTime.MinValue };
+                    continue;
+                }
+                if (size != g.Size)
+                {
+                    double speed = Math.Max(0, size - g.Size) / dt;
+                    g.Speed = g.Speed <= 0 ? speed : g.Speed * 0.75 + speed * 0.25;
+                    g.Size = size;
+                    g.Changed = now;
+                }
+                else if ((now - g.Changed).TotalSeconds > 1.5) g.Speed *= 0.8;
+            }
+        }
+        catch
+        {
+            // folder missing / no access
+        }
+        _primed = true;
+        foreach (var gone in _files.Keys.Where(k => !seen.Contains(k)).ToList()) _files.Remove(gone);
+
+        // only files that grew in the last few seconds (paused or failed downloads leave their file behind)
+        // (a download that stops growing stays a while: the eyes get sleepy before it's dropped)
+        var active = _files.Where(f => (now - f.Value.Changed).TotalSeconds < 20).ToList();
+        Files = active.OrderByDescending(f => f.Value.Changed)
+            .Select(f => new DownloadFile(f.Key, CleanName(f.Key) is { Length: > 0 } n ? n : _lastName, f.Value.Size, f.Value.Speed)).ToList();
+        if (active.Count == 0)
+        {
+            _browserTotal = null;
+            _probe = null;
+            _pctSeen = -1;
+            _estSum = _estWeight = 0;
+            _exactTotal = false;
+            return null;
+        }
+
+        var newest = active.OrderByDescending(f => f.Value.Changed).First();
+        string name = CleanName(newest.Key);
+        if (name != "") _lastName = name;
+        // Chrome renames "Unconfirmed 123.crdownload" to "name.crdownload" a moment in: same download
+        if (_lastPath != newest.Key && !(_lastPath != "" && CleanName(_lastPath) == "" && active.Count == 1))
+        {
+            _browserTotal = null;
+            _pctSeen = -1;
+            _estSum = _estWeight = 0;
+            _exactTotal = false;
+        }
+        _lastPath = newest.Key;
+
+        long bytes = active.Sum(f => f.Value.Size);
+        double rate = active.Sum(f => f.Value.Speed);
+
+        long? total = null;
+        if (active.Count == 1)
+        {
+            if (newest.Key.EndsWith(".part", StringComparison.OrdinalIgnoreCase))
+            {
+                // Firefox / Zen / LibreWolf / Floorp: the profile's downloads.json has the exact size
+                ReadFirefox(now, newest.Key);
+                total = _ffTotal;
+                if (_ffFinal != null) name = Path.GetFileName(_ffFinal);
+            }
+            else
+            {
+                ReadBrowser(now, bytes);
+                total = _browserTotal;
+            }
+            if (total < bytes) total = null;
+        }
+        double? progress = total is long t && t > 0 ? Math.Clamp((double)bytes / t, 0, 0.999) : null;
+        TimeSpan? eta = total is long tt && rate > 1024 ? TimeSpan.FromSeconds((tt - bytes) / rate) : null;
+        return new TransferInfo(TransferKind.Download, name == "" ? _lastName : name, active.Count, progress, bytes, total,
+            rate > 0 ? rate : null, eta)
+        {
+            PartialPath = newest.Key,
+            Browser = BrowserOf(newest.Key)
+        };
+    }
+
+    // ------------------------------------------------------------------ where downloads are
+
+    private static readonly string[] ChromiumPartials = { ".crdownload", ".opdownload" };
+
+    private static bool IsPartial(string path)
+    {
+        string ext = Path.GetExtension(path);
+        return PartialExtensions.Any(e => e.Equals(ext, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>The in-progress download files: Downloads folder + Zen/Firefox's list + what Windows told us about.</summary>
+    private List<string> PartialFiles(DateTime now)
+    {
+        var list = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (_downloads != null)
+        {
+            try
+            {
+                foreach (var p in Directory.EnumerateFiles(_downloads))
+                    if (IsPartial(p)) list.Add(p);
+            }
+            catch
+            {
+                // folder missing / no access
+            }
+        }
+
+        SpotFirefox(now);
+        foreach (var p in _ffActive)
+            if (File.Exists(p)) list.Add(p);
+
+        UpdateDiskWatch(now);
+        foreach (var p in _spotted.Keys)
+        {
+            if (File.Exists(p)) list.Add(p);
+            else _spotted.TryRemove(p, out _);
+        }
+        return list.ToList();
+    }
+
+    // ---- Zen / Firefox: their downloads.json says where each running download is being written
+
+    private readonly Dictionary<string, (DateTime stamp, List<string> parts)> _ffLists = new(StringComparer.OrdinalIgnoreCase);
+    private List<string> _ffActive = new();
+
+    /// <summary>Re-reads a profile's downloads.json only when the browser rewrote it (a quick date check otherwise).</summary>
+    private void SpotFirefox(DateTime now)
+    {
+        if (_ffFiles == null || now - _ffFilesAt > TimeSpan.FromMinutes(1))
+        {
+            _ffFilesAt = now;
+            _ffFiles = FirefoxProfiles().Select(p => Path.Combine(p, "downloads.json")).ToList();
+        }
+        bool changed = false;
+        foreach (var file in _ffFiles)
+        {
+            DateTime stamp;
+            try
+            {
+                if (!File.Exists(file)) continue;
+                stamp = File.GetLastWriteTimeUtc(file);
+            }
+            catch
+            {
+                continue;
+            }
+            if (_ffLists.TryGetValue(file, out var known) && known.stamp == stamp) continue;
+            var parts = new List<string>();
+            try
+            {
+                string json;
+                using (var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (var sr = new StreamReader(fs))
+                    json = sr.ReadToEnd();
+                using var doc = System.Text.Json.JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("list", out var items))
+                    foreach (var d in items.EnumerateArray())
+                        if (d.TryGetProperty("target", out var target) && target.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                            target.TryGetProperty("partFilePath", out var part) && part.ValueKind == System.Text.Json.JsonValueKind.String &&
+                            part.GetString() is { Length: > 0 } path)
+                            parts.Add(path);
+            }
+            catch
+            {
+                continue; // being written right now: next time (the stamp isn't stored, so it's read again)
+            }
+            _ffLists[file] = (stamp, parts);
+            changed = true;
+        }
+        if (changed) _ffActive = _ffLists.Values.SelectMany(v => v.parts).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    // ---- Chromium browsers: Windows tells us when a .crdownload / .opdownload file is created on any disk
+
+    private readonly ConcurrentDictionary<string, byte> _spotted = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, FileSystemWatcher> _diskWatchers = new(StringComparer.OrdinalIgnoreCase);
+    private DateTime _diskCheckAt;
+
+    /// <summary>Every few seconds: is a Chromium browser open? Then watch every disk (new ones too); else watch nothing.</summary>
+    private void UpdateDiskWatch(DateTime now)
+    {
+        if (now < _diskCheckAt) return;
+        _diskCheckAt = now.AddSeconds(3);
+
+        bool browserOpen = false;
+        foreach (var proc in Process.GetProcesses())
+        {
+            if (!browserOpen && Browsers.Contains(proc.ProcessName, StringComparer.OrdinalIgnoreCase)) browserOpen = true;
+            proc.Dispose();
+        }
+
+        var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (browserOpen)
+        {
+            foreach (var drive in DriveInfo.GetDrives())
+            {
+                try
+                {
+                    if (drive.DriveType is DriveType.Fixed or DriveType.Removable && drive.IsReady) roots.Add(drive.RootDirectory.FullName);
+                }
+                catch
+                {
+                    // drive just went away
+                }
+            }
+        }
+
+        foreach (var gone in _diskWatchers.Keys.Where(r => !roots.Contains(r)).ToList())
+        {
+            _diskWatchers[gone].Dispose();
+            _diskWatchers.Remove(gone);
+        }
+        foreach (var root in roots)
+        {
+            if (_diskWatchers.ContainsKey(root)) continue;
+            try
+            {
+                var w = new FileSystemWatcher(root)
+                {
+                    IncludeSubdirectories = true,
+                    NotifyFilter = NotifyFilters.FileName, // creations, renames, deletions: not every write
+                    InternalBufferSize = 64 * 1024
+                };
+                w.Created += (_, e) => Spot(e.FullPath);
+                w.Renamed += (_, e) => Spot(e.FullPath);
+                w.EnableRaisingEvents = true;
+                _diskWatchers[root] = w;
+            }
+            catch
+            {
+                // no access to that disk
+            }
+        }
+    }
+
+    private void Spot(string path)
+    {
+        string ext = Path.GetExtension(path);
+        if (ChromiumPartials.Any(e => e.Equals(ext, StringComparison.OrdinalIgnoreCase))) _spotted[path] = 0;
+    }
+
+    // ---- Firefox family: <profile>\downloads.json lists the session's downloads with their size, written
+    //      as soon as a download starts ("partFilePath" is the .part file we see growing, "totalBytes" its size)
+
+    private static readonly string[] FirefoxRoots = { "zen", @"Mozilla\Firefox", "librewolf", "Floorp", "Waterfox", "Mercury" };
+    private static readonly string[] FirefoxProcesses = { "zen", "firefox", "librewolf", "floorp", "waterfox", "mercury" };
+    private string _ffBrowser = "";
+    private string _probeBrowser = "";
+
+    /// <summary>Which browser is downloading this file (for "cancel").</summary>
+    private string BrowserOf(string partial)
+    {
+        string ext = Path.GetExtension(partial).ToLowerInvariant();
+        static string FirstRunning(IEnumerable<string> names) =>
+            names.FirstOrDefault(n => Process.GetProcessesByName(n).Length > 0) ?? "";
+        return ext switch
+        {
+            ".part" => _ffBrowser != "" ? _ffBrowser : FirstRunning(FirefoxProcesses),
+            ".opdownload" => "opera",
+            _ => _probeBrowser != "" ? _probeBrowser : FirstRunning(new[] { "msedge", "chrome", "brave", "vivaldi" })
+        };
+    }
+    private List<string>? _ffFiles;
+    private DateTime _ffFilesAt, _ffNextRead;
+    private string _ffFor = "";
+    private long? _ffTotal;
+    private string? _ffFinal;
+
+    private void ReadFirefox(DateTime now, string partPath)
+    {
+        if (_ffFor != partPath)
+        {
+            _ffFor = partPath;
+            _ffTotal = null;
+            _ffFinal = null;
+            _ffNextRead = default;
+        }
+        if (_ffTotal != null || now < _ffNextRead) return;
+        _ffNextRead = now.AddSeconds(1.5);
+
+        if (_ffFiles == null || now - _ffFilesAt > TimeSpan.FromMinutes(1))
+        {
+            _ffFilesAt = now;
+            _ffFiles = FirefoxProfiles().Select(p => Path.Combine(p, "downloads.json")).ToList();
+        }
+        foreach (var file in _ffFiles)
+        {
+            try
+            {
+                if (!File.Exists(file) || (DateTime.Now - File.GetLastWriteTime(file)).TotalHours > 6) continue;
+                string json;
+                using (var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (var sr = new StreamReader(fs))
+                    json = sr.ReadToEnd();
+                using var doc = System.Text.Json.JsonDocument.Parse(json);
+                if (!doc.RootElement.TryGetProperty("list", out var list)) continue;
+                foreach (var d in list.EnumerateArray())
+                {
+                    if (!d.TryGetProperty("target", out var target) || target.ValueKind != System.Text.Json.JsonValueKind.Object) continue;
+                    if (!target.TryGetProperty("partFilePath", out var part) || part.ValueKind != System.Text.Json.JsonValueKind.String) continue;
+                    if (!string.Equals(part.GetString(), partPath, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (target.TryGetProperty("path", out var final) && final.ValueKind == System.Text.Json.JsonValueKind.String)
+                        _ffFinal = final.GetString();
+                    if (d.TryGetProperty("totalBytes", out var tb) && tb.TryGetInt64(out long total) && total > 0)
+                        _ffTotal = total;
+                    // which browser this profile belongs to: ...\AppData\Roaming\<root>\Profiles\...
+                    for (int r = 0; r < FirefoxRoots.Length; r++)
+                        if (file.Contains(Path.DirectorySeparatorChar + FirefoxRoots[r] + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                            _ffBrowser = FirefoxProcesses[r];
+                    return;
+                }
+            }
+            catch
+            {
+                // being written right now: next time
+            }
+        }
+    }
+
+    private static IEnumerable<string> FirefoxProfiles()
+    {
+        string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        var dirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var r in FirefoxRoots)
+        {
+            string root = Path.Combine(appData, r);
+            try
+            {
+                string profiles = Path.Combine(root, "Profiles");
+                if (Directory.Exists(profiles))
+                    foreach (var d in Directory.EnumerateDirectories(profiles)) dirs.Add(d);
+                // profiles kept somewhere else
+                string ini = Path.Combine(root, "profiles.ini");
+                if (!File.Exists(ini)) continue;
+                bool relative = true;
+                foreach (var line in File.ReadAllLines(ini))
+                {
+                    if (line.StartsWith("[")) relative = true;
+                    else if (line.StartsWith("IsRelative=")) relative = line.EndsWith("1");
+                    else if (line.StartsWith("Path=") && !relative)
+                    {
+                        string p = line[5..].Trim();
+                        if (Directory.Exists(p)) dirs.Add(p);
+                    }
+                }
+            }
+            catch
+            {
+                // no access
+            }
+        }
+        return dirs;
+    }
+
+    // ---- the browser's own download UI (UI Automation, only the browser's toolbar/popups: never page content)
+
+    private long? _browserTotal;
+    private double _pctSeen = -1, _estSum, _estWeight;
+    private bool _exactTotal;
+    private List<AutomationElement>? _probe;   // elements that showed download progress, re-read each poll
+    private DateTime _nextSearch;
+
+    private void ReadBrowser(DateTime now, long bytes)
+    {
+        if (_probe is { Count: > 0 })
+        {
+            bool alive = false;
+            foreach (var el in _probe)
+            {
+                try
+                {
+                    alive |= Learn(el.Current.Name, bytes);
+                }
+                catch
+                {
+                    // element went away (popup closed)
+                }
+            }
+            if (alive) return;
+            _probe = null;
+        }
+        if (now < _nextSearch) return;
+        _nextSearch = now.AddSeconds(_browserTotal == null ? 1.5 : 4);
+        var found = new List<AutomationElement>();
+        try
+        {
+            var pids = new HashSet<int>(Browsers.SelectMany(n => Process.GetProcessesByName(n)).Select(p => p.Id));
+            if (pids.Count == 0) return;
+            var walker = TreeWalker.ControlViewWalker;
+            for (var w = walker.GetFirstChild(AutomationElement.RootElement); w != null; w = walker.GetNextSibling(w))
+            {
+                if (!pids.Contains(w.Current.ProcessId)) continue;
+                int before = found.Count;
+                Search(walker, w, 0, false, found);
+                if (found.Count > before)
+                    try { _probeBrowser = Process.GetProcessById(w.Current.ProcessId).ProcessName.ToLowerInvariant(); } catch { }
+            }
+        }
+        catch
+        {
+            // browser busy / closing
+        }
+        foreach (var el in found)
+        {
+            try { Learn(el.Current.Name, bytes); } catch { }
+        }
+        _probe = found.Count > 0 ? found : null;
+    }
+
+    /// <summary>Walks the browser window (skipping web pages) for download elements that mention progress.</summary>
+    private static void Search(TreeWalker walker, AutomationElement e, int depth, bool inDownload, List<AutomationElement> found)
+    {
+        if (depth > 14 || found.Count > 6) return;
+        for (var c = walker.GetFirstChild(e); c != null; c = walker.GetNextSibling(c))
+        {
+            var info = c.Current;
+            if (info.ControlType == ControlType.Document) continue; // page content: never read
+            bool dl = inDownload || info.ClassName.Contains("Download", StringComparison.OrdinalIgnoreCase);
+            if (dl && (Percent.IsMatch(info.Name) || SizeOfSize.IsMatch(info.Name))) found.Add(c);
+            Search(walker, c, depth + 1, dl, found);
+        }
+    }
+
+    /// <summary>Learns the total from a text like "11%" or "7,1 MB de 60,0 MB". True if it said anything.</summary>
+    private bool Learn(string text, long bytes)
+    {
+        var m = SizeOfSize.Match(text);
+        if (m.Success && ParseSize(m.Groups[3].Value, m.Groups[4].Value) is long total && total > 0)
+        {
+            _browserTotal = total;
+            _exactTotal = true;
+            return true;
+        }
+        var p = Percent.Match(text);
+        if (_exactTotal) return p.Success;
+        if (p.Success && ParseNumber(p.Groups[1].Value) is double pct && pct >= 1 && pct < 100 && bytes > 0)
+        {
+            // The browser shows a whole percentage that lags the file a little. The moment it ticks up to n%,
+            // the download is right at n%: those moments give the best estimates. Average them, trusting
+            // higher percentages more, so the total stays steady instead of jumping with every reading.
+            if (pct != _pctSeen)
+            {
+                bool tick = _pctSeen >= 0 && pct > _pctSeen;
+                double at = tick ? pct : pct + 0.5;
+                double estimate = bytes / (at / 100);
+                double weight = tick ? pct : pct * 0.3;
+                _estSum += estimate * weight;
+                _estWeight += weight;
+                _pctSeen = pct;
+                _browserTotal = (long)(_estSum / _estWeight);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>"relatorio.pdf.crdownload" → "relatorio.pdf"; Chrome's temporary "Unconfirmed 123.crdownload" → "".</summary>
+    private static string CleanName(string path)
+    {
+        string name = Path.GetFileNameWithoutExtension(path);
+        if (path.EndsWith(".part", StringComparison.OrdinalIgnoreCase))
+            name = Regex.Replace(name, @"\.[A-Za-z0-9]{8}(?=\.[^.]+$)", "");
+        if (Regex.IsMatch(name, @"^(Unconfirmed|Não confirmado|No confirmado|Non confermato|Nicht bestätigt|Non confirmé)\s+\d+$", RegexOptions.IgnoreCase))
+            return "";
+        return name;
+    }
+
+    private static string StripPartial(string path) => Path.Combine(Path.GetDirectoryName(path) ?? "", Path.GetFileNameWithoutExtension(path));
+
+    private static string? DownloadsFolder()
+    {
+        try
+        {
+            var id = new Guid("374DE290-123F-4565-9164-39C4925E467B");
+            if (SHGetKnownFolderPath(ref id, 0, IntPtr.Zero, out var p) == 0)
+            {
+                string s = Marshal.PtrToStringUni(p) ?? "";
+                Marshal.FreeCoTaskMem(p);
+                if (Directory.Exists(s)) return s;
+            }
+        }
+        catch
+        {
+            // fall back below
+        }
+        string fallback = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+        return Directory.Exists(fallback) ? fallback : null;
+    }
+
+    // ------------------------------------------------------------------ Explorer copy / move
+
+    private IntPtr _copyWindow;
+    private readonly Queue<(DateTime t, double p)> _copyHistory = new();
+    private string _copyName = "";
+    private double? _copySpeed;
+    private DateTime _copyDetailsAt;
+
+    private TransferInfo? ExplorerCopy(DateTime now)
+    {
+        double best = -1;
+        int count = 0;
+        IntPtr bestWindow = IntPtr.Zero;
+        EnumWindows((h, _) =>
+        {
+            if (!IsWindowVisible(h)) return true;
+            var cls = new StringBuilder(64);
+            GetClassName(h, cls, cls.Capacity);
+            if (cls.ToString() != "OperationStatusWindow") return true;
+            var title = new StringBuilder(256);
+            GetWindowText(h, title, title.Capacity);
+            var m = Percent.Match(title.ToString());
+            if (!m.Success || ParseNumber(m.Groups[1].Value) is not double pct) return true;
+            double p = Math.Clamp(pct / 100.0, 0, 1);
+            count++;
+            if (best < 0 || p < best) // several dialogs: show the one furthest from done
+            {
+                best = p;
+                bestWindow = h;
+            }
+            return true;
+        }, IntPtr.Zero);
+
+        if (count == 0)
+        {
+            _copyWindow = IntPtr.Zero;
+            _copyHistory.Clear();
+            _copyName = "";
+            _copySpeed = null;
+            return null;
+        }
+        if (bestWindow != _copyWindow)
+        {
+            _copyWindow = bestWindow;
+            _copyHistory.Clear();
+            _copyName = "";
+            _copySpeed = null;
+        }
+
+        // time left from how fast the percentage moves (last ~6 s)
+        _copyHistory.Enqueue((now, best));
+        while (_copyHistory.Count > 2 && (now - _copyHistory.Peek().t).TotalSeconds > 6) _copyHistory.Dequeue();
+        TimeSpan? eta = null;
+        var first = _copyHistory.Peek();
+        double span = (now - first.t).TotalSeconds, moved = best - first.p;
+        if (span > 1.2 && moved > 0.002) eta = TimeSpan.FromSeconds((1 - best) * span / moved);
+
+        if (now >= _copyDetailsAt)
+        {
+            _copyDetailsAt = now.AddSeconds(1);
+            ReadCopyDetails(bestWindow);
+        }
+        return new TransferInfo(TransferKind.Copy, _copyName, count, best, 0, null, _copySpeed, eta);
+    }
+
+    /// <summary>The dialog's "more details" view: current file name and speed ("Velocidade: 3,23 GB por segundo").</summary>
+    private void ReadCopyDetails(IntPtr window)
+    {
+        try
+        {
+            var root = AutomationElement.FromHandle(window);
+            var name = root.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.AutomationIdProperty, "eltItemName"));
+            if (name != null) _copyName = name.Current.Name ?? "";
+            var chart = root.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.AutomationIdProperty, "eltRateChart_New"));
+            string text = chart?.Current.Name ?? "";
+            int colon = text.LastIndexOf(':');
+            var m = Size.Match(colon >= 0 ? text[(colon + 1)..] : "");
+            _copySpeed = m.Success ? ParseSize(m.Groups[1].Value, m.Groups[2].Value) : null;
+        }
+        catch
+        {
+            // dialog closing
+        }
+    }
+
+    // ------------------------------------------------------------------ parsing
+
+    /// <summary>"3,23" / "3.23" / "1.024,5" → number (the browser/Explorer use the system's language).</summary>
+    private static double? ParseNumber(string s)
+    {
+        s = s.Trim();
+        int lastComma = s.LastIndexOf(','), lastDot = s.LastIndexOf('.');
+        if (lastComma >= 0 && lastDot >= 0)
+            s = lastComma > lastDot ? s.Replace(".", "").Replace(',', '.') : s.Replace(",", "");
+        else if (lastComma >= 0) s = s.Replace(',', '.');
+        return double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : null;
+    }
+
+    private static long? ParseSize(string number, string unit)
+    {
+        if (ParseNumber(number) is not double v) return null;
+        double mult = unit.ToUpperInvariant() switch
+        {
+            "KB" => 1024,
+            "MB" => 1024 * 1024,
+            "GB" => 1024d * 1024 * 1024,
+            "TB" => 1024d * 1024 * 1024 * 1024,
+            _ => 1
+        };
+        return (long)(v * mult);
+    }
+
+    // ------------------------------------------------------------------ native
+
+    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr hWnd, StringBuilder s, int max);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd, StringBuilder s, int max);
+    [DllImport("shell32.dll")] private static extern int SHGetKnownFolderPath(ref Guid id, uint flags, IntPtr token, out IntPtr path);
+}

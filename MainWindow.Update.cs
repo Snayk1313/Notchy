@@ -28,7 +28,6 @@ public partial class MainWindow
             Padding = new Thickness(8, 3, 8, 3),
             Margin = new Thickness(0, 0, 6, 0),
             VerticalAlignment = VerticalAlignment.Center,
-            Effect = new DropShadowEffect { ShadowDepth = 0, BlurRadius = 8, Opacity = 0.6, Color = UpdateColor },
             Visibility = Visibility.Collapsed
         };
         _updateButton.Click += (_, e) =>
@@ -39,6 +38,7 @@ public partial class MainWindow
         };
         var right = (Panel)BatteryText.Parent;
         right.Children.Insert(right.Children.IndexOf(BatteryText), _updateButton);
+        GlowUnder(_updateButton, UpdateColor, true, 8, 0.6);
 
         Updater.Ready += () => Dispatcher.BeginInvoke(OnUpdateReady);
 

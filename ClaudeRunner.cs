@@ -67,7 +67,11 @@ public sealed class ClaudeRunner
     }
 
     /// <summary>Checks "claude auth status" (off the UI thread). Returns (found, loggedIn, path).</summary>
-    public static async Task<(bool found, bool loggedIn, string? path)> CheckAsync()
+    public static Task<(bool found, bool loggedIn, string? path)> CheckAsync() =>
+        // looking for the exe and starting it take a moment: never on the UI thread (it made the window stutter)
+        Task.Run(CheckCoreAsync);
+
+    private static async Task<(bool found, bool loggedIn, string? path)> CheckCoreAsync()
     {
         var exe = FindClaude();
         if (exe == null) return (false, false, null);
