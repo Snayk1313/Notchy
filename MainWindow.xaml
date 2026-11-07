@@ -878,7 +878,9 @@
                             <!-- SHELF -->
                             <!-- DOWNLOADS (MainWindow.Transfer.cs) -->
                             <Grid x:Name="DownloadsTab" Height="96" VerticalAlignment="Top" Visibility="Collapsed">
-                                <StackPanel x:Name="DownloadsList" />
+                                <ScrollViewer x:Name="DownloadsScroll" VerticalScrollBarVisibility="Auto" FocusVisualStyle="{x:Null}">
+                                    <StackPanel x:Name="DownloadsList" />
+                                </ScrollViewer>
                             </Grid>
 
                             <Grid x:Name="ShelfTab" Height="118" VerticalAlignment="Top" Visibility="Collapsed">

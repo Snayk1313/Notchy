@@ -512,6 +512,7 @@ public partial class MainWindow
 
     // ------------------------------------------------------------------ Downloads tab
 
+    private const double DownloadsMaxHeight = 300;
     private double _dlTabHeight = 96;
     private string _dlTabKey = "";
     private readonly Dictionary<string, (TextBlock name, TextBlock detail, TextBlock pct, Border fill, Grid bar)> _dlRows = new();
@@ -543,12 +544,14 @@ public partial class MainWindow
         {
             if (!_dlRows.TryGetValue(f.PartialPath, out var row)) continue;
             bool main = t != null && f.PartialPath == t.PartialPath && files.Count == 1;
-            double? p = main ? t!.Progress : null;
+            // each download has its own size / time left when the browser says it (Zen/Firefox always do)
+            var info = main ? t! : new TransferInfo(TransferKind.Download, f.Name, 1, f.Progress, f.Bytes, f.Total,
+                f.BytesPerSecond > 0 ? f.BytesPerSecond : null, f.Eta);
+            double? p = info.Progress;
             if (texts || force)
             {
-                row.name.Text = main ? t!.Name : f.Name;
-                if (_dlCanceling == f.PartialPath) row.detail.Text = Loc.T("dl.canceling");
-                else row.detail.Text = main ? TransferDetail(t!) : FormatBytes((long)f.BytesPerSecond) + "/s  ·  " + FormatBytes(f.Bytes);
+                row.name.Text = info.Name;
+                row.detail.Text = _dlCanceling == f.PartialPath ? Loc.T("dl.canceling") : TransferDetail(info);
                 row.pct.Text = p is double v ? $"{Math.Floor(v * 100)}%" : "";
             }
             double w = row.bar.ActualWidth;
@@ -593,7 +596,7 @@ public partial class MainWindow
         {
             DownloadsList.Children.Add(SectionTitle(Loc.T("dl.active")));
             h += 18;
-            foreach (var f in files.Take(3))
+            foreach (var f in files)
             {
                 DownloadsList.Children.Add(ActiveRow(f));
                 h += 58;
@@ -609,7 +612,10 @@ public partial class MainWindow
                 h += 38;
             }
         }
-        h = Math.Clamp(Math.Ceiling(h) + 4, 96, 300);
+        h = Math.Ceiling(h) + 4;
+        // more than fits: the list scrolls (a little room so the rows don't touch the scrollbar)
+        DownloadsList.Margin = new Thickness(0, 0, h > DownloadsMaxHeight ? 4 : 0, 0);
+        h = Math.Clamp(h, 96, DownloadsMaxHeight);
         if (Math.Abs(h - _dlTabHeight) > 0.5)
         {
             _dlTabHeight = h;

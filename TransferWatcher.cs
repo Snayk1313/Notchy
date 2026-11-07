@@ -28,7 +28,11 @@ public sealed record TransferInfo(TransferKind Kind, string Name, int Count, dou
 }
 
 /// <summary>One file being downloaded (the Downloads tab lists them when there are several).</summary>
-public sealed record DownloadFile(string PartialPath, string Name, long Bytes, double BytesPerSecond);
+public sealed record DownloadFile(string PartialPath, string Name, long Bytes, double BytesPerSecond, long? Total = null)
+{
+    public double? Progress => Total is long t && t > 0 ? Math.Clamp((double)Bytes / t, 0, 0.999) : null;
+    public TimeSpan? Eta => Total is long t && BytesPerSecond > 1024 ? TimeSpan.FromSeconds(Math.Max(0, t - Bytes) / BytesPerSecond) : null;
+}
 
 /// <summary>
 /// Notices file transfers without any browser extension or hook:
@@ -165,8 +169,27 @@ public sealed class TransferWatcher
         // only files that grew in the last few seconds (paused or failed downloads leave their file behind)
         // (a download that stops growing stays a while: the eyes get sleepy before it's dropped)
         var active = _files.Where(f => (now - f.Value.Changed).TotalSeconds < 20).ToList();
-        Files = active.OrderByDescending(f => f.Value.Changed)
-            .Select(f => new DownloadFile(f.Key, CleanName(f.Key) is { Length: > 0 } n ? n : _lastName, f.Value.Size, f.Value.Speed)).ToList();
+        // Chrome/Edge/Opera...: each download's size is in the profile's History database
+        if (active.Any(f => IsChromiumPartial(f.Key) && !_chromium.Running.ContainsKey(f.Key)))
+        {
+            try { _chromium.Refresh(now); } catch { }
+        }
+        Files = active.OrderByDescending(f => f.Value.Changed).Select(f =>
+        {
+            string n = CleanName(f.Key) is { Length: > 0 } c ? c : _lastName;
+            long? size = null;
+            if (_ffByPart.TryGetValue(f.Key, out var ff))
+            {
+                if (ff.Final is { Length: > 0 } final) n = Path.GetFileName(final);
+                if (ff.Total >= f.Value.Size) size = ff.Total;
+            }
+            else if (_chromium.Running.TryGetValue(f.Key, out var ch))
+            {
+                if (ch.Target is { Length: > 0 } target) n = Path.GetFileName(target);
+                if (ch.Total >= f.Value.Size) size = ch.Total;
+            }
+            return new DownloadFile(f.Key, n, f.Value.Size, f.Value.Speed, size);
+        }).ToList();
         if (active.Count == 0)
         {
             _browserTotal = null;
@@ -200,8 +223,13 @@ public sealed class TransferWatcher
             {
                 // Firefox / Zen / LibreWolf / Floorp: the profile's downloads.json has the exact size
                 ReadFirefox(now, newest.Key);
-                total = _ffTotal;
+                total = _ffTotal ?? Files[0].Total;
                 if (_ffFinal != null) name = Path.GetFileName(_ffFinal);
+            }
+            else if (Files[0].Total is long exact)
+            {
+                total = exact; // the browser's History database: exact
+                if (Files[0].Name != "") name = Files[0].Name;
             }
             else
             {
@@ -209,6 +237,11 @@ public sealed class TransferWatcher
                 total = _browserTotal;
             }
             if (total < bytes) total = null;
+        }
+        else if (Files.All(f => f.Total != null))
+        {
+            // several downloads, each with a known size (Zen/Firefox): progress of all of them together
+            total = Files.Sum(f => f.Total!.Value);
         }
         double? progress = total is long t && t > 0 ? Math.Clamp((double)bytes / t, 0, 0.999) : null;
         TimeSpan? eta = total is long tt && rate > 1024 ? TimeSpan.FromSeconds((tt - bytes) / rate) : null;
@@ -223,6 +256,10 @@ public sealed class TransferWatcher
     // ------------------------------------------------------------------ where downloads are
 
     private static readonly string[] ChromiumPartials = { ".crdownload", ".opdownload" };
+    private readonly ChromiumHistory _chromium = new();
+
+    private static bool IsChromiumPartial(string path) =>
+        ChromiumPartials.Any(e => path.EndsWith(e, StringComparison.OrdinalIgnoreCase));
 
     private static bool IsPartial(string path)
     {
@@ -262,8 +299,12 @@ public sealed class TransferWatcher
 
     // ---- Zen / Firefox: their downloads.json says where each running download is being written
 
-    private readonly Dictionary<string, (DateTime stamp, List<string> parts)> _ffLists = new(StringComparer.OrdinalIgnoreCase);
+    private sealed record FfDownload(string Part, long? Total, string? Final);
+
+    private readonly Dictionary<string, (DateTime stamp, List<FfDownload> parts)> _ffLists = new(StringComparer.OrdinalIgnoreCase);
     private List<string> _ffActive = new();
+    /// <summary>Each running Zen/Firefox download's size and final file, by its .part path.</summary>
+    private Dictionary<string, FfDownload> _ffByPart = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Re-reads a profile's downloads.json only when the browser rewrote it (a quick date check otherwise).</summary>
     private void SpotFirefox(DateTime now)
@@ -287,7 +328,7 @@ public sealed class TransferWatcher
                 continue;
             }
             if (_ffLists.TryGetValue(file, out var known) && known.stamp == stamp) continue;
-            var parts = new List<string>();
+            var parts = new List<FfDownload>();
             try
             {
                 string json;
@@ -300,7 +341,11 @@ public sealed class TransferWatcher
                         if (d.TryGetProperty("target", out var target) && target.ValueKind == System.Text.Json.JsonValueKind.Object &&
                             target.TryGetProperty("partFilePath", out var part) && part.ValueKind == System.Text.Json.JsonValueKind.String &&
                             part.GetString() is { Length: > 0 } path)
-                            parts.Add(path);
+                        {
+                            long? total = d.TryGetProperty("totalBytes", out var tb) && tb.TryGetInt64(out long n) && n > 0 ? n : null;
+                            string? final = target.TryGetProperty("path", out var fp) && fp.ValueKind == System.Text.Json.JsonValueKind.String ? fp.GetString() : null;
+                            parts.Add(new FfDownload(path, total, final));
+                        }
             }
             catch
             {
@@ -309,7 +354,15 @@ public sealed class TransferWatcher
             _ffLists[file] = (stamp, parts);
             changed = true;
         }
-        if (changed) _ffActive = _ffLists.Values.SelectMany(v => v.parts).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (changed)
+        {
+            var all = _ffLists.Values.SelectMany(v => v.parts).ToList();
+            _ffActive = all.Select(p => p.Part).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var byPart = new Dictionary<string, FfDownload>(StringComparer.OrdinalIgnoreCase);
+            foreach (var p in all)
+                if (!byPart.TryGetValue(p.Part, out var had) || had.Total == null) byPart[p.Part] = p;
+            _ffByPart = byPart;
+        }
     }
 
     // ---- Chromium browsers: Windows tells us when a .crdownload / .opdownload file is created on any disk
