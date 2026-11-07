@@ -21,6 +21,7 @@ public partial class MainWindow
 {
     private static readonly Color NewsGold = Color.FromRgb(0xFF, 0xD3, 0x6B);
     private bool _whatsNewPending;
+    private bool _whatsNewTeased; // the notice already showed itself once this time (over whatever the island had)
 
     private Border? _newsCard;
     private Grid? _newsArt;
@@ -252,6 +253,13 @@ public partial class MainWindow
     /// <summary>Every frame while the tab is on screen: the highlight's little animation, and the next one after a while.</summary>
     private void UpdateWhatsNewFrame()
     {
+        // right after an update (once the opening animation is over), the notice shows for a few seconds even
+        // over music or Claude, so the update never goes unnoticed; then it waits for a free island
+        if (_whatsNewPending && !_whatsNewTeased && !_introActive && _state is IslandState.Idle or IslandState.Compact)
+        {
+            _whatsNewTeased = true;
+            ShowTransient(CompactMode.WhatsNew, "", "", 8);
+        }
         UpdateWhatsNewCompact();
         if (_state != IslandState.Expanded || _tab != Tab.News) return;
         double t = AnimNow;

@@ -19,7 +19,9 @@ public partial class MainWindow
         // header pill (expanded island), shown only while an update is ready
         var row = new StackPanel { Orientation = Orientation.Horizontal };
         row.Children.Add(new TextBlock { Text = Glyph(0xE896), FontFamily = (FontFamily)FindResource("IconFont"), FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 1, 5, 0) });
-        row.Children.Add(new TextBlock { Text = Loc.T("upd.button"), FontSize = 11, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
+        // (the button's style sets the icon font for everything in it: the label needs the normal font back,
+        // or "Atualizar" shows as empty boxes, wide enough to run into the clock)
+        row.Children.Add(new TextBlock { Text = Loc.T("upd.button"), FontFamily = (FontFamily)FindResource("UiFont"), FontSize = 11, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
         _updateButton = new Button
         {
             Style = (Style)FindResource("IconButton"),
