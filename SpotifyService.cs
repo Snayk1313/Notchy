@@ -437,6 +437,7 @@ public sealed class SpotifyService
     private static bool Ok((int status, string body) r) => r.status is >= 200 and < 300;
 
     /// <summary>Debug: like the current song, check, then unlike it again (leaves the library as it was).</summary>
+#if DEBUG
     public async Task<string> LikeRoundTripAsync()
     {
         var st = await StateAsync();
@@ -449,8 +450,10 @@ public sealed class SpotifyService
         bool? final = await IsLikedAsync(id);
         return $"track={id} before={before} save={saved} afterSave={after} remove={removed} final={final}";
     }
+#endif
 
     /// <summary>Debug: read-only calls showing which library endpoints this account/app accepts.</summary>
+#if DEBUG
     public async Task<string> DiagnoseAsync()
     {
         var sb = new StringBuilder();
@@ -474,6 +477,7 @@ public sealed class SpotifyService
         sb.AppendLine($"me: {me.status}");
         return sb.ToString();
     }
+#endif
 
     private static string Trim(string s) => s.Length > 300 ? s[..300] : s.Replace(Environment.NewLine, " ");
 }

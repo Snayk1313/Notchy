@@ -49,12 +49,17 @@ public partial class MainWindow
     private static readonly string ShelfFile = Path.Combine(AppSettings.Folder, "shelf.json");
     private bool _dragOver, _draggingOut;
     private DateTime _dragLast;
-    private Point _shelfDragStart;
 
     private void InitExtras()
     {
         var group = (TransformGroup)ClaudePod.RenderTransform;
         group.Children.Add(_podSlide);
+        _shelfSel.AfterDrag = () =>
+        {
+            if (_shelf.RemoveAll(p => !File.Exists(p) && !Directory.Exists(p)) == 0) return; // moved away: off the shelf
+            SaveShelf();
+            RenderShelf();
+        };
         LoadShelf();
         RenderShelf();
 
@@ -314,7 +319,7 @@ public partial class MainWindow
         if (want && !_podShown && !_podMorphing && kind == PodKind.Focus)
         {
             // music came back while the focus had the island: the island becomes the bubble
-            if (IslandJustLeft(m => m == CompactMode.Focus)) MorphFocusIslandIntoPod();
+            if (IslandJustLeft(m => m is CompactMode.Focus or CompactMode.Timer)) MorphFocusIslandIntoPod();
             // otherwise it just pops in (after the music island's eyes have gone)
             else if (!CompactFaceVisible && !EyeTripActive)
             {
@@ -335,7 +340,7 @@ public partial class MainWindow
         else if (!want && _podShown && !_podMorphing && !EyeTripActive && !PodSwapping && _podKind == PodKind.Focus)
         {
             // music stopped and the focus takes the island: the bubble becomes the island
-            if (_state == IslandState.Compact && _compactMode == CompactMode.Focus) MorphFocusPod();
+            if (_state == IslandState.Compact && _compactMode is CompactMode.Focus or CompactMode.Timer) MorphFocusPod();
             else HidePod();
         }
         else if (want && _podShown && !_podMorphing && !EyeTripActive && !PodSwapping && kind != _podKind)
@@ -470,9 +475,11 @@ public partial class MainWindow
     {
         e.Handled = true;
         SoundService.Play(Sfx.Click);
-        if (_podKind == PodKind.Focus) _userTab = Tab.Focus; // the focus bubble opens the Focus tab
+        // the focus bubble opens the Focus tab (a timer's, the Relógio tab)
+        var tab = _podKind == PodKind.Focus ? (PodIsTimer ? Tab.Clock : Tab.Focus) : Tab.Claude;
+        if (_podKind == PodKind.Focus) _userTab = tab;
         else _podOpenRequest = true;
-        SelectTab(_podKind == PodKind.Focus ? Tab.Focus : Tab.Claude, animate: false);
+        SelectTab(tab, animate: false);
         _clickOpened = true;
         _hoverRequested = false;
         _hoverTimer.Stop();
@@ -502,9 +509,9 @@ public partial class MainWindow
         if (!_audio.TryGet(out float vol, out bool mute)) return;
         double next = Math.Clamp((mute ? 0 : vol) + e.Delta / 120.0 * 0.02, 0, 1);
         SetVolume(next);
-        VolOsdBar.Value = next;
+        if (_levelKind != LevelKind.Volume) SetDeviceListOpen(false);
+        ShowVolumeLevel(next, false);
         VolumeSlider.Value = next;
-        VolOsdText.Text = Math.Round(next * 100).ToString();
         if (_state != IslandState.Expanded && S.VolumeOsd) _volumeOsdUntil = DateTime.UtcNow.AddSeconds(1.3);
         UpdateState();
     }
@@ -598,6 +605,12 @@ public partial class MainWindow
 
     private void ShelfClear_Click(object sender, RoutedEventArgs e)
     {
+        if (_shelfSel.Mode) // while selecting, this button is "Marcar todos"
+        {
+            SoundService.Play(Sfx.Click);
+            _shelfSel.MarkAll();
+            return;
+        }
         _shelf.Clear();
         SaveShelf();
         RenderShelf();
@@ -633,12 +646,14 @@ public partial class MainWindow
     private void RenderShelf()
     {
         ShelfItems.Children.Clear();
+        _shelfSel.Items.Clear();
         bool empty = _shelf.Count == 0;
         ShelfEmpty.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
         ShelfScroll.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
         ShelfClear.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
         ShelfHint.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
         foreach (var path in _shelf) ShelfItems.Children.Add(ShelfItem(path));
+        _shelfSel.Sync();
     }
 
     private static readonly string[] ImageExt = { ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff", ".ico" };
@@ -706,6 +721,7 @@ public partial class MainWindow
             Margin = new Thickness(0, 2, 2, 0),
             Visibility = Visibility.Hidden,
             Cursor = Cursors.Hand,
+            Tag = "noselect",
             Child = new TextBlock
             {
                 Text = "",
@@ -717,9 +733,23 @@ public partial class MainWindow
             }
         };
 
+        // marked: a tinted frame and a check where the X goes
+        var frame = new Border
+        {
+            CornerRadius = new CornerRadius(10), BorderThickness = new Thickness(1.5), Opacity = 0, IsHitTestVisible = false,
+            BorderBrush = new SolidColorBrush(Color.FromArgb(0xAA, ShelfColor.R, ShelfColor.G, ShelfColor.B)),
+            Background = new SolidColorBrush(Color.FromArgb(0x1F, ShelfColor.R, ShelfColor.G, ShelfColor.B))
+        };
+        var (badge, paintBadge) = SelBadge(ShelfColor, Color.FromRgb(0x06, 0x26, 0x1C));
+        badge.HorizontalAlignment = HorizontalAlignment.Right;
+        badge.VerticalAlignment = VerticalAlignment.Top;
+        badge.Margin = new Thickness(0, 3, 3, 0);
+
         var grid = new Grid { Width = 74, Height = 76 };
+        grid.Children.Add(frame);
         grid.Children.Add(stack);
         grid.Children.Add(remove);
+        grid.Children.Add(badge);
 
         var card = new Border
         {
@@ -742,7 +772,7 @@ public partial class MainWindow
         card.MouseEnter += (_, _) =>
         {
             card.Background = new SolidColorBrush(Color.FromArgb(0x1A, 255, 255, 255));
-            remove.Visibility = Visibility.Visible;
+            remove.Visibility = _shelfSel.Mode || _shelfSel.Marked.Contains(path) ? Visibility.Hidden : Visibility.Visible;
         };
         card.MouseLeave += (_, _) =>
         {
@@ -757,44 +787,26 @@ public partial class MainWindow
             SaveShelf();
             RenderShelf();
         };
-        card.MouseLeftButtonDown += (_, e) =>
+        bool wasMarked = false;
+        _shelfSel.Items.Add(new SelItem
         {
-            if (e.ClickCount == 2)
+            Path = path,
+            Element = card,
+            DoubleClick = () =>
             {
                 try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); } catch { }
-                e.Handled = true;
-                return;
-            }
-            _shelfDragStart = e.GetPosition(card);
-        };
-        card.MouseMove += (_, e) =>
-        {
-            if (e.LeftButton != MouseButtonState.Pressed || _draggingOut) return;
-            var pos = e.GetPosition(card);
-            if (Math.Abs(pos.X - _shelfDragStart.X) < 5 && Math.Abs(pos.Y - _shelfDragStart.Y) < 5) return;
-
-            _draggingOut = true;
-            try
+            },
+            Paint = (marked, mode) =>
             {
-                var data = new DataObject(DataFormats.FileDrop, new[] { path });
-                DragDrop.DoDragDrop(card, data, DragDropEffects.Copy | DragDropEffects.Move | DragDropEffects.Link);
+                paintBadge(marked, mode);
+                if (marked != wasMarked)
+                {
+                    wasMarked = marked;
+                    frame.BeginAnimation(OpacityProperty, new DoubleAnimation(marked ? 1 : 0, TimeSpan.FromMilliseconds(Dur(160))));
+                }
+                remove.Visibility = !marked && !mode && card.IsMouseOver ? Visibility.Visible : Visibility.Hidden;
             }
-            catch
-            {
-                // ignore
-            }
-            finally
-            {
-                _draggingOut = false;
-            }
-            // if it was moved away, drop it from the shelf
-            if (!File.Exists(path) && !Directory.Exists(path))
-            {
-                _shelf.Remove(path);
-                SaveShelf();
-                RenderShelf();
-            }
-        };
+        });
         return card;
     }
 }

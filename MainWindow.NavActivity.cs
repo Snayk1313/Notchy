@@ -25,6 +25,8 @@ public partial class MainWindow
         public readonly SolidColorBrush Tint = new(Colors.White);
         // Downloads only: the icon drawn in two parts (arrow + bar) so the arrow can move while the bar fills
         public FrameworkElement? Art;
+        // Focus only: the target, drawn (the font has none); the font icon stays for its size and for the check mark
+        public FrameworkElement? Drawn;
         public TranslateTransform? ArtArrow;
         public Rectangle? ArtFill;
         public Rectangle? ArtTrack;
@@ -83,8 +85,21 @@ public partial class MainWindow
             Glyph = icon.Text, Font = icon.FontFamily, FontSize = icon.FontSize
         };
         if (tab == Tab.Downloads) host.Children.Add(MakeDownloadArt(n));
+        if (tab == Tab.Focus) host.Children.Add(MakeFocusArt(n));
         _navIcons[tab] = n;
         return host;
+    }
+
+    /// <summary>The Focus tab's target, on a 24-unit grid like the font's. It takes the font icon's colour and movements.</summary>
+    private static FrameworkElement MakeFocusArt(NavIcon n)
+    {
+        var art = TargetIcon.Art(n.Icon, 14.5);
+        art.Margin = new Thickness(-1);
+        art.RenderTransformOrigin = new Point(0.5, 0.5);
+        art.RenderTransform = n.Icon.RenderTransform; // hops with the icon
+        n.Drawn = art;
+        n.Icon.Opacity = 0;
+        return art;
     }
 
     /// <summary>
@@ -138,6 +153,8 @@ public partial class MainWindow
         Tab.Claude when _claude.Active?.NeedsAttention == true => (NavMotion.Pulse, ClaudeColor),
         Tab.Claude when _claude.AnyWorking => (NavMotion.Spin, ClaudeColor),
         Tab.Focus when _focus.Running => (NavMotion.Ring, FocusColor),
+        Tab.Clock when _ring != null => (NavMotion.Pulse, TimerColor),
+        Tab.Clock when _clock.AnyRunning => (NavMotion.Ring, TimerColor),
         Tab.Chat when _runner?.Busy == true => (NavMotion.Bob, ChatColor),
         Tab.Shelf when _shelf.Count > 0 && S.ShelfEnabled => (NavMotion.Glow, ShelfColor),
         _ => (NavMotion.None, Colors.White)
@@ -257,9 +274,14 @@ public partial class MainWindow
                 iconOpacity *= 1 - art;
                 if (art > 0.01) UpdateDownloadArt(n, t);
             }
+            if (n.Drawn != null)
+            {
+                n.Drawn.Opacity = check ? 0 : iconOpacity;
+                iconOpacity = check ? iconOpacity : 0;
+            }
             n.Icon.Opacity = iconOpacity;
             SetNavHalo(n, halo);
-            UpdateNavRing(n, motion == NavMotion.Ring ? a : 0);
+            UpdateNavRing(n, tab, motion == NavMotion.Ring ? a : 0);
         }
     }
 
@@ -304,19 +326,20 @@ public partial class MainWindow
 
     private static Color WithAlpha(Color c, byte a) => Color.FromArgb(a, c.R, c.G, c.B);
 
-    /// <summary>The focus timer's ring: how much of the session has gone by.</summary>
-    private void UpdateNavRing(NavIcon n, double a)
+    /// <summary>The focus timer's ring: how much of the session has gone by (on Relógio, of the timer ending first).</summary>
+    private void UpdateNavRing(NavIcon n, Tab tab, double a)
     {
         n.Ring.Opacity = a;
         n.Track.Opacity = a;
         if (a < 0.01) return;
-        var color = _focus.Mode == FocusMode.Break ? DoneGreen : FocusColor;
+        bool clock = tab == Tab.Clock;
+        var color = clock ? TimerColor : _focus.Mode == FocusMode.Break ? DoneGreen : FocusColor;
         if (n.Ring.Stroke is not SolidColorBrush sb || sb.Color != color)
         {
             n.Ring.Stroke = new SolidColorBrush(color);
             n.Track.Stroke = new SolidColorBrush(WithAlpha(color, 0x38));
         }
-        double p = Math.Clamp(_focus.Progress, 0, 1);
+        double p = Math.Clamp(clock ? 1 - (_clock.Soonest?.LeftShare ?? 1) : _focus.Progress, 0, 1);
         if (Math.Abs(p - n.RingDrawn) < 0.002) return;
         n.RingDrawn = p;
         const double c = 10.5, r = 9.2;

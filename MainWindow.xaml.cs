@@ -1,4 +1,5 @@
-using System;
+﻿using System;
+using System.Linq;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -16,8 +17,8 @@ namespace Notchy;
 public partial class MainWindow : Window
 {
     private enum IslandState { None, Idle, Compact, Volume, Expanded }
-    private enum Tab { Home, Claude, Music, Chat, Focus, Shelf, Downloads, News }
-    private enum CompactMode { None, Music, MusicPaused, Claude, ClaudeDone, ClaudeAttention, Focus, FocusDone, Battery, BatteryLow, Update, Transfer, TransferDone, TransferFailed, WhatsNew }
+    private enum Tab { Home, Claude, Music, Chat, Focus, Clock, Shelf, Downloads, News }
+    private enum CompactMode { None, Music, MusicPaused, Claude, ClaudeDone, ClaudeAttention, Focus, FocusDone, Battery, BatteryLow, Update, Transfer, TransferDone, TransferFailed, WhatsNew, Timer, TimerRing, Buds, BudsLow, BudsOff, Notice }
 
     private static readonly Color ClaudeColor = Color.FromRgb(0xE8, 0x82, 0x5F);
     private static readonly Color FocusColor = Color.FromRgb(0xB7, 0x9C, 0xFF);
@@ -99,6 +100,8 @@ public partial class MainWindow : Window
         VolumeSlider.ValueCommitted += SetMusicVolume;
 
         Island.SizeChanged += (_, _) => { UpdateIslandShape(); UpdatePodPosition(); };
+        InitFileSelect();
+        InitAlarmHint();
         InitExtras();
         InitChat();
         InitSpotify();
@@ -112,6 +115,13 @@ public partial class MainWindow : Window
         InitShelfFace();
         InitWhatsNew();
         InitFocusTab();
+        InitClockTab();
+        InitClockRing();
+        InitVolumeIsland();
+        InitSubPages();
+        InitBuds();
+        InitWeather();
+        InitNotices();
         UpdateOutputIcon();
         _menu = BuildMenu();
         BuildNav();
@@ -229,6 +239,8 @@ public partial class MainWindow : Window
         }
 
         _focus.Refresh();
+        if (_weather.PlaceChanged) _ = _weather.RefreshAsync(); // the weather's place was changed in the settings
+        if (_bell != null) UpdateBell();
         ApplyTexts();
         ApplyGlow();
         _lineIdx = int.MinValue;
@@ -253,7 +265,8 @@ public partial class MainWindow : Window
                 Tab.Shelf => Loc.T("tab.shelf"),
                 Tab.Downloads => Loc.T("tab.downloads"),
                 Tab.Chat => "Notchy",
-                _ => "Focus"
+                Tab.Clock => Loc.T("tab.clock"),
+                _ => Loc.T("tab.focus")
             };
         ShelfEmptyText.Text = Loc.T("shelf.empty");
         ShelfHint.Text = Loc.T("shelf.hint");
@@ -262,8 +275,12 @@ public partial class MainWindow : Window
         for (int i = 0; i < 4; i++) if (_stepLabels[i] != null) _stepLabels[i].Text = steps[i];
 
         HomeMusicLabel.Text = Loc.T("tab.music");
+        HomeFocusLabel.Text = Loc.T("tab.focus");
         ClaudeRecentTitle.Text = Loc.T("claude.recent").ToUpperInvariant();
         ApplyFocusTexts();
+        ApplyClockTexts();
+        ApplySubPageTexts();
+        UpdateSelChrome();
         SourceButton.ToolTip = Loc.T("music.openapp");
         MoreButton.ToolTip = Loc.T("menu.options");
         UpdateHeader();
@@ -289,9 +306,12 @@ public partial class MainWindow : Window
     {
         if (_introActive) return; // the opening animation hands over when it ends
         IslandState next;
+        bool ringing = _ring != null && !_hiddenForFullscreen; // a timer/alarm calling you takes the island
+        // a notification card stays a card under the mouse (so you can click it), instead of opening the island
+        ringing |= _noticeShown != null && _transient == CompactMode.Notice && DateTime.UtcNow < _transientUntil;
         if (_forcedState is { } forced) next = forced;
-        else if (_hoverActive || _clickOpened || _menu.IsOpen || _devicesMenuOpen?.IsOpen == true || _dragOver || ChatKeepsOpen) next = IslandState.Expanded;
-        else if (DateTime.UtcNow < _volumeOsdUntil || (_state == IslandState.Volume && (_volHover || _outMenuOpen?.IsOpen == true)))
+        else if (!ringing && _hoverActive || _clickOpened || _menu.IsOpen || _devicesMenuOpen?.IsOpen == true || _dragOver || _lassoing || ChatKeepsOpen) next = IslandState.Expanded;
+        else if (!ringing && DateTime.UtcNow < _volumeOsdUntil || !ringing && (_state == IslandState.Volume && (_volHover || _outMenuOpen?.IsOpen == true)))
             next = IslandState.Volume;
         else
         {
@@ -314,10 +334,10 @@ public partial class MainWindow : Window
 
     private Size TargetSize(IslandState state) => state switch
     {
-        IslandState.Idle => new Size(120, 30),
-        IslandState.Volume => new Size(300, 34),
-        IslandState.Expanded => new Size(480, TabHeight(_tab)),
-        _ => new Size(CompactWidth(_compactMode), IsTransferMode(_compactMode) ? TransferHeight : 34)
+        IslandState.Idle => new Size(IdleWidth, 30),
+        IslandState.Volume => LevelSize(),
+        IslandState.Expanded => new Size(480, _subOpen ? SubPageHeight : TabHeight(_tab)),
+        _ => new Size(CompactWidth(_compactMode), _compactMode == CompactMode.TimerRing ? RingHeight : _compactMode == CompactMode.Notice ? NoticeHeight : IsTransferMode(_compactMode) ? TransferHeight : 34)
     };
 
     private double TabHeight(Tab t) => 34 + 40 + 2 + t switch
@@ -328,6 +348,7 @@ public partial class MainWindow : Window
         Tab.Shelf => 118,
         Tab.Downloads => _dlTabHeight,
         Tab.Focus => 150,
+        Tab.Clock => 150,
         Tab.News => 186,
         Tab.Chat => ChatContentHeight,
         _ => 128
@@ -338,7 +359,11 @@ public partial class MainWindow : Window
         CompactMode.Music => _musicCompactWidth,
         CompactMode.MusicPaused => 300,
         CompactMode.Claude or CompactMode.ClaudeDone or CompactMode.ClaudeAttention => ClaudeIslandWidth,
-        CompactMode.Focus => 190,
+        CompactMode.Focus or CompactMode.Timer => 190,
+        CompactMode.TimerRing => RingWidth,
+        CompactMode.Buds or CompactMode.BudsLow => BudsWidth,
+        CompactMode.BudsOff => BudsOffWidth,
+        CompactMode.Notice => NoticeWidth,
         CompactMode.WhatsNew => WhatsNewWidth(),
         CompactMode.Transfer or CompactMode.TransferDone or CompactMode.TransferFailed => TransferWidth,
         _ => 320
@@ -349,16 +374,24 @@ public partial class MainWindow : Window
         var prev = _state;
         bool expanding = state == IslandState.Expanded;
         _state = state;
+#if DEBUG
         if (Environment.GetEnvironmentVariable("NOTCHY_DEBUG") == "1")
             System.IO.File.AppendAllText(System.IO.Path.Combine(AppSettings.Folder, "debug.log"), $"{DateTime.Now:HH:mm:ss.fff} {prev} -> {state}" + Environment.NewLine);
+#endif
 
+        if (prev == IslandState.Expanded && !expanding) ResetFileSelection();
         if (expanding && prev != IslandState.Expanded)
         {
             Tab target;
             if (_whatsNewPending && !_dlOpenRequest && !_podOpenRequest) target = Tab.News; // the update's news first
-            else if (S.TransferProgress && (_dlOpenRequest || (_compactMode == CompactMode.Transfer && ActiveTransfer?.Kind == TransferKind.Download)))
+            // a click on the download or Claude bubble opens that tab
+            else if (S.TransferProgress && _dlOpenRequest) target = Tab.Downloads;
+            else if (_podOpenRequest) target = Tab.Claude;
+            // something playing: open on the player (downloads and Claude have their own bubbles meanwhile)
+            else if (_media.HasSession && _media.IsPlaying) target = Tab.Music;
+            else if (S.TransferProgress && _compactMode == CompactMode.Transfer && ActiveTransfer?.Kind == TransferKind.Download)
                 target = Tab.Downloads;
-            else if (_podOpenRequest || _claude.Active?.NeedsAttention == true) target = Tab.Claude;
+            else if (_claude.Active?.NeedsAttention == true) target = Tab.Claude;
             else if (_userTab is Tab ut && (ut != Tab.Shelf || S.ShelfEnabled)) target = ut;
             else target = SmartTab();
             _podOpenRequest = false;
@@ -375,11 +408,20 @@ public partial class MainWindow : Window
         AnimateIslandSize(TargetSize(state), expanding || prev == IslandState.Expanded);
 
         Fade(IdlePanel, state == IslandState.Idle);
-        Fade(CompactPanel, state == IslandState.Compact && !IsTransferMode(_compactMode) && !IsClaudeMode(_compactMode) && _compactMode != CompactMode.WhatsNew);
+        Fade(CompactPanel, state == IslandState.Compact && !IsTransferMode(_compactMode) && !IsClaudeMode(_compactMode) && _compactMode is not (CompactMode.WhatsNew or CompactMode.TimerRing) && !IsBudsMode(_compactMode) && _compactMode != CompactMode.Notice);
+        Fade(_budsPanel, state == IslandState.Compact && IsBudsMode(_compactMode));
+        Fade(_noticePanel, state == IslandState.Compact && _compactMode == CompactMode.Notice);
+        Fade(_ringPanel, state == IslandState.Compact && _compactMode == CompactMode.TimerRing);
         Fade(WhatsNewPanel, state == IslandState.Compact && _compactMode == CompactMode.WhatsNew);
         Fade(ClaudePanel, state == IslandState.Compact && IsClaudeMode(_compactMode));
         Fade(TransferPanel, state == IslandState.Compact && IsTransferMode(_compactMode));
         Fade(VolumePanel, state == IslandState.Volume);
+        if (state != IslandState.Volume) SetDeviceListOpen(false);
+        if (!expanding)
+        {
+            CloseSubPage(animate: false);
+            SetMoreOpen(false);
+        }
         Fade(ExpandedPanel, expanding);
         AccentGlow.BeginAnimation(OpacityProperty,
             new DoubleAnimation(expanding ? 1 : 0, TimeSpan.FromMilliseconds(Dur(expanding ? 420 : 160))));
@@ -415,6 +457,14 @@ public partial class MainWindow : Window
             CompactPanel.Width = size.Width;
             TransferPanel.Width = size.Width;
             ClaudePanel.Width = size.Width;
+            _ringPanel.Width = size.Width;
+            _budsPanel.Width = size.Width;
+            _noticePanel.Width = size.Width;
+        }
+        if (_state == IslandState.Volume)
+        {
+            VolumePanel.Width = size.Width;
+            VolumePanel.Height = size.Height;
         }
     }
 
@@ -491,6 +541,11 @@ public partial class MainWindow : Window
     {
         BeginFrame();
         _focus.Tick();
+        UpdateClockFrame();
+        UpdateClockRingFrame();
+        UpdateVolumeIsland();
+        UpdateBudsFrame();
+        UpdateNoticesFrame();
         var pos = _media.Position;
 
         if (_state == IslandState.Expanded)
@@ -501,7 +556,7 @@ public partial class MainWindow : Window
                     var dur = _media.Duration;
                     ProgressSlider.Value = dur > TimeSpan.Zero ? pos.TotalMilliseconds / dur.TotalMilliseconds : 0;
                     ElapsedText.Text = Format(pos);
-                    RemainingText.Text = dur > TimeSpan.Zero ? "-" + Format(dur - pos) : "";
+                    RemainingText.Text = dur > TimeSpan.Zero ? Format(dur) : ""; // the song's length
                     break;
                 case Tab.Claude when _slowTick && _tick % 6 == 0:
                     UpdateClaudeTimer();
@@ -510,6 +565,7 @@ public partial class MainWindow : Window
             if (_slowTick && _tick % 6 == 0)
             {
                 UpdateFocusUi();
+                if (_tab == Tab.Clock) UpdateClockUi();
                 if (_tab == Tab.Home) UpdateHomeLive();
             }
         }
@@ -609,6 +665,7 @@ public partial class MainWindow : Window
         AddNav(Tab.Music, "\uE8D6");
         AddNav(Tab.Chat, ((char)0xE8BD).ToString());
         AddNav(Tab.Focus, "\uE916");
+        AddNav(Tab.Clock, "\uE121");
         AddNav(Tab.Shelf, "\uE7B8");
         AddNav(Tab.Downloads, "\uE896");
     }
@@ -650,6 +707,7 @@ public partial class MainWindow : Window
         var c = _claude.Active;
         if (c != null && (c.NeedsAttention || c.IsWorking)) return Tab.Claude;
         if (_focus.Running) return Tab.Focus;
+        if (_clock.AnyRunning) return Tab.Clock;
         if (_media.HasSession && _media.IsPlaying) return Tab.Music;
         return Tab.Home;
     }
@@ -663,13 +721,18 @@ public partial class MainWindow : Window
         Tab.Shelf => ShelfTab,
         Tab.Downloads => DownloadsTab,
         Tab.News => NewsTab,
+        Tab.Clock => ClockTab,
         _ => FocusTab
     };
 
     private void SelectTab(Tab tab, bool animate)
     {
+        CloseSubPage(animate: false);
+        SetMoreOpen(false);
         var old = _tab;
+        if (old != tab) ResetFileSelection();
         _tab = tab;
+        UpdateSelChrome();
         if (old != tab && _state == IslandState.Expanded) RememberKeepOpenArea();
         if (animate && old != tab && _state == IslandState.Expanded)
         {
@@ -718,6 +781,20 @@ public partial class MainWindow : Window
         ApplyGlow();
         if (tab == Tab.Claude) RefreshClaudeTab();
         if (tab == Tab.Focus) UpdateFocusUi();
+        if (tab == Tab.Clock)
+        {
+            // a timer under way: open on it; otherwise on the page you used last
+            if (old != Tab.Clock && _clock.AnyRunning && _clockOnAlarms)
+            {
+                _clockOnAlarms = false;
+                PlaceClockPages(animate: false);
+            }
+            if (_clockSel == null && old != Tab.Clock) _clockSel = _clock.Soonest;
+            _clockSideKey = _alarmCardsKey = "";
+            UpdateClockUi();
+            if (_clockOnAlarms && old != Tab.Clock) ScrollToNextAlarm(instant: true);
+        }
+        else if (old == Tab.Clock) CloseAlarmEditor();
         if (tab == Tab.Home) UpdateHomeLive();
         if (tab == Tab.Music) _ = PollSpotifyAsync();
         if (tab == Tab.Downloads) UpdateDownloadsTab(force: true);
@@ -759,6 +836,7 @@ public partial class MainWindow : Window
         Tab.Claude => ClaudeColor,
         Tab.Music => Bright(_musicAccent),
         Tab.Focus => FocusColor,
+        Tab.Clock => TimerColor,
         Tab.Shelf => ShelfColor,
         Tab.Downloads => DoneGreen,
         Tab.Chat => ChatColor,
@@ -772,16 +850,27 @@ public partial class MainWindow : Window
         {
             Tab.Claude => ("Claude", " Code"),
             Tab.Music => ("Music", " Player"),
-            Tab.Focus => ("Focus", " " + Loc.T("focus.mode")),
+            Tab.Focus => (Loc.T("focus.head.a"), Loc.T("focus.head.b")),
             Tab.Shelf => ("File", " Shelf"),
             Tab.Downloads => ("Download", " Center"),
             Tab.Chat => ("Notchy", " Chat"),
             Tab.News => (Loc.T("news.title"), " " + WhatsNew.Version),
             _ => ("Notchy", "")
         };
+        // Relógio: "Timer · Alarmes" in place of the title (MainWindow.Clock.cs)
+        bool clock = _tab == Tab.Clock;
+        ((FrameworkElement)HeaderA.Parent).Visibility = clock ? Visibility.Collapsed : Visibility.Visible;
+        _clockHeader.Visibility = clock ? Visibility.Visible : Visibility.Collapsed;
+        if (clock) UpdateClockHeader();
         HeaderA.Text = a;
         HeaderB.Text = HeaderBGlow.Text = b;
         HeaderB.Foreground = HeaderBGlow.Foreground = new SolidColorBrush(TabColor(_tab));
+        if (_subOpen)
+        {
+            // a sub-page has its own "‹ title"
+            ((FrameworkElement)HeaderA.Parent).Visibility = Visibility.Collapsed;
+            _clockHeader.Visibility = Visibility.Collapsed;
+        }
     }
 
     private void ApplyGlow()
@@ -790,6 +879,7 @@ public partial class MainWindow : Window
         {
             Tab.Claude => Color.FromRgb(0x6B, 0x33, 0x22),
             Tab.Focus => Color.FromRgb(0x3E, 0x2A, 0x86),
+            Tab.Clock => Color.FromRgb(0x1C, 0x44, 0x66),
             Tab.Shelf => Color.FromRgb(0x1C, 0x4A, 0x40),
             Tab.Downloads => Color.FromRgb(0x1C, 0x4A, 0x2A),
             Tab.Chat => Color.FromRgb(0x4A, 0x2E, 0x12),
@@ -829,6 +919,7 @@ public partial class MainWindow : Window
 
     private CompactMode DecideCompact()
     {
+        if (_ring != null) return CompactMode.TimerRing;
         if (_transient != CompactMode.None)
         {
             if (DateTime.UtcNow < _transientUntil) return _transient;
@@ -852,6 +943,7 @@ public partial class MainWindow : Window
         if (hasMusic && _media.IsPlaying) return CompactMode.Music;
         if (c is { IsWorking: true }) return CompactMode.Claude;
         if (_focus.Running) return CompactMode.Focus;
+        if (_clock.AnyRunning) return CompactMode.Timer;
         return CompactMode.None; // paused music => small pill with glowing eyes
     }
 
@@ -869,7 +961,7 @@ public partial class MainWindow : Window
     {
         var m = _compactMode;
         // Claude / download alone have their own panels: leave the generic one as it was while it fades out
-        if (IsClaudeMode(m) || IsTransferMode(m) || m == CompactMode.WhatsNew)
+        if (IsClaudeMode(m) || IsTransferMode(m) || m is CompactMode.WhatsNew or CompactMode.TimerRing or CompactMode.Notice || IsBudsMode(m))
         {
             if (IsTransferMode(m)) UpdateTransferPanel();
             ShowCompactFace(false);
@@ -884,7 +976,7 @@ public partial class MainWindow : Window
         CompactAlertDot.Visibility = m == CompactMode.ClaudeAttention || (c?.NeedsAttention == true && S.ClaudeShowInCompact && !(art && S.ClaudePod))
             ? Visibility.Visible : Visibility.Collapsed;
 
-        CompactFocusEyes.Visibility = m == CompactMode.Focus ? Visibility.Visible : Visibility.Collapsed;
+        CompactFocusEyes.Visibility = m is CompactMode.Focus or CompactMode.Timer ? Visibility.Visible : Visibility.Collapsed;
         CompactIcon.Visibility = m is CompactMode.ClaudeDone or CompactMode.FocusDone or CompactMode.Battery or CompactMode.BatteryLow or CompactMode.Update
             or CompactMode.Transfer or CompactMode.TransferDone
             ? Visibility.Visible : Visibility.Collapsed;
@@ -929,6 +1021,7 @@ public partial class MainWindow : Window
 
         UpdateCompactText();
         UpdateCompactRight();
+        UpdateAlarmHint(force: true);
         FitCompactText();
         if (IsTransferMode(m)) UpdateTransferPanel();
         ApplyGlowEffects();
@@ -956,6 +1049,7 @@ public partial class MainWindow : Window
         {
             CompactMode.Claude when c != null => FormatTimer(c.Elapsed),
             CompactMode.Focus => FormatTimer(_focus.Remaining),
+            CompactMode.Timer => FormatTimer(_clock.Soonest?.Remaining ?? TimeSpan.Zero),
             CompactMode.ClaudeDone or CompactMode.FocusDone or CompactMode.ClaudeAttention or CompactMode.Battery or CompactMode.BatteryLow or CompactMode.Update
                 or CompactMode.TransferDone => _transientRight,
             CompactMode.Transfer when ActiveTransfer is { } t => (t.Progress is double tp ? $"{Math.Floor(tp * 100)}%" : ""),
@@ -987,7 +1081,7 @@ public partial class MainWindow : Window
     {
         double textW = MeasureText(CompactText, CompactText.Text);
         // everything around the text in the music layout: margins, cover art, visualizer
-        const double musicChrome = 16 + 22 + 20 + 28 + 14 + 10;
+        double musicChrome = 16 + 22 + 20 + 28 + 14 + 10 + CompactAlarmExtra;
 
         if (_compactMode == CompactMode.Music)
         {
@@ -1572,7 +1666,7 @@ public partial class MainWindow : Window
         ShowTransient(CompactMode.FocusDone,
             finished == FocusMode.Focus ? Loc.T("focus.done") : Loc.T("focus.breakdone"), "", 6);
         if (S.ClaudeWindowsNotifications)
-            App.Notify("Focus", finished == FocusMode.Focus ? Loc.T("focus.done") : Loc.T("focus.breakdone"));
+            App.Notify(Loc.T("tab.focus"), finished == FocusMode.Focus ? Loc.T("focus.done") : Loc.T("focus.breakdone"));
         UpdateFocusUi();
     }
 
@@ -1635,18 +1729,16 @@ public partial class MainWindow : Window
 
         bool changed = _lastVol >= 0 && (Math.Abs(vol - _lastVol) > 0.004 || mute != _lastMute);
         if (changed && S.VolumeOsd && !VolumeSlider.IsDragging && _state != IslandState.Expanded)
+        {
+            if (_levelKind != LevelKind.Volume) SetDeviceListOpen(false);
+            ShowVolumeLevel(vol, mute);
             _volumeOsdUntil = DateTime.UtcNow.AddSeconds(1.6);
+            OsdHider.HideWindowsOsd();
+        }
 
         _lastVol = vol;
         _lastMute = mute;
-
-        double shown = mute ? 0 : vol;
-        if (!VolOsdBar.IsDragging)
-        {
-            VolOsdBar.Value = shown;
-            VolOsdText.Text = mute ? "0" : Math.Round(vol * 100).ToString();
-            VolOsdIcon.Text = OutputGlyph(vol, mute);
-        }
+        if (_levelKind == LevelKind.Volume && !_levelDragging) ShowVolumeLevel(vol, mute);
 
         // Music tab: the slider controls only the playing app (Spotify...), like the Volume Mixer.
         // With the Spotify integration, the slider shows Spotify's own volume instead (PollSpotifyAsync).
@@ -1750,15 +1842,16 @@ public partial class MainWindow : Window
 
     private void Island_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
-        if (_state == IslandState.Expanded) return;
-        if (_state == IslandState.Volume)
+        if (_ring != null)
         {
-            // the speaker and the bar are controls; anywhere else on the pop-up opens the island
-            if (e.OriginalSource is DependencyObject src && (IsInside(src, VolOsdIconBtn) || IsInside(src, VolOsdBar) || VolOsdBar.IsDragging)) return;
-            _volHover = false;
-            _volumeOsdUntil = DateTime.MinValue;
-            _hoverRequested = true;
+            // a click on the ringing island (not on its buttons): stop it and open the Relógio tab
+            SoundService.Play(Sfx.Click);
+            StopRing();
+            _userTab = Tab.Clock;
         }
+        if (_state == IslandState.Expanded) return;
+        // the volume pop-up is all controls (the level, the device button, the output list)
+        if (_state == IslandState.Volume) return;
         if (S.Open == OpenMode.Click)
         {
             _clickOpened = true;
@@ -1790,7 +1883,7 @@ public partial class MainWindow : Window
     private async void Prev_Click(object sender, RoutedEventArgs e) => await _media.PreviousAsync();
     private void Source_Click(object sender, RoutedEventArgs e)
     {
-        if (SpotifyActive) _ = ShowDeviceMenuAsync();
+        if (SpotifyActive) _ = OpenSpotifyDevicesAsync();
         else _media.ActivateSourceApp();
     }
     private void Mute_Click(object sender, RoutedEventArgs e)
@@ -1803,12 +1896,8 @@ public partial class MainWindow : Window
 
     private void MoreButton_Click(object sender, RoutedEventArgs e)
     {
-        foreach (var item in _menu.Items)
-            if (item is MenuItem mi && mi.Tag is string key) mi.Header = Loc.T(key);
-        _menu.PlacementTarget = MoreButton;
-        _menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
-        _menu.HorizontalOffset = -130;
-        _menu.IsOpen = true;
+        SoundService.Play(Sfx.Click);
+        SetMoreOpen(!_moreOpen); // Configurações / Sair as pills in the header
     }
 
     private ContextMenu BuildMenu()
@@ -1877,6 +1966,7 @@ public partial class MainWindow : Window
 
     private IslandState? _forcedState;
 
+#if DEBUG
     public async Task SnapshotAsync(string folder)
     {
         System.IO.Directory.CreateDirectory(folder);
@@ -1920,6 +2010,276 @@ public partial class MainWindow : Window
                 $"{t}: tab={_tab} wave={_headerWave.Visibility} faceColor={_face.Color} state={_state}" + Environment.NewLine);
         }
 
+        // Relógio: a timer in the ring with others running, the alarms, the editor, the small island and the ring
+        if (Environment.GetEnvironmentVariable("NOTCHY_CLOCKTEST") == "1")
+        {
+            _clockSel = _clock.Start(8 * 60 - 18, "🍝 Macarrão");
+            _clock.Start(4 * 60, "☕ Café");
+            _clock.Start(45 * 60, "🧺 Roupa");
+            _clock.SaveAlarm(new Alarm { Hour = 7, Minute = 30, Days = 0b0011111, Name = "Acordar" });
+            _clock.SaveAlarm(new Alarm { Hour = 14, Minute = 0, Days = 0, Name = "Remédio", Enabled = false });
+            _clock.SaveAlarm(new Alarm { Hour = 22, Minute = 15, Days = 0b1111111, Name = "Dormir" });
+            _clock.SaveAlarm(new Alarm { Hour = 3, Minute = 0, Days = 0b1111111 });
+            _clock.SaveAlarm(new Alarm { Hour = 18, Minute = 30, Days = 0b0011111, Name = "Treino" });
+            _clockOnAlarms = false;
+            PlaceClockPages(animate: false);
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            SelectTab(Tab.Clock, false);
+            await Shot("8_clock_timer");
+            ShowClockPage(alarms: true);
+            await Shot("8_clock_alarms");
+            SetAlarmHover(true);
+            _alarmTarget = AlarmMaxOffset;
+            await Shot("8_clock_alarms_end");
+            _alarmTarget = 0;
+            SetAlarmHover(false);
+            DeleteAlarmWithUndo(_clock.Alarms[1], null);
+            await Shot("8_clock_undo");
+            HideUndo();
+            OpenAlarmEditor(null);
+            await Shot("8_clock_editor");
+            CloseAlarmEditor();
+            ShowClockPage(alarms: false);
+            foreach (var t in System.Linq.Enumerable.ToList(_clock.Timers)) if (t != _clockSel) _clock.Remove(t);
+            await Shot("8_clock_single");
+            _forcedState = null;
+            _hoverActive = _clickOpened = false;
+            bool claudeShown = S.ClaudeShowInCompact;
+            S.ClaudeShowInCompact = false; // the demo Claude task would take the bubble (not saved)
+            UpdateState();
+            await Shot("8_clock_compact");
+            await Task.Delay(1500);
+            await Shot("8_clock_compact2");
+            S.ClaudeShowInCompact = claudeShown;
+            OnClockTimerFinished(_clockSel!);
+            await Task.Delay(600);
+            await Shot("8_clock_ring");
+            StopRing();
+            foreach (var t in System.Linq.Enumerable.ToList(_clock.Timers)) _clock.Remove(t);
+            foreach (var a in System.Linq.Enumerable.ToList(_clock.Alarms)) _clock.RemoveAlarm(a);
+        }
+
+        // Bluetooth earbuds: connected, low battery, disconnected (simulated), and what the real watcher found
+        if (Environment.GetEnvironmentVariable("NOTCHY_BUDSTEST") == "1")
+        {
+            _forcedState = null;
+            _hoverActive = _clickOpened = false;
+            var fake = new BudsInfo("test", "Buds3 de Pedro", true, 77, false);
+            ShowBuds(CompactMode.Buds, fake, 6);
+            await Task.Delay(400);
+            await Shot("11_buds");
+            ShowBuds(CompactMode.BudsLow, fake with { Battery = 12 }, 6);
+            await Task.Delay(400);
+            await Shot("11_buds_low");
+            ShowBuds(CompactMode.BudsOff, fake with { Connected = false }, 6);
+            await Task.Delay(400);
+            await Shot("11_buds_off");
+            _transient = CompactMode.None;
+            System.IO.File.WriteAllLines(System.IO.Path.Combine(folder, "buds.txt"),
+                System.Linq.Enumerable.Select(_bt.Known, d => $"{d.Name} | conectado={d.Connected} | bateria={d.Battery} | caixa={d.Speaker}"));
+        }
+
+        if (Environment.GetEnvironmentVariable("NOTCHY_ACTTEST") == "1")
+        {
+            var ids = new[] { "5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App", "com.squirrel.Discord.Discord", "Telegram.TelegramDesktop" };
+            System.IO.File.WriteAllLines(System.IO.Path.Combine(folder, "activators.txt"),
+                System.Linq.Enumerable.Select(ids, id => $"{id} -> {NotificationOpener.ActivatorFor(id)?.ToString() ?? "nenhum"}"));
+        }
+
+        // notifications: the card coming down (with the sender's photo from a real WhatsApp notification) and the history
+        if (Environment.GetEnvironmentVariable("NOTCHY_NOTIFTEST") == "1")
+        {
+            for (int i = 0; i < 20 && _notices.History.Count == 0; i++) await Task.Delay(300);
+            var wa = System.Linq.Enumerable.FirstOrDefault(_notices.History, n => n.App.Contains("WhatsApp"));
+            var photo = wa == null ? null : await NotificationService.SenderPhotoAsync(wa.Id, wa.AppId, wa.Title);
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "notif.txt"),
+                $"history={_notices.History.Count} apps={string.Join(",", System.Linq.Enumerable.Distinct(System.Linq.Enumerable.Select(_notices.History, n => n.App)))} whatsapp={(wa != null)} photo={(photo != null)}");
+            _forcedState = null;
+            _hoverActive = _clickOpened = false;
+            var demo = new Notice(999999, "WhatsApp", wa?.AppId ?? "", "Mãe", "Já chegou em casa? Me avisa quando chegar ❤️", DateTime.Now, photo ?? wa?.Avatar, photo != null);
+            OnNotice(demo);
+            await Task.Delay(500);
+            await Shot("13_notice");
+            EndNotice();
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            SelectTab(Tab.Home, false);
+            await Shot("13_bell");
+            OpenSubPage(Loc.T("notif.title"), NoticesPage);
+            await Shot("13_history");
+            CloseSubPage(animate: false);
+        }
+
+        // weather: the home card and the "‹ Clima" sub-page (real data: Windows location + Open-Meteo)
+        if (Environment.GetEnvironmentVariable("NOTCHY_WEATHERTEST") == "1")
+        {
+            await _weather.RefreshAsync(force: true);
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            SelectTab(Tab.Home, false);
+            await Shot("12_home");
+            OpenSubPage(Loc.T("weather.title"), WeatherPage);
+            await Shot("12_weather");
+            await Shot("12_weather_place");
+            OpenCityPage();
+            _cityBox!.Text = "Alagoinha";
+            for (int i = 0; i < 40 && (_cityResults?.Children.Count ?? 0) < 2; i++) await Task.Delay(500);
+            await Task.Delay(400);
+            await Shot("12_weather_city");
+            (_cityResults?.Parent as ScrollViewer)?.ScrollToEnd();
+            await Task.Delay(100);
+            await Shot("12_weather_city_scrolled");
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "city.txt"),
+                $"results={_cityResults?.Children.Count} box='{_cityBox?.Text}' sub={_subHeight} editing={_cityEditing} timer={_citySearch?.IsEnabled}");
+            SubPageBack();
+            await Shot("12_weather_back");
+            CloseSubPage(animate: false);
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "weather.txt"),
+                $"problem={_weather.Problem} city={_weather.Current?.City} temp={_weather.Current?.Temp} sky={_weather.Current?.Sky}");
+        }
+
+        // marking several files (in memory only: nothing is saved to the shelf or the history)
+        if (Environment.GetEnvironmentVariable("NOTCHY_SELTEST") == "1")
+        {
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "notchy-seltest");
+            System.IO.Directory.CreateDirectory(dir);
+            var names = new[] { "aula.mp4", "musica.mp3", "foto.png", "contrato.pdf", "projeto.zip", "setup.exe", "dados.bin" };
+            var fake = names.Select(n => System.IO.Path.Combine(dir, n)).ToList();
+            foreach (var f in fake) System.IO.File.WriteAllText(f, "x");
+            _shelf.Clear();
+            _shelf.AddRange(fake);
+            SelectTab(Tab.Shelf, false);
+            RenderShelf();
+            await Shot("11_shelf");
+            _shelfSel.Marked.Add(fake[0]);
+            _shelfSel.Marked.Add(fake[2]);
+            _shelfSel.Sync();
+            await Shot("11_shelf_marked");
+            _shelfSel.SetMode(true);
+            _shelfSel.Marked.Add(fake[1]);
+            _shelfSel.Sync();
+            await Shot("11_shelf_mode");
+            _shelfSel.Reset();
+
+            SelectTab(Tab.Downloads, false);
+            BuildDownloadsTab(null, new List<DownloadFile>(), fake.Select(f => new DownloadEntry(f, 1234567, DateTime.UtcNow)).ToList());
+            UpdateSelChrome();
+            await Shot("11_dl");
+            _dlSel.Marked.Add(fake[0]);
+            _dlSel.Marked.Add(fake[2]);
+            _dlSel.Sync();
+            await Shot("11_dl_marked");
+            _dlSel.SetMode(true);
+            _dlSel.Marked.Add(fake[1]);
+            _dlSel.Sync();
+            await Shot("11_dl_mode");
+            _dlSel.Reset();
+            _shelf.Clear();
+            SelectTab(Tab.Focus, false);
+            await Shot("11_focus");
+            SelectTab(Tab.Home, false);
+            await Shot("11_home");
+
+            // the pictures of the news
+            SelectTab(Tab.News, false);
+            _newsManual = true;
+            for (int i = 0; i < WhatsNew.Highlights.Length; i++)
+            {
+                ShowNewsCard(i, animate: false);
+                await Task.Delay(1000);
+                await Shot("13_news" + i);
+            }
+            SelectTab(Tab.Home, false);
+
+            // the bell on the closed island
+            _forcedState = IslandState.Idle;
+            UpdateState();
+            _alarmHintForced = (true, null);
+            UpdateAlarmHint();
+            await Shot("12_idle_bell");
+            _alarmHintForced = (true, FormatClock(DateTime.Now.AddMinutes(8)));
+            UpdateAlarmHint();
+            await Shot("12_idle_soon");
+            _forcedState = IslandState.Compact;
+            _compactMode = CompactMode.Music;
+            ConfigureCompact();
+            UpdateState();
+            _alarmHintForced = (true, null);
+            UpdateAlarmHint();
+            await Shot("12_music_bell");
+            _alarmHintForced = (true, FormatClock(DateTime.Now.AddMinutes(8)));
+            UpdateAlarmHint();
+            await Shot("12_music_soon");
+            _alarmHintForced = null;
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+        }
+
+        // menus inside the open island: the output sub-page and the ••• pills
+        if (Environment.GetEnvironmentVariable("NOTCHY_MENUTEST") == "1")
+        {
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            SelectTab(Tab.Music, false);
+            await Shot("10_music");
+            OpenOutputSubPage();
+            await Shot("10_output_sub");
+            CloseSubPage(animate: true);
+            await Shot("10_back");
+            SetMoreOpen(true);
+            await Shot("10_more");
+            SetMoreOpen(false);
+            await Task.Delay(500);
+            await Shot("10_more_closed");
+            await OpenQueueAsync();
+            await Shot("10_queue");
+            CloseQueue();
+
+            // the tray menu, drawn on its own
+            TrayMenu.ShowAtCursor();
+            await Task.Delay(700);
+            foreach (Window w in Application.Current.Windows)
+            {
+                if (w is not TrayMenu tm || tm.Content is not FrameworkElement tc) continue;
+                var rtb = new System.Windows.Media.Imaging.RenderTargetBitmap((int)tc.ActualWidth * 2, (int)tc.ActualHeight * 2, 192, 192, PixelFormats.Pbgra32);
+                var dv = new DrawingVisual();
+                using (var dc = dv.RenderOpen())
+                    dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(0x20, 0x20, 0x24)), null, new Rect(0, 0, tc.ActualWidth, tc.ActualHeight));
+                rtb.Render(dv);
+                rtb.Render(tc);
+                var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(rtb));
+                using (var fs = System.IO.File.Create(System.IO.Path.Combine(folder, "10_tray.png"))) enc.Save(fs);
+                tm.Close();
+            }
+        }
+
+        // volume / brightness: the filling island, the device button, the output list, mute and brightness
+        if (Environment.GetEnvironmentVariable("NOTCHY_VOLTEST") == "1")
+        {
+            _forcedState = IslandState.Volume;
+            ShowVolumeLevel(0.62, false);
+            UpdateState();
+            await Shot("9_vol");
+            _levelHover = true;
+            await Shot("9_vol_hover");
+            SetDeviceListOpen(true);
+            await Shot("9_vol_list");
+            SetDeviceListOpen(false);
+            _levelHover = false;
+            ShowVolumeLevel(0.62, true);
+            await Shot("9_vol_mute");
+            _levelKind = LevelKind.Brightness;
+            _levelTarget = 0.85;
+            _levelMuted = false;
+            await Shot("9_bright");
+            _levelKind = LevelKind.Volume;
+            _forcedState = null;
+        }
+
         _claude.Inject("""{"hook_event_name":"Notification","session_id":"demo","message":"Claude needs your permission to use Bash"}""");
         _forcedState = null;
         UpdateState();
@@ -1949,7 +2309,7 @@ public partial class MainWindow : Window
 
         var sw = new SettingsWindow { WindowStartupLocation = WindowStartupLocation.Manual, Left = 100, Top = 100 };
         sw.Show();
-        foreach (var page in new[] { "general", "island", "sounds", "claude", "spotify" })
+        foreach (var page in new[] { "general", "island", "sounds", "claude", "spotify", "focus" })
         {
             sw.ShowPage(page);
             await Task.Delay(700);
@@ -1969,4 +2329,5 @@ public partial class MainWindow : Window
 
         Application.Current.Shutdown();
     }
+#endif
 }

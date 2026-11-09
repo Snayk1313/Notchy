@@ -48,6 +48,13 @@ internal static class Native
     public struct POINT { public int X, Y; }
 
     [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
+    [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int vk);
+
+    /// <summary>True while the key is held, even though the island never has the keyboard focus.</summary>
+    public static bool IsKeyDown(int vk) => (GetAsyncKeyState(vk) & 0x8000) != 0;
+
+    /// <summary>Moves a window (device pixels), keeping its size and staying on top.</summary>
+    public static void MoveTopmost(IntPtr hwnd, int x, int y) => SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
 
     // ---------------------------------------------------------------- shell icons
 
@@ -124,6 +131,8 @@ internal static class Native
     [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int cmd);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
+    /// <summary>Lets another process bring its window to the front (-1 = any); only works while we have the input.</summary>
+    [DllImport("user32.dll")] public static extern bool AllowSetForegroundWindow(int processId);
 
     public static void MakeOverlayWindow(IntPtr hwnd)
     {
@@ -159,6 +168,34 @@ internal static class Native
         return r.Left <= mi.rcMonitor.Left && r.Top <= mi.rcMonitor.Top &&
                r.Right >= mi.rcMonitor.Right && r.Bottom >= mi.rcMonitor.Bottom;
     }
+
+    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd, StringBuilder sb, int max);
+    [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr hWnd, uint cmd);
+
+    /// <summary>A visible top-level window whose title has the app's name ("Amigos - Discord", "WhatsApp"…).</summary>
+    public static IntPtr FindAppWindow(string appName)
+    {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows((h, _) =>
+        {
+            if (!IsWindowVisible(h) || GetWindow(h, 4 /* GW_OWNER */) != IntPtr.Zero) return true;
+            var sb = new StringBuilder(256);
+            GetWindowText(h, sb, sb.Capacity);
+            string title = sb.ToString();
+            if (title.EndsWith(appName, StringComparison.OrdinalIgnoreCase) || title.StartsWith(appName, StringComparison.OrdinalIgnoreCase))
+            {
+                found = h;
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    public static bool IsForeground(IntPtr hwnd) => GetForegroundWindow() == hwnd;
 
     public static void FocusWindow(IntPtr hwnd)
     {

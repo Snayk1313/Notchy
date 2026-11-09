@@ -31,13 +31,13 @@ public partial class MainWindow
 
     /// <summary>The focus wants the bubble: it's running and something else has the island.</summary>
     private bool FocusPodWanted() =>
-        _focus.Running && !_hiddenForFullscreen && !_introActive && _state == IslandState.Compact &&
+        (_focus.Running || _clock.AnyRunning) && _ring == null && !_hiddenForFullscreen && !_introActive && _state == IslandState.Compact &&
         (_compactMode == CompactMode.Music || IsClaudeMode(_compactMode) || IsTransferMode(_compactMode));
 
     private (Color track, Color arc, Color eye) PodColors(PodKind kind)
     {
         if (kind == PodKind.Claude) return (PodClaudeTrack, PodClaudeArc, PodClaudeEye);
-        var c = FocusModeColor;
+        var c = PodIsTimer ? TimerColor : FocusModeColor; // the bubble is the focus', or a timer's when no focus runs
         return (c, Color.FromRgb((byte)((c.R + 255) / 2), (byte)((c.G + 255) / 2), (byte)((c.B + 255) / 2)), c);
     }
 
@@ -129,7 +129,7 @@ public partial class MainWindow
         if (!(_podShown || _podMorphing) || _podKind != PodKind.Focus || _podRig == null) return;
         PaintPod(PodColors(PodKind.Focus)); // follows focus ↔ break
         double t = AnimNow;
-        bool focusMode = _focus.Mode == FocusMode.Focus;
+        bool focusMode = _focus.Mode == FocusMode.Focus || PodIsTimer;
         bool blink = (t + 2.1) % 4.6 < 0.14;
         var pose = EyePose.Rest;
         pose.X = focusMode ? Math.Sin(t * 0.7) * 1.6 : 0;

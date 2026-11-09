@@ -228,7 +228,7 @@ public partial class MainWindow
 
     private double _dlPodEyesU = 1; // 1 = the download bubble shows eyes, 0 = the % (Claude has the eyes)
     // (also true while the focus has the bubble or the island: it has eyes too, so the download shows its %)
-    private bool ClaudeOnScreen => _podShown || _podMorphing || (_state == IslandState.Compact && (IsClaudeMode(_compactMode) || _compactMode == CompactMode.Focus));
+    private bool ClaudeOnScreen => _podShown || _podMorphing || (_state == IslandState.Compact && (IsClaudeMode(_compactMode) || _compactMode is CompactMode.Focus or CompactMode.Timer or CompactMode.TimerRing));
     private readonly RoundOutline _podShape = new(), _dlPodShape = new();
     private double _podShapeW = -1, _podShapeU = -1, _dlShapeW = -1, _dlShapeU = -1;
 
@@ -264,8 +264,9 @@ public partial class MainWindow
         if (PodArc.Visibility != Visibility.Visible) return;
         if (_podKind == PodKind.Focus)
         {
-            // the focus fills the outline from the top, like its light on the island
-            PodArc.Data = _podShape.Half(0, Math.Max(1.5, _podShape.Visible * Math.Clamp(_focus.Progress, 0, 1)));
+            // the focus fills the outline from the top, like its light on the island (a timer's light empties)
+            double share = PodIsTimer ? _clock.Soonest?.LeftShare ?? 0 : _focus.Progress;
+            PodArc.Data = _podShape.Half(0, Math.Max(1.5, _podShape.Visible * Math.Clamp(share, 0, 1)));
             return;
         }
         double loop = 2 * _podShape.Visible;

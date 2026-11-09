@@ -134,7 +134,7 @@ public partial class MainWindow
 
     private void InitCardGlow()
     {
-        foreach (var card in new[] { HomeClaudeCard, HomeMusicCard, HomeFocusCard })
+        foreach (var card in new[] { HomeClaudeCard, HomeMusicCard, HomeFocusCard, HomeWeatherCard })
         {
             if (card.Parent is not Button button) continue;
             var halo = new Border { CornerRadius = card.CornerRadius, IsHitTestVisible = false, Height = card.Height };
@@ -191,5 +191,6 @@ public partial class MainWindow
         CardGlow(HomeClaudeCard, ClaudeColor);
         CardGlow(HomeMusicCard, music);
         CardGlow(HomeFocusCard, FocusColor);
+        CardGlow(HomeWeatherCard, WeatherGlowColor(_weather.Current));
     }
 }

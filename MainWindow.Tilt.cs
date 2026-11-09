@@ -50,7 +50,7 @@ public partial class MainWindow
         Panel.SetZIndex(_tiltLayer, 10);
         HomeTab.Children.Add(_tiltLayer);
 
-        foreach (var card in new[] { HomeClaudeCard, HomeMusicCard, HomeFocusCard })
+        foreach (var card in new[] { HomeClaudeCard, HomeMusicCard, HomeFocusCard, HomeWeatherCard })
         {
             // the card sits in the button directly, or in a grid with its glow (MainWindow.Glow.cs)
             var picture = card.Parent is Grid g ? (FrameworkElement)g : card;

@@ -15,23 +15,7 @@ public partial class MainWindow
 
     private void InitAudioOut()
     {
-        VolOsdIconBtn.ToolTip = Loc.T("out.tip");
-        VolOsdIconBtn.MouseEnter += (_, _) => VolOsdIconBtn.Background = new SolidColorBrush(Color.FromArgb(0x22, 255, 255, 255));
-        VolOsdIconBtn.MouseLeave += (_, _) => VolOsdIconBtn.Background = Brushes.Transparent;
-        VolOsdIconBtn.MouseLeftButtonUp += (_, e) =>
-        {
-            e.Handled = true;
-            SoundService.Play(Sfx.Click);
-            ShowOutputMenu(VolOsdIconBtn, fromPopup: true);
-        };
-
-        // drag / click the pop-up's bar: system volume
-        VolOsdBar.ValueChanging += v =>
-        {
-            SetVolume(v);
-            VolOsdText.Text = Math.Round(v * 100).ToString();
-            VolOsdIcon.Text = VolumeGlyph((float)v, false);
-        };
+        // (the volume pop-up has its own output list: MainWindow.VolumeIsland.cs)
 
         // Music tab: a little chevron right after the speaker opens the same menu
         _musicOutButton = new Button
@@ -48,7 +32,8 @@ public partial class MainWindow
         _musicOutButton.Click += (_, e) =>
         {
             e.Handled = true;
-            ShowOutputMenu(_musicOutButton, fromPopup: false);
+            SoundService.Play(Sfx.Click);
+            OpenOutputSubPage();
         };
         var row = (Panel)MuteButton.Parent;
         row.Children.Insert(row.Children.IndexOf(MuteButton) + 1, _musicOutButton);
@@ -126,7 +111,8 @@ public partial class MainWindow
         foreach (var d in AudioDevices.List())
             if (d.IsDefault)
             {
-                VolOsdIconBtn.ToolTip = d.Name;
+                _devButton.ToolTip = d.Name;
+                _devIcon.Text = Glyph(AudioDevices.Glyph(d.Kind));
                 _musicOutButton.ToolTip = Loc.T("out.title") + " · " + d.Name;
                 _outputKind = d.Kind;
                 return;

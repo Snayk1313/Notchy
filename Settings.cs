@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System;
 using System.IO;
 using System.Text.Json;
@@ -34,6 +35,9 @@ public sealed class AppSettings
     public int FocusMinutes { get; set; } = 30;
     public int BreakMinutes { get; set; } = 5;
     public string FocusTask { get; set; } = "";
+    /// <summary>Relógio tab: the length of the next timer, and which page was last open (true = alarms).</summary>
+    public int TimerMinutes { get; set; } = 10;
+    public bool ClockOnAlarms { get; set; }
     public string LastSeenNotes { get; set; } = ""; // the version whose news (WhatsNew.cs) were already shown
     public bool FocusQuiet { get; set; } = true;
 
@@ -46,6 +50,19 @@ public sealed class AppSettings
     public ClockMode Clock { get; set; } = ClockMode.Auto;
     public bool LyricsEnabled { get; set; } = true;
     public bool VolumeOsd { get; set; } = true;
+    /// <summary>Hide Windows' own volume/brightness pop-up while Notchy shows its own (where Windows allows it).</summary>
+    public bool HideWindowsOsd { get; set; } = true;
+    /// <summary>Show Bluetooth earbuds/headphones connecting, their battery and low-battery warnings.</summary>
+    public bool BudsAlerts { get; set; } = true;
+    /// <summary>Weather location: automatic (Windows' location) or a city you picked (name + coordinates).</summary>
+    public bool WeatherAuto { get; set; } = true;
+    /// <summary>Other apps' notifications on the island; the apps you turned off; the apps seen so far (for the settings list).</summary>
+    public bool NotifyEnabled { get; set; } = true;
+    public List<string> NotifyMuted { get; set; } = new();
+    public List<string> NotifyApps { get; set; } = new();
+    public string WeatherCity { get; set; } = "";
+    public double WeatherLat { get; set; }
+    public double WeatherLon { get; set; }
     public int HoverDelayMs { get; set; } = 180;
     public bool BlurEnabled { get; set; } = false;
     public int BlurIntensity { get; set; } = 60;     // 0..100
@@ -68,6 +85,7 @@ public sealed class AppSettings
     // Sounds
     public bool SoundsEnabled { get; set; } = true;
     public int SoundVolume { get; set; } = 45;       // 0..100
+    public int AlarmVolume { get; set; } = 80;       // 0..100, the timer/alarm ring (its own, louder than the UI sounds)
     public bool SoundOpenClose { get; set; } = true;
     public bool SoundClicks { get; set; } = true;
     public bool SoundFocus { get; set; } = true;

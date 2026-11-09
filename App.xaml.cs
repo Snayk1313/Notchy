@@ -15,6 +15,7 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+#if DEBUG
         int spd = Array.IndexOf(e.Args, "--spdiag");
         if (spd >= 0 && spd + 1 < e.Args.Length)
         {
@@ -88,10 +89,13 @@ public partial class App : Application
             return;
         }
 
+#endif
+#if DEBUG
         int snap = Array.IndexOf(e.Args, "--snapshot");
         bool snapshot = snap >= 0 && snap + 1 < e.Args.Length;
 
         if (!snapshot)
+#endif
         {
             _mutex = new Mutex(true, "Notchy.SingleInstance", out bool created);
             if (!created)
@@ -121,6 +125,7 @@ public partial class App : Application
 
         SoundService.Warmup();
 
+#if DEBUG
         if (snapshot)
         {
             // preview overrides (not saved): NOTCHY_GLOW=0..3, NOTCHY_GRADIENT=0..100
@@ -128,10 +133,12 @@ public partial class App : Application
             if (int.TryParse(Environment.GetEnvironmentVariable("NOTCHY_GRADIENT"), out int grad)) AppSettings.Current.GradientStrength = grad;
         }
 
+#endif
         var window = new MainWindow();
         MainWindow = window;
         window.Show();
 
+#if DEBUG
         if (snapshot)
         {
             _ = window.SnapshotAsync(e.Args[snap + 1]);
@@ -144,12 +151,14 @@ public partial class App : Application
             return;
         }
 
+#endif
         _tray = CreateTray();
         AppSettings.Changed += () => Loc.Language = AppSettings.Current.Language;
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
+        OsdHider.Restore(); // Windows gets its volume pop-up back
         if (_tray != null)
         {
             _tray.Visible = false;
@@ -186,39 +195,16 @@ public partial class App : Application
 
     private System.Windows.Forms.NotifyIcon CreateTray()
     {
-        var menu = new System.Windows.Forms.ContextMenuStrip();
-
-        var settings = new System.Windows.Forms.ToolStripMenuItem();
-        settings.Click += (_, _) => OpenSettings();
-
-        var startup = new System.Windows.Forms.ToolStripMenuItem { CheckOnClick = true };
-        startup.CheckedChanged += (_, _) =>
-        {
-            if (startup.Checked != StartupManager.IsEnabled) StartupManager.SetEnabled(startup.Checked);
-        };
-
-        var exit = new System.Windows.Forms.ToolStripMenuItem();
-        exit.Click += (_, _) => Shutdown();
-
-        menu.Opening += (_, _) =>
-        {
-            settings.Text = Loc.T("menu.settings");
-            startup.Text = Loc.T("gen.startup");
-            exit.Text = Loc.T("menu.quit");
-            startup.Checked = StartupManager.IsEnabled;
-        };
-
-        menu.Items.Add(settings);
-        menu.Items.Add(startup);
-        menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
-        menu.Items.Add(exit);
-
         var tray = new System.Windows.Forms.NotifyIcon
         {
             Icon = TrayIconFactory.Create(),
             Text = "Notchy",
-            Visible = true,
-            ContextMenuStrip = menu
+            Visible = true
+        };
+        // right click: Notchy's own menu (dark, rounded, with a real switch) instead of Windows' menu
+        tray.MouseUp += (_, e) =>
+        {
+            if (e.Button == System.Windows.Forms.MouseButtons.Right) TrayMenu.ShowAtCursor();
         };
         tray.DoubleClick += (_, _) => OpenSettings();
         return tray;

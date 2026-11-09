@@ -336,6 +336,131 @@ public partial class MainWindow
                 _newsArtFrames.Add(t => edge.StrokeDashOffset = -(t % 2.6 / 2.6) * per / th);
                 break;
             }
+            case "clock":
+            {
+                // the island counting down, its light running out around the edge
+                Pill(10, 18, 120, 40, Brushes.Black);
+                var edge = Pill(10, 18, 120, 40, Brushes.Transparent);
+                edge.Stroke = new SolidColorBrush(color);
+                edge.StrokeThickness = 2.5;
+                edge.Effect = glow;
+                Eyes(50, 38, color);
+                var left = Label("5:00", 84, 29, new SolidColorBrush(color), 13, bold: true);
+                double per = 2 * (120 - 40) + Math.PI * 40, th = 2.5;
+                _newsArtFrames.Add(t =>
+                {
+                    double p = 1 - t % 7 / 7;
+                    edge.StrokeDashArray = new DoubleCollection { Math.Max(0.01, p * per / th), per / th };
+                    int s = (int)Math.Ceiling(p * 300);
+                    left.Text = $"{s / 60}:{s % 60:00}";
+                });
+                break;
+            }
+            case "level":
+            {
+                // the real volume island: light filling from the left, the eyes, the number; then the same for brightness
+                const double x = 6, y = 25, w = 128, hh = 34;
+                Pill(x, y, w, hh, Brushes.Black);
+                var stopA = new GradientStop(Color.FromArgb(0x0D, 255, 255, 255), 0);
+                var stopB = new GradientStop(Color.FromArgb(0x4C, 255, 255, 255), 1);
+                var fill = new Rectangle { Height = hh, Fill = new LinearGradientBrush(new GradientStopCollection { stopA, stopB }, 0) };
+                var line = new Rectangle { Width = 2, Height = hh, Fill = Brushes.White };
+                var lineGlow = new DropShadowEffect { ShadowDepth = 0, BlurRadius = 12, Opacity = 0.45, Color = Colors.White };
+                line.Effect = lineGlow;
+                var light = new Canvas { Width = w, Height = hh, Clip = new RectangleGeometry(new Rect(0, 0, w, hh), hh / 2, hh / 2) };
+                light.Children.Add(fill);
+                light.Children.Add(line);
+                Canvas.SetLeft(light, x);
+                Canvas.SetTop(light, y);
+                c.Children.Add(light);
+                var eyeL = new Rectangle { Width = 6, Height = 10, RadiusX = 3, RadiusY = 3, Fill = Brushes.White, RenderTransformOrigin = new Point(0.5, 0.5) };
+                var eyeR = new Rectangle { Width = 6, Height = 10, RadiusX = 3, RadiusY = 3, Fill = Brushes.White, RenderTransformOrigin = new Point(0.5, 0.5) };
+                var open = new ScaleTransform(1, 1);
+                eyeL.RenderTransform = open;
+                eyeR.RenderTransform = open;
+                Canvas.SetLeft(eyeL, x + 16); Canvas.SetTop(eyeL, y + 12); c.Children.Add(eyeL);
+                Canvas.SetLeft(eyeR, x + 27); Canvas.SetTop(eyeR, y + 12); c.Children.Add(eyeR);
+                var pct = Label("50", x + w - 30, y + 9, new SolidColorBrush(Color.FromArgb(0xE0, 255, 255, 255)), 11.5, bold: true);
+                _newsArtFrames.Add(t =>
+                {
+                    bool sun = t % 8 >= 4;
+                    var col = sun ? SunColor : Colors.White;
+                    double level = 0.28 + 0.44 * (0.5 - 0.5 * Math.Cos((t % 4) / 4 * Math.PI * 2));
+                    fill.Width = w * level;
+                    Canvas.SetLeft(line, w * level - 2);
+                    stopA.Color = Color.FromArgb(0x0D, col.R, col.G, col.B);
+                    stopB.Color = Color.FromArgb(0x4C, col.R, col.G, col.B);
+                    line.Fill = new SolidColorBrush(col);
+                    lineGlow.Color = col;
+                    eyeL.Fill = eyeR.Fill = new SolidColorBrush(col);
+                    open.ScaleY = 0.8 + 0.4 * level; // wider when it's loud, like on the island
+                    pct.Text = $"{Math.Round(level * 100)}";
+                });
+                break;
+            }
+            case "buds":
+            {
+                // connected: the earbuds, a name and the battery filling
+                Pill(6, 22, 128, 40, Brushes.Black);
+                var buds = new Path { Data = EarbudsGeometry(), Fill = Brushes.White, Width = 24, Height = 24, Stretch = Stretch.Uniform };
+                Canvas.SetLeft(buds, 16); Canvas.SetTop(buds, 30); c.Children.Add(buds);
+                Label("Bluetooth Buds", 47, 28, Brushes.White, 10.5, bold: true);
+                Pill(47, 46, 72, 5, new SolidColorBrush(Color.FromArgb(0x2E, 255, 255, 255)));
+                var bat = Pill(47, 46, 14, 5, new SolidColorBrush(color));
+                _newsArtFrames.Add(t =>
+                {
+                    double p = Math.Min(1, t % 4 / 2.4);
+                    bat.Width = 72 * (0.2 + 0.6 * p);
+                });
+                break;
+            }
+            case "weather":
+            {
+                // the sun bobbing behind a drifting cloud, and the temperature
+                var box = Pill(6, 14, 128, 56, Brushes.Black);
+                box.RadiusX = box.RadiusY = 18;
+                var yellow = Color.FromRgb(0xFF, 0xD3, 0x6B);
+                var sun = new Ellipse { Width = 26, Height = 26, Fill = new SolidColorBrush(yellow),
+                    Effect = new DropShadowEffect { ShadowDepth = 0, BlurRadius = 14, Opacity = 0.9, Color = yellow } };
+                Canvas.SetLeft(sun, 22); Canvas.SetTop(sun, 24); c.Children.Add(sun);
+                var cloud = new Path { Data = Geometry.Parse("M7,19.5 A4.5,4.5 0 0 1 6.4,10.54 A6,6 0 0 1 17.7,9.6 A4,4 0 0 1 17.5,19.5 Z"), Fill = Brushes.White, Width = 34, Stretch = Stretch.Uniform };
+                Canvas.SetLeft(cloud, 30); Canvas.SetTop(cloud, 36); c.Children.Add(cloud);
+                Label("22°", 78, 22, Brushes.White, 26, bold: true);
+                _newsArtFrames.Add(t =>
+                {
+                    Canvas.SetTop(sun, 24 - 3.5 * (0.5 - 0.5 * Math.Cos(t * Math.PI / 2)));
+                    Canvas.SetLeft(cloud, 31 + 4 * Math.Sin(t * Math.PI / 3));
+                });
+                break;
+            }
+            case "notices":
+            {
+                // a message dropping from the top, with the sender's photo
+                c.ClipToBounds = true;
+                int first = c.Children.Count;
+                var box = Pill(4, 16, 132, 54, Brushes.Black);
+                box.RadiusX = box.RadiusY = 18;
+                var photo = new Ellipse { Width = 26, Height = 26, Fill = new LinearGradientBrush(Color.FromRgb(0x25, 0xD3, 0x66), Color.FromRgb(0x12, 0x8C, 0x7E), 45) };
+                Canvas.SetLeft(photo, 14); Canvas.SetTop(photo, 30); c.Children.Add(photo);
+                Label("Maria", 48, 27, Brushes.White, 10.5, bold: true);
+                var text = Pill(48, 47, 74, 5, new SolidColorBrush(Color.FromArgb(0x80, 255, 255, 255)));
+                var drop = new TranslateTransform();
+                var parts = new List<UIElement>();
+                for (int i = first; i < c.Children.Count; i++)
+                {
+                    c.Children[i].RenderTransform = drop;
+                    parts.Add(c.Children[i]);
+                }
+                static double Smooth(double a) => a * a * (3 - 2 * a);
+                _newsArtFrames.Add(t =>
+                {
+                    double p = t % 4.4 / 4.4;
+                    double seen = p < 0.08 ? 0 : p < 0.24 ? Smooth((p - 0.08) / 0.16) : p < 0.82 ? 1 : p < 0.96 ? 1 - Smooth((p - 0.82) / 0.14) : 0;
+                    drop.Y = -34 * (1 - seen);
+                    foreach (var e in parts) e.Opacity = seen;
+                });
+                break;
+            }
             case "focus":
             {
                 // the ring filling up around concentrating eyes

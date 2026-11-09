@@ -510,11 +510,15 @@ public partial class MainWindow
 
     private static string Short(string s) => s.Length > 60 ? s[..60] + "…" : s.Replace("\n", " ");
 
+#if DEBUG
     private static readonly string ChatLogFile = System.IO.Path.Combine(AppSettings.Folder, "chat-debug.log");
+#endif
 
     /// <summary>Small rolling log of how Notchy Chat found its text (to diagnose app-specific problems).</summary>
+    [System.Diagnostics.Conditional("DEBUG")]
     private static void ChatLog(string line)
     {
+#if DEBUG
         try
         {
             System.IO.Directory.CreateDirectory(AppSettings.Folder);
@@ -526,6 +530,7 @@ public partial class MainWindow
         {
             // ignore
         }
+#endif
     }
 
     private async Task<bool> EnsureContextForActionAsync()
@@ -870,6 +875,7 @@ public partial class MainWindow
         SetChatView(ChatView.Idle);
     }
 
+#if DEBUG
     /// <summary>Debug (--replacetest dir): spelling on the foreground app's selection, then Replace.</summary>
     public async Task ReplaceSelfTestAsync(string dir)
     {
@@ -915,6 +921,7 @@ public partial class MainWindow
         System.IO.File.WriteAllText(System.IO.Path.Combine(dir, "replace_log.txt"), log.ToString());
         Application.Current.Shutdown();
     }
+#endif
 
     // =====================================================================================
     // spelling: corrected text with the changed words underlined (like the Samsung keyboard)

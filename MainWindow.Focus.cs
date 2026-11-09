@@ -498,12 +498,14 @@ public partial class MainWindow
     }
 
     /// <summary>Where the ring's eyes look to follow the mouse (null when it can't tell).</summary>
-    private (double x, double y)? FocusEyeLookAtMouse()
+    private (double x, double y)? FocusEyeLookAtMouse() => EyesLookAtMouse((FrameworkElement)FocusEyeL.Parent);
+
+    /// <summary>Where a pair of eyes centred on <paramref name="face"/> look to follow the mouse.</summary>
+    private static (double x, double y)? EyesLookAtMouse(FrameworkElement face)
     {
         Point center;
         try
         {
-            var face = (FrameworkElement)FocusEyeL.Parent;
             center = face.PointToScreen(new Point(face.ActualWidth / 2, face.ActualHeight / 2));
         }
         catch
@@ -518,7 +520,10 @@ public partial class MainWindow
     /// <summary>The light on the small island's edge: it fills from the top as the time goes by.</summary>
     private void UpdateFocusLight()
     {
-        bool show = _state == IslandState.Compact && _compactMode == CompactMode.Focus && !_introActive && !_islandMorphing;
+        // shared with the Relógio tab: a running timer's light empties, a ringing one pulses all the way round
+        bool timer = _compactMode is CompactMode.Timer or CompactMode.TimerRing;
+        var buds = _state == IslandState.Compact ? BudsLight() : null; // Bluetooth earbuds: the battery level
+        bool show = _state == IslandState.Compact && (_compactMode == CompactMode.Focus || timer || buds != null) && !_introActive && !_islandMorphing;
         double k = Ease(Math.Clamp(0.14 / Math.Max(0.3, S.SpeedFactor), 0.05, 0.5));
         _focusLightOpacity += ((show ? 1 : 0) - _focusLightOpacity) * k;
         if (_focusLightOpacity < 0.01 && !show)
@@ -540,7 +545,7 @@ public partial class MainWindow
         FocusLight.Margin = FocusTrack.Margin = Island.Margin;
         FocusLight.RenderTransform = FocusTrack.RenderTransform = Island.RenderTransform;
 
-        var color = FocusModeColor;
+        var color = buds?.color ?? (timer ? TimerColor : FocusModeColor);
         if (color != _focusLightColor)
         {
             _focusLightColor = color;
@@ -549,9 +554,14 @@ public partial class MainWindow
             FocusLightGlow.Color = color;
             CompactFocusEyesFill(color);
         }
-        FocusLight.Opacity = _focusLightOpacity;
-        FocusTrack.Opacity = _focusLightOpacity * 0.22;
-        double p = Math.Clamp(_focus.Progress, 0, 1);
+        bool ringing = _compactMode == CompactMode.TimerRing;
+        bool budsLow = buds?.pulse == true; // low battery: the light breathes in red, with a red glow around
+        double pulse = ringing ? 0.45 + 0.55 * Math.Abs(Math.Sin(AnimNow * 4))
+            : budsLow ? 0.55 + 0.45 * (0.5 + 0.5 * Math.Sin(AnimNow * 4.2)) : 1;
+        FocusLightGlow.BlurRadius = budsLow ? 10 + 12 * (pulse - 0.55) / 0.45 : 10;
+        FocusLight.Opacity = _focusLightOpacity * pulse;
+        FocusTrack.Opacity = _focusLightOpacity * (ringing || budsLow ? 0.15 + 0.45 * pulse : 0.22);
+        double p = Math.Clamp(buds?.share ?? (ringing ? 1 : timer ? _clock.Soonest?.LeftShare ?? 0 : _focus.Progress), 0, 1);
         if (_focusDrawn < 0 || Math.Abs(p - _focusDrawn) > 0.0004)
         {
             _focusDrawn = p;

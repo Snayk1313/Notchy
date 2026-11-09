@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
@@ -322,39 +323,43 @@ public partial class MainWindow
 
     private async void Queue_Click(object sender, RoutedEventArgs e)
     {
-        if (_queueOpen)
-        {
-            CloseQueue();
-            return;
-        }
-        _queueOpen = true;
-        QueueList.Children.Clear();
-        QueueList.Children.Add(new TextBlock { Text = Loc.T("chat.thinking"), FontSize = 12, Foreground = new SolidColorBrush(Color.FromArgb(0x99, 255, 255, 255)), Margin = new Thickness(2, 6, 0, 0) });
-        QueuePanel.Visibility = Visibility.Visible;
-        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
-        QueueSlide.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(24, 0, TimeSpan.FromMilliseconds(Dur(280))) { EasingFunction = ease });
-        QueuePanel.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(Dur(220))));
+        SoundService.Play(Sfx.Click);
+        await OpenQueueAsync();
+    }
 
+    /// <summary>The queue as a sub-page ("‹ Fila"): a cover, the song and the artist per row; a click skips there.</summary>
+    private async Task OpenQueueAsync()
+    {
+        _queueOpen = true;
+        OpenSubPage(Loc.T("sp.queue.title"), () => QueuePage(null));
         var queue = await Spotify.QueueAsync();
-        if (!_queueOpen) return;
-        QueueList.Children.Clear();
-        if (queue.Count == 0)
-            QueueList.Children.Add(new TextBlock { Text = Loc.T("sp.queue.empty"), FontSize = 12, Foreground = new SolidColorBrush(Color.FromArgb(0x99, 255, 255, 255)), Margin = new Thickness(2, 6, 0, 0) });
-        for (int i = 0; i < queue.Count; i++) QueueList.Children.Add(QueueRow(queue[i], i));
+        if (!_queueOpen || !_subOpen) return;
+        RefreshSubPage(() => QueuePage(queue));
     }
 
     private void CloseQueue()
     {
+        if (!_queueOpen) return;
         _queueOpen = false;
-        var fade = new DoubleAnimation(0, TimeSpan.FromMilliseconds(Dur(160)));
-        fade.Completed += (_, _) => { if (!_queueOpen) QueuePanel.Visibility = Visibility.Collapsed; };
-        QueuePanel.BeginAnimation(OpacityProperty, fade);
-        QueueSlide.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(16, TimeSpan.FromMilliseconds(Dur(160))));
+        CloseSubPage(animate: true);
+    }
+
+    private FrameworkElement QueuePage(IReadOnlyList<SpotifyTrack>? queue)
+    {
+        var list = new StackPanel { Margin = new Thickness(0, 0, 0, 6) };
+        list.Children.Add(ListTop(Loc.T("sp.queue.next"), null));
+        if (queue == null)
+            list.Children.Add(new TextBlock { Text = Loc.T("chat.thinking"), FontSize = 11.5, Foreground = White(0x80), Margin = new Thickness(4, 4, 0, 8) });
+        else if (queue.Count == 0)
+            list.Children.Add(new TextBlock { Text = Loc.T("sp.queue.empty"), FontSize = 11.5, Foreground = White(0x80), Margin = new Thickness(4, 4, 0, 8) });
+        else
+            for (int i = 0; i < queue.Count; i++) list.Children.Add(QueueRow(queue[i], i));
+        return Capped(list);
     }
 
     private UIElement QueueRow(SpotifyTrack t, int index)
     {
-        var art = new Border { Width = 30, Height = 30, CornerRadius = new CornerRadius(6), Background = new SolidColorBrush(Color.FromArgb(0x30, 255, 255, 255)) };
+        var art = new Border { Width = 30, Height = 30, CornerRadius = new CornerRadius(8), Background = White(0x14), VerticalAlignment = VerticalAlignment.Center };
         if (t.ImageUrl != null)
         {
             try
@@ -372,21 +377,39 @@ public partial class MainWindow
                 // keep the placeholder
             }
         }
-        var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(9, 0, 0, 0) };
-        texts.Children.Add(new TextBlock { Text = t.Name, FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, TextTrimming = TextTrimming.CharacterEllipsis });
-        texts.Children.Add(new TextBlock { Text = t.Artists, FontSize = 10.5, Foreground = new SolidColorBrush(Color.FromArgb(0x99, 255, 255, 255)), TextTrimming = TextTrimming.CharacterEllipsis });
+        var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 8, 0) };
+        texts.Children.Add(new TextBlock { Text = t.Name, FontSize = 12, Foreground = Brushes.White, TextTrimming = TextTrimming.CharacterEllipsis });
+        texts.Children.Add(new TextBlock { Text = t.Artists, FontSize = 10, Foreground = White(0x70), TextTrimming = TextTrimming.CharacterEllipsis });
+        var jump = new TextBlock { Text = "", FontFamily = (FontFamily)FindResource("IconFont"), FontSize = 10, Foreground = White(0xCC), VerticalAlignment = VerticalAlignment.Center,
+            Opacity = 0, Margin = new Thickness(0, 0, 4, 0) };
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition());
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.Children.Add(art);
         Grid.SetColumn(texts, 1);
         grid.Children.Add(texts);
+        Grid.SetColumn(jump, 2);
+        grid.Children.Add(jump);
 
-        var row = new Border { CornerRadius = new CornerRadius(8), Padding = new Thickness(4, 3, 4, 3), Margin = new Thickness(0, 1, 4, 1), Background = Brushes.Transparent, Cursor = Cursors.Hand, Child = grid, ToolTip = Loc.T("sp.queue.jump") };
-        row.MouseEnter += (_, _) => row.Background = new SolidColorBrush(Color.FromArgb(0x1A, 255, 255, 255));
-        row.MouseLeave += (_, _) => row.Background = Brushes.Transparent;
-        row.MouseLeftButtonUp += async (_, _) =>
+        var row = new Border
         {
+            Child = grid, Height = DevRowHeight - 3, Margin = new Thickness(0, 0, 0, 3), Padding = new Thickness(8, 0, 8, 0), CornerRadius = new CornerRadius(12),
+            Background = Brushes.Transparent, Cursor = Cursors.Hand, ToolTip = Loc.T("sp.queue.jump")
+        };
+        row.MouseEnter += (_, _) =>
+        {
+            row.Background = White(0x0E);
+            jump.Opacity = 1; // a little ▶ shows where the click takes you
+        };
+        row.MouseLeave += (_, _) =>
+        {
+            row.Background = Brushes.Transparent;
+            jump.Opacity = 0;
+        };
+        row.MouseLeftButtonUp += async (_, e) =>
+        {
+            e.Handled = true;
             SoundService.Play(Sfx.Click);
             CloseQueue();
             await Spotify.SkipToAsync(index, t, _spState?.ContextUri, _spState?.Shuffle == true);

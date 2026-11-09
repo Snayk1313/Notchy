@@ -6,7 +6,9 @@ namespace Notchy;
 
 public enum OutputKind { Speakers, Headphones, Headset, Display, Bluetooth, Other }
 
-public sealed record OutputDevice(string Id, string Name, OutputKind Kind, bool IsDefault);
+/// <param name="Bus">How it's connected, when Windows says ("USB", "Bluetooth"; empty otherwise).</param>
+/// <param name="Volume">Its own volume (each output keeps one), 0..1; -1 when it can't be read.</param>
+public sealed record OutputDevice(string Id, string Name, OutputKind Kind, bool IsDefault, string Bus = "", float Volume = -1, bool Muted = false);
 
 /// <summary>Windows playback devices: list them and make one the default (like the taskbar's output picker).</summary>
 public static class AudioDevices
@@ -36,6 +38,7 @@ public static class AudioDevices
                     d.GetId(out string id);
                     string name = id;
                     var kind = OutputKind.Other;
+                    string bus = "";
                     if (d.OpenPropertyStore(0 /* STGM_READ */, out IPropertyStore props) == 0 && props != null)
                     {
                         name = ReadString(props, PKEY_Device_FriendlyName) ?? id;
@@ -55,9 +58,11 @@ public static class AudioDevices
                         };
                         if (bt && kind is OutputKind.Other or OutputKind.Speakers) kind = OutputKind.Bluetooth;
                         if (bt && kind == OutputKind.Headphones && ff != 3) kind = OutputKind.Bluetooth;
+                        bus = bt ? "Bluetooth" : ep.Contains("USB", StringComparison.OrdinalIgnoreCase) ? "USB" : "";
                         Marshal.ReleaseComObject(props);
                     }
-                    result.Add(new OutputDevice(id, name, kind, id == defId));
+                    var (vol, muted) = ReadVolume(d);
+                    result.Add(new OutputDevice(id, name, kind, id == defId, bus, vol, muted));
                 }
                 finally
                 {
@@ -86,6 +91,30 @@ public static class AudioDevices
         catch
         {
             return false;
+        }
+    }
+
+    /// <summary>The device's own master volume and mute (each output remembers its own).</summary>
+    private static (float, bool) ReadVolume(IMMDevice d)
+    {
+        try
+        {
+            var iid = typeof(IAudioEndpointVolume).GUID;
+            if (d.Activate(ref iid, 23 /* CLSCTX_ALL */, IntPtr.Zero, out object o) != 0 || o is not IAudioEndpointVolume v) return (-1, false);
+            try
+            {
+                v.GetMasterVolumeLevelScalar(out float level);
+                v.GetMute(out bool mute);
+                return (level, mute);
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(v);
+            }
+        }
+        catch
+        {
+            return (-1, false);
         }
     }
 
@@ -189,6 +218,24 @@ public static class AudioDevices
         [PreserveSig] int GetValue(ref PropertyKey key, out PropVariant value);
         [PreserveSig] int SetValue(ref PropertyKey key, ref PropVariant value);
         [PreserveSig] int Commit();
+    }
+
+    [ComImport, Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IAudioEndpointVolume
+    {
+        [PreserveSig] int RegisterControlChangeNotify(IntPtr notify);
+        [PreserveSig] int UnregisterControlChangeNotify(IntPtr notify);
+        [PreserveSig] int GetChannelCount(out uint count);
+        [PreserveSig] int SetMasterVolumeLevel(float levelDb, ref Guid ctx);
+        [PreserveSig] int SetMasterVolumeLevelScalar(float level, ref Guid ctx);
+        [PreserveSig] int GetMasterVolumeLevel(out float levelDb);
+        [PreserveSig] int GetMasterVolumeLevelScalar(out float level);
+        [PreserveSig] int SetChannelVolumeLevel(uint channel, float levelDb, ref Guid ctx);
+        [PreserveSig] int SetChannelVolumeLevelScalar(uint channel, float level, ref Guid ctx);
+        [PreserveSig] int GetChannelVolumeLevel(uint channel, out float levelDb);
+        [PreserveSig] int GetChannelVolumeLevelScalar(uint channel, out float level);
+        [PreserveSig] int SetMute([MarshalAs(UnmanagedType.Bool)] bool mute, ref Guid ctx);
+        [PreserveSig] int GetMute([MarshalAs(UnmanagedType.Bool)] out bool mute);
     }
 
     /// <summary>Undocumented but stable since Windows 7: what the Sound control panel uses to set the default device.</summary>

@@ -36,7 +36,7 @@ public sealed class SettingsWindow : Window
         new("behave", "", false, Color.FromRgb(0x7C, 0xC8, 0xFF)),
         new("music", "", false, Color.FromRgb(0xFF, 0x7E, 0xB6)),
         new("claude", "✻", true, Color.FromRgb(0xE8, 0x82, 0x5F)),
-        new("focus", "", false, Color.FromRgb(0xB7, 0x9C, 0xFF)),
+        new("focus", "", false, Color.FromRgb(0xB7, 0x9C, 0xFF)),
         new("files", "", false, Color.FromRgb(0x5E, 0xD6, 0x7D)),
         new("sounds", "", false, Color.FromRgb(0xFF, 0xD3, 0x6B)),
         new("about", "", false, Color.FromRgb(0x9A, 0xA3, 0xB5)),
@@ -325,7 +325,7 @@ public sealed class SettingsWindow : Window
             Text = c.Glyph, FontFamily = c.Symbol ? new FontFamily("Segoe UI Symbol") : (FontFamily)Application.Current.FindResource("IconFont"),
             FontSize = c.Symbol ? 13.5 : 12.5, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
         };
-        var tile = new Border { Width = 26, Height = 26, CornerRadius = new CornerRadius(8), Child = icon };
+        var tile = new Border { Width = 26, Height = 26, CornerRadius = new CornerRadius(8), Child = TargetIcon.Show(icon) };
         // the selected tile glows: a plain shape behind it carries the glow (the icon stays crisp)
         var glow = new Border
         {
@@ -429,11 +429,11 @@ public sealed class SettingsWindow : Window
             if (hits.Count == 0) continue;
             found += hits.Count;
             var label = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(4, 18, 0, 7) };
-            label.Children.Add(new TextBlock
+            label.Children.Add(TargetIcon.Show(new TextBlock
             {
                 Text = c.Glyph, FontFamily = c.Symbol ? new FontFamily("Segoe UI Symbol") : (FontFamily)Application.Current.FindResource("IconFont"),
                 FontSize = 11, Foreground = new SolidColorBrush(c.Color), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 7, 0)
-            });
+            }));
             label.Children.Add(new TextBlock { Text = Loc.T("s.page." + c.Key).ToUpperInvariant(), FontSize = 10.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(c.Color) });
             p.Children.Add(label);
             var rows = new StackPanel();
@@ -465,12 +465,12 @@ public sealed class SettingsWindow : Window
         var tile = new Border
         {
             Width = 40, Height = 40, CornerRadius = new CornerRadius(12), Background = new SolidColorBrush(color),
-            Child = new TextBlock
+            Child = TargetIcon.Show(new TextBlock
             {
                 Text = glyph, FontFamily = symbol ? new FontFamily("Segoe UI Symbol") : (FontFamily)Application.Current.FindResource("IconFont"),
                 FontSize = symbol ? 19 : 17, Foreground = whiteIcon ? Brushes.White : new SolidColorBrush(Ink),
                 HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
-            }
+            })
         };
         var glow = new Border { Width = 40, Height = 40, CornerRadius = new CornerRadius(12), Background = new SolidColorBrush(color), Effect = new DropShadowEffect { ShadowDepth = 0, BlurRadius = 20, Opacity = whiteIcon ? 0 : 0.55, Color = color } };
         var host = new Grid();
@@ -668,6 +668,14 @@ public sealed class SettingsWindow : Window
             Segmented(new[] { (AnimSpeed.Fast, Loc.T("gen.speed.fast")), (AnimSpeed.Normal, Loc.T("gen.speed.normal")), (AnimSpeed.Smooth, Loc.T("gen.speed.smooth")) }, S.Speed, v => S.Speed = v));
         Row(main, Loc.T("s.scroll"), Loc.T("s.scroll.d"), Toggle(S.ScrollVolume, v => S.ScrollVolume = v));
         Row(main, Loc.T("s.volume"), Loc.T("s.volume.d"), Toggle(S.VolumeOsd, v => S.VolumeOsd = v));
+        Row(main, Loc.T("s.buds"), Loc.T("s.buds.d"), Toggle(S.BudsAlerts, v => S.BudsAlerts = v));
+        WeatherRows(main);
+        NotifyRows(main);
+        Row(main, Loc.T("s.hideosd"), Loc.T("s.hideosd.d"), Toggle(S.HideWindowsOsd, v =>
+        {
+            S.HideWindowsOsd = v;
+            if (!v) OsdHider.Restore();
+        }));
         Row(main, Loc.T("s.clock"), Loc.T("s.clock.d"),
             Segmented(new[] { (ClockMode.Auto, Loc.T("isl.clock.auto")), (ClockMode.H12, "12h"), (ClockMode.H24, "24h") }, S.Clock, v => S.Clock = v));
         return p;
@@ -745,6 +753,80 @@ public sealed class SettingsWindow : Window
         Row(sp, Loc.T("s.sp.howto"), Loc.T("s.sp.howto.d"), toggle);
         sp.Children.Add(steps);
         return p;
+    }
+
+    /// <summary>
+    /// Weather location: Automática (the PC's location) or Manual, with a box to type the city and its matches
+    /// right under it (there are several "Alagoinha": the state tells them apart).
+    /// </summary>
+    private void WeatherRows(StackPanel section)
+    {
+        Row(section, Loc.T("s.weather"), Loc.T("s.weather.d"),
+            Segmented(new[] { (true, Loc.T("weather.auto")), (false, Loc.T("weather.manual")) }, S.WeatherAuto, v => S.WeatherAuto = v));
+
+        var cityBox = new TextBox
+        {
+            Width = 250, Text = S.WeatherCity, Background = new SolidColorBrush(Color.FromArgb(0x30, 0, 0, 0)), Foreground = Brushes.White, CaretBrush = Brushes.White,
+            BorderBrush = new SolidColorBrush(Color.FromArgb(0x24, 255, 255, 255)), BorderThickness = new Thickness(1), Padding = new Thickness(8, 5, 8, 5), FontSize = 12
+        };
+        var results = new StackPanel { Margin = new Thickness(16, 0, 16, 10) };
+        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+        timer.Tick += async (_, _) =>
+        {
+            timer.Stop();
+            string text = cityBox.Text;
+            results.Children.Clear();
+            if (text.Trim().Length < 2 || text == S.WeatherCity) return;
+            results.Children.Add(new TextBlock { Text = Loc.T("weather.searching"), FontSize = 12, Foreground = Dim(0x88), Margin = new Thickness(4, 2, 0, 4) });
+            var found = await WeatherService.SearchAsync(text);
+            if (cityBox.Text != text) return;
+            results.Children.Clear();
+            if (found.Count == 0) results.Children.Add(new TextBlock { Text = Loc.T("weather.noresult"), FontSize = 12, Foreground = Dim(0x88), Margin = new Thickness(4, 2, 0, 4) });
+            foreach (var c in found)
+            {
+                var city = c;
+                var row = new Border { CornerRadius = new CornerRadius(8), Padding = new Thickness(10, 6, 10, 6), Cursor = Cursors.Hand, Background = Brushes.Transparent };
+                var t = new TextBlock { FontSize = 12.5, Foreground = Brushes.White };
+                t.Inlines.Add(new System.Windows.Documents.Run(c.Name) { FontWeight = FontWeights.SemiBold });
+                t.Inlines.Add(new System.Windows.Documents.Run("   " + c.Region) { Foreground = Dim(0x88) });
+                row.Child = t;
+                row.MouseEnter += (_, _) => row.Background = Dim(0x10);
+                row.MouseLeave += (_, _) => row.Background = Brushes.Transparent;
+                row.MouseLeftButtonUp += (_, _) =>
+                {
+                    SoundService.Play(Sfx.Toggle);
+                    S.WeatherAuto = false;
+                    S.WeatherCity = city.Name;
+                    S.WeatherLat = city.Lat;
+                    S.WeatherLon = city.Lon;
+                    AppSettings.Commit();
+                    Rebuild(); // the switch shows Manual, the box the city
+                };
+                results.Children.Add(row);
+            }
+        };
+        cityBox.TextChanged += (_, _) =>
+        {
+            timer.Stop();
+            timer.Start();
+        };
+        Row(section, Loc.T("s.weather.city"), Loc.T("s.weather.city.d"), cityBox);
+        section.Children.Add(results);
+    }
+
+    /// <summary>Notifications on the island, and an on/off per app that has sent one.</summary>
+    private void NotifyRows(StackPanel section)
+    {
+        Row(section, Loc.T("s.notif"), Loc.T("s.notif.d"), Toggle(S.NotifyEnabled, v => S.NotifyEnabled = v));
+        foreach (var app in S.NotifyApps.OrderBy(a => a))
+        {
+            var name = app;
+            Row(section, name, Loc.T("s.notif.app.d"), Toggle(!S.NotifyMuted.Contains(name), on =>
+            {
+                S.NotifyMuted.Remove(name);
+                if (!on) S.NotifyMuted.Add(name);
+            }), sub: true);
+        }
     }
 
     private static UIElement StatusDot(Color color, string text)
@@ -849,6 +931,7 @@ public sealed class SettingsWindow : Window
         var main = Section(p);
         Row(main, Loc.T("s.so.enabled"), Loc.T("s.so.enabled.d"), Toggle(S.SoundsEnabled, v => S.SoundsEnabled = v));
         Row(main, Loc.T("s.so.volume"), Loc.T("s.so.volume.d"), Slider(S.SoundVolume, 0, 100, v => S.SoundVolume = v, "%", () => SoundService.Preview(Sfx.Toggle)));
+        Row(main, Loc.T("s.so.alarm"), Loc.T("s.so.alarm.d"), Slider(S.AlarmVolume, 10, 100, v => S.AlarmVolume = v, "%", () => SoundService.Preview(Sfx.Alarm)));
         var when = Section(p, Loc.T("s.sec.when"));
         Row(when, Loc.T("s.so.openclose"), Loc.T("s.so.openclose.d"), WithListen(Sfx.Expand, Toggle(S.SoundOpenClose, v => S.SoundOpenClose = v)));
         Row(when, Loc.T("s.so.clicks"), Loc.T("s.so.clicks.d"), WithListen(Sfx.Click, Toggle(S.SoundClicks, v => S.SoundClicks = v)));

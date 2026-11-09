@@ -182,7 +182,7 @@ public partial class MainWindow
 
         // a tab that already has eyes (the shelf's box, the downloads' sleepy cloud, the focus ring) doesn't need a second pair up here
         bool tabHasEyes = (_tab == Tab.Shelf && ShelfEmpty.Visibility == Visibility.Visible)
-                          || (_tab == Tab.Downloads && _dlEmpty) || _tab == Tab.Focus || _tab == Tab.News;
+                          || (_tab == Tab.Downloads && _dlEmpty) || _tab == Tab.Focus || _tab == Tab.Clock || _tab == Tab.News;
         double faceTarget = tabHasEyes ? 0 : 1;
         if (_face.LayoutTransform is not ScaleTransform fs)
         {

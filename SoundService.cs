@@ -5,7 +5,7 @@ using System.Windows.Media;
 
 namespace Notchy;
 
-public enum Sfx { Expand, Collapse, Click, Toggle, Done, Attention, FocusEnd, Like, Hello, Wave }
+public enum Sfx { Expand, Collapse, Click, Toggle, Done, Attention, FocusEnd, Like, Hello, Wave, Alarm }
 
 /// <summary>
 /// Soft, short UI sounds synthesized at startup (no third-party audio files).
@@ -29,7 +29,7 @@ public static class SoundService
             Directory.CreateDirectory(dir);
             foreach (Sfx s in Enum.GetValues(typeof(Sfx)))
             {
-                string file = Path.Combine(dir, $"{s}_v2.wav");
+                string file = Path.Combine(dir, s == Sfx.Alarm ? $"{s}_v3.wav" : $"{s}_v2.wav"); // (v3: the louder alarm)
                 if (!File.Exists(file)) File.WriteAllBytes(file, ToWav(Render(s)));
                 var p = new MediaPlayer();
                 p.Open(new Uri(file));
@@ -52,6 +52,12 @@ public static class SoundService
     public static void Play(Sfx sfx)
     {
         var st = AppSettings.Current;
+        // a timer or alarm you set yourself always rings (it isn't a UI sound)
+        if (sfx == Sfx.Alarm)
+        {
+            PlayNow(sfx);
+            return;
+        }
         if (!st.SoundsEnabled) return;
         if (Hushed && sfx != Sfx.FocusEnd) return;
         bool allowed = sfx switch
@@ -79,7 +85,7 @@ public static class SoundService
         if (LastPlayed.TryGetValue(sfx, out var last) && (now - last).TotalMilliseconds < 60) return;
         LastPlayed[sfx] = now;
 
-        double vol = AppSettings.Current.SoundVolume / 100.0;
+        double vol = (sfx == Sfx.Alarm ? AppSettings.Current.AlarmVolume : AppSettings.Current.SoundVolume) / 100.0;
         p.Volume = Math.Clamp(vol * vol * 1.0, 0, 1); // perceptual curve
         p.Position = TimeSpan.Zero;
         p.Play();
@@ -154,6 +160,17 @@ public static class SoundService
                 {
                     Swish(b, k * 0.18, 0.15, k % 2 == 0 ? 0.055 : 0.045);
                     Tone(b, k * 0.18 + 0.05, k % 2 == 0 ? 1760 : 1568, 0.08, 0.018, 0.03, harmonics: false);
+                }
+                return b;
+            }
+            case Sfx.Alarm: // a bright "ding-ding · ding-ding", repeated while the timer/alarm rings
+            {
+                var b = Buffer(1.3);
+                for (int k = 0; k < 2; k++)
+                {
+                    double at = k * 0.42;
+                    Tone(b, at, 1567.98, 0.30, 0.36, 0.10, bell: true);
+                    Tone(b, at + 0.13, 2093.0, 0.45, 0.33, 0.14, bell: true);
                 }
                 return b;
             }

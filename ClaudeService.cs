@@ -590,7 +590,10 @@ public static class ClaudeHooks
 
     private static readonly string[] MatcherEvents = { "PreToolUse", "PostToolUse", "PermissionRequest" };
 
-    public static string SettingsPath => Environment.GetEnvironmentVariable("NOTCHY_CLAUDE_SETTINGS") ??
+    public static string SettingsPath =>
+#if DEBUG
+        Environment.GetEnvironmentVariable("NOTCHY_CLAUDE_SETTINGS") ??
+#endif
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "settings.json");
 
     // Forward slashes work in both Git Bash and cmd, which Claude Code may use to run hooks on Windows.

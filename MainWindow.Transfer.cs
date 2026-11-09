@@ -63,6 +63,7 @@ public partial class MainWindow
         _transferRig = new EyeRig { Look = TransferLook, Left = TransferEyeLScale, Right = TransferEyeRScale };
         _dlPodRig = new EyeRig { Look = DlPodLook, Left = DlEyeLScale, Right = DlEyeRScale };
         BuildDownloadPodOutline();
+        _dlSel.AfterDrag = () => UpdateDownloadsTab(force: true); // moved away: off the list
         _dlHistory.Load();
     }
 
@@ -577,6 +578,9 @@ public partial class MainWindow
     {
         DownloadsList.Children.Clear();
         _dlRows.Clear();
+        _dlSel.Items.Clear();
+        _dlSelectText = _dlAllText = null;
+        _dlAllLink = null;
         double h = 0;
 
         _dlEmpty = files.Count == 0 && history.Count == 0;
@@ -604,7 +608,7 @@ public partial class MainWindow
         }
         if (history.Count > 0)
         {
-            DownloadsList.Children.Add(SectionTitle(Loc.T("dl.recent")));
+            DownloadsList.Children.Add(RecentTitle(history.Count));
             h += 18;
             foreach (var e in history)
             {
@@ -612,6 +616,7 @@ public partial class MainWindow
                 h += 38;
             }
         }
+        _dlSel.Sync();
         h = Math.Ceiling(h) + 4;
         // more than fits: the list scrolls (a little room so the rows don't touch the scrollbar)
         DownloadsList.Margin = new Thickness(0, 0, h > DownloadsMaxHeight ? 4 : 0, 0);
@@ -630,6 +635,37 @@ public partial class MainWindow
         Text = text.ToUpperInvariant(), FontSize = 9.5, FontWeight = FontWeights.Bold,
         Foreground = new SolidColorBrush(Color.FromArgb(0x88, 255, 255, 255)), Margin = new Thickness(4, 2, 0, 4), Height = 14
     };
+
+    /// <summary>"Recentes", with "Selecionar" (and "Marcar todos" while selecting) on the right.</summary>
+    private FrameworkElement RecentTitle(int count)
+    {
+        var title = SectionTitle(Loc.T("dl.recent"));
+        title.Margin = new Thickness(0);
+        var grid = new Grid { Height = 14, Margin = new Thickness(4, 2, 0, 4) };
+        grid.Children.Add(title);
+        if (count < 2) return grid;
+
+        Border Link(Action click, out TextBlock text)
+        {
+            text = new TextBlock { FontSize = 10, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(Color.FromArgb(0x99, 255, 255, 255)) };
+            var b = new Border { Child = text, Padding = new Thickness(7, 2, 7, 2), Margin = new Thickness(0, -3, 0, -3), Background = Brushes.Transparent, Cursor = Cursors.Hand, Tag = "noselect" };
+            b.MouseLeftButtonUp += (_, e) =>
+            {
+                e.Handled = true;
+                SoundService.Play(Sfx.Click);
+                click();
+            };
+            return b;
+        }
+        var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        _dlAllLink = Link(() => _dlSel.MarkAll(), out var all);
+        _dlAllText = all;
+        row.Children.Add(_dlAllLink);
+        row.Children.Add(Link(() => _dlSel.SetMode(!_dlSel.Mode), out var select));
+        _dlSelectText = select;
+        grid.Children.Add(row);
+        return grid;
+    }
 
     private Button SmallButton(string glyph, string tip, Action click)
     {
@@ -714,23 +750,49 @@ public partial class MainWindow
         };
     }
 
+    /// <summary>The icon and colour of a kind of file, by its extension.</summary>
+    private static (string glyph, Color color) FileKind(string path)
+    {
+        string ext = System.IO.Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
+        return ext switch
+        {
+            "mp4" or "mkv" or "webm" or "mov" or "avi" or "wmv" or "m4v" or "flv" or "ts" or "mpg" or "mpeg" => ("\uE714", Color.FromRgb(0xFF, 0x8A, 0x8A)),
+            "mp3" or "wav" or "flac" or "m4a" or "ogg" or "aac" or "wma" or "opus" => ("\uEC4F", Color.FromRgb(0xFF, 0x7E, 0xB6)),
+            "png" or "jpg" or "jpeg" or "gif" or "bmp" or "webp" or "svg" or "tif" or "tiff" or "ico" or "heic" or "avif" => ("\uEB9F", Color.FromRgb(0x7C, 0xC8, 0xFF)),
+            "pdf" or "doc" or "docx" or "txt" or "rtf" or "odt" or "xls" or "xlsx" or "csv" or "ods" or "ppt" or "pptx" or "odp" or "md" or "epub" => ("\uE8A5", Color.FromRgb(0xE6, 0xE6, 0xEE)),
+            "zip" or "rar" or "7z" or "tar" or "gz" or "bz2" or "xz" or "iso" => ("\uF012", Color.FromRgb(0xFF, 0xD3, 0x6B)),
+            "exe" or "msi" or "msix" or "msixbundle" or "appx" or "bat" or "cmd" => ("\uECAA", Color.FromRgb(0xA7, 0x8B, 0xFA)),
+            _ => ("\uE7C3", Color.FromRgb(0xC8, 0xC8, 0xD0))
+        };
+    }
+
     private FrameworkElement HistoryRow(DownloadEntry e)
     {
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition());
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.Children.Add(new TextBlock
+        // what kind of file it is, in a soft little circle (hidden while the check or the ring is showing)
+        var (kindGlyph, kindColor) = FileKind(e.Path);
+        var glyph = new Grid { Width = 26, Height = 26, VerticalAlignment = VerticalAlignment.Center };
+        glyph.Children.Add(new System.Windows.Shapes.Ellipse { Fill = new SolidColorBrush(Color.FromArgb(0x2E, kindColor.R, kindColor.G, kindColor.B)) });
+        glyph.Children.Add(new TextBlock
         {
-            FontFamily = (FontFamily)FindResource("IconFont"), Text = "", FontSize = 14, Width = 26,
-            Foreground = new SolidColorBrush(Color.FromArgb(0xB3, 255, 255, 255)), VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 10, 0), TextAlignment = TextAlignment.Center
+            FontFamily = (FontFamily)FindResource("IconFont"), Text = kindGlyph, FontSize = 12, Foreground = new SolidColorBrush(kindColor),
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
         });
+        var (badge, paintBadge) = SelBadge(DoneGreen, Color.FromRgb(0x06, 0x26, 0x10));
+        badge.HorizontalAlignment = HorizontalAlignment.Center;
+        badge.VerticalAlignment = VerticalAlignment.Center;
+        var iconCell = new Grid { Margin = new Thickness(0, 0, 10, 0) };
+        iconCell.Children.Add(glyph);
+        iconCell.Children.Add(badge);
+        grid.Children.Add(iconCell);
         var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        texts.Children.Add(new TextBlock { Text = Path.GetFileName(e.Path), FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, TextTrimming = TextTrimming.CharacterEllipsis });
+        texts.Children.Add(new TextBlock { Text = System.IO.Path.GetFileName(e.Path), HorizontalAlignment = HorizontalAlignment.Left, FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, TextTrimming = TextTrimming.CharacterEllipsis });
         texts.Children.Add(new TextBlock
         {
-            Text = FormatBytes(e.Size) + "  ·  " + Ago(e.Finished), FontSize = 10.5,
+            Text = FormatBytes(e.Size) + "  ·  " + Ago(e.Finished), HorizontalAlignment = HorizontalAlignment.Left, FontSize = 10.5,
             Foreground = new SolidColorBrush(Color.FromArgb(0x99, 255, 255, 255))
         });
         Grid.SetColumn(texts, 1);
@@ -742,18 +804,34 @@ public partial class MainWindow
 
         var row = new Border
         {
-            Child = grid, CornerRadius = new CornerRadius(10), Padding = new Thickness(10, 4, 8, 4), Margin = new Thickness(0, 0, 0, 2),
-            Background = Brushes.Transparent, Cursor = Cursors.Hand, Height = 36, ToolTip = Loc.T("dl.open")
+            Child = grid, CornerRadius = new CornerRadius(10), Padding = new Thickness(8.5, 2.5, 6.5, 2.5), Margin = new Thickness(0, 0, 0, 2),
+            BorderThickness = new Thickness(1.5), BorderBrush = Brushes.Transparent, Background = Brushes.Transparent, Cursor = Cursors.Hand, Height = 36, ToolTip = Loc.T("dl.open")
         };
-        row.MouseEnter += (_, _) => row.Background = new SolidColorBrush(Color.FromArgb(0x12, 255, 255, 255));
-        row.MouseLeave += (_, _) => row.Background = Brushes.Transparent;
-        row.MouseLeftButtonUp += (_, ev) =>
+        bool hovering = false, isMarked = false;
+        void Tint() => row.Background = isMarked
+            ? new SolidColorBrush(Color.FromArgb(0x1C, DoneGreen.R, DoneGreen.G, DoneGreen.B))
+            : hovering ? new SolidColorBrush(Color.FromArgb(0x12, 255, 255, 255)) : Brushes.Transparent;
+        row.MouseEnter += (_, _) => { hovering = true; Tint(); };
+        row.MouseLeave += (_, _) => { hovering = false; Tint(); };
+        _dlSel.Items.Add(new SelItem
         {
-            if (ev.OriginalSource is DependencyObject d && FindParent<Button>(d) != null) return;
-            ev.Handled = true;
-            SoundService.Play(Sfx.Click);
-            OpenFile(path);
-        };
+            Path = path,
+            Element = row,
+            WholeIsFile = false,
+            Click = () =>
+            {
+                SoundService.Play(Sfx.Click);
+                OpenFile(path);
+            },
+            Paint = (marked, mode) =>
+            {
+                isMarked = marked;
+                Tint();
+                row.BorderBrush = marked ? new SolidColorBrush(Color.FromArgb(0x99, DoneGreen.R, DoneGreen.G, DoneGreen.B)) : Brushes.Transparent;
+                glyph.Visibility = marked || mode ? Visibility.Hidden : Visibility.Visible;
+                paintBadge(marked, mode);
+            }
+        });
         return row;
     }
 
