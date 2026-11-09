@@ -9,13 +9,47 @@ namespace Notchy;
 
 public partial class App : Application
 {
+    internal const string SingleInstanceName = "Notchy.SingleInstance";
     private Mutex? _mutex;
     private static System.Windows.Forms.NotifyIcon? _tray;
-    private static SettingsWindow? _settingsWindow;
+    private static SettingsWindow? _settingsWindow, _setupWindow;
 
     protected override void OnStartup(StartupEventArgs e)
     {
 #if DEBUG
+        int netTest = Array.IndexOf(e.Args, "--netdiag");
+        if (netTest >= 0 && netTest + 1 < e.Args.Length)
+        {
+            base.OnStartup(e);
+            Dispatcher.InvokeAsync(async () =>
+            {
+                await FastHttp.DiagnoseAsync(e.Args[netTest + 1]);
+                Shutdown();
+            });
+            return;
+        }
+
+        int geminiTest = Array.IndexOf(e.Args, "--geminidiag");
+        if (geminiTest >= 0 && geminiTest + 1 < e.Args.Length)
+        {
+            base.OnStartup(e);
+            Dispatcher.InvokeAsync(async () =>
+            {
+                await GeminiRunner.DiagnoseAsync(e.Args[geminiTest + 1]);
+                Shutdown();
+            });
+            return;
+        }
+
+        int iconTest = Array.IndexOf(e.Args, "--icontest");
+        if (iconTest >= 0 && iconTest + 3 < e.Args.Length)
+        {
+            base.OnStartup(e);
+            DesktopAppIcon.SaveTest(e.Args[iconTest + 1], e.Args[iconTest + 2], e.Args[iconTest + 3]);
+            Shutdown();
+            return;
+        }
+
         int spd = Array.IndexOf(e.Args, "--spdiag");
         if (spd >= 0 && spd + 1 < e.Args.Length)
         {
@@ -97,12 +131,14 @@ public partial class App : Application
         if (!snapshot)
 #endif
         {
-            _mutex = new Mutex(true, "Notchy.SingleInstance", out bool created);
+            _mutex = new Mutex(true, SingleInstanceName, out bool created);
             if (!created)
             {
                 Shutdown();
                 return;
             }
+            if (Array.IndexOf(e.Args, InstallCard.AfterUpdateArg) >= 0) Thread.Sleep(InstallCard.AfterUpdateWaitMs);
+            InstallCard.CleanLeftovers();
         }
 
         base.OnStartup(e);
@@ -126,11 +162,13 @@ public partial class App : Application
         SoundService.Warmup();
 
 #if DEBUG
+        if (Environment.GetEnvironmentVariable("NOTCHY_GEMINI_UI") == "1") AppSettings.Current.ChatUseGemini = true;
         if (snapshot)
         {
             // preview overrides (not saved): NOTCHY_GLOW=0..3, NOTCHY_GRADIENT=0..100
             if (int.TryParse(Environment.GetEnvironmentVariable("NOTCHY_GLOW"), out int glow)) AppSettings.Current.GlowLevel = glow;
             if (int.TryParse(Environment.GetEnvironmentVariable("NOTCHY_GRADIENT"), out int grad)) AppSettings.Current.GradientStrength = grad;
+            if (Environment.GetEnvironmentVariable("NOTCHY_GEMINI_TESTKEY") != null) AppSettings.Current.ChatUseGemini = true;
         }
 
 #endif
@@ -150,6 +188,49 @@ public partial class App : Application
             _ = window.ReplaceSelfTestAsync(e.Args[rt + 1]);
             return;
         }
+        int citytest = Array.IndexOf(e.Args, "--citytest");
+        if (citytest >= 0 && citytest + 1 < e.Args.Length)
+        {
+            Dispatcher.InvokeAsync(async () =>
+            {
+                await System.Threading.Tasks.Task.Delay(1500);
+                OpenSetup();
+                await _setupWindow!.CitySearchTestAsync(e.Args[citytest + 1]);
+                _setupWindow!.Close();
+            });
+        }
+        int setupShots = Array.IndexOf(e.Args, "--setupshots");
+        if (setupShots >= 0 && setupShots + 1 < e.Args.Length)
+        {
+            Dispatcher.InvokeAsync(async () =>
+            {
+                await System.Threading.Tasks.Task.Delay(1500);
+                OpenSetup();
+                await _setupWindow!.SetupShotsAsync(e.Args[setupShots + 1]);
+            });
+        }
+        if (Array.IndexOf(e.Args, "--setupwalk") >= 0)
+        {
+            Dispatcher.InvokeAsync(async () =>
+            {
+                await System.Threading.Tasks.Task.Delay(1500);
+                OpenSetup();
+                await _setupWindow!.SetupWalkAsync();
+            });
+        }
+        int cal = Array.IndexOf(e.Args, "--caltest");
+        if (cal >= 0 && cal + 1 < e.Args.Length)
+        {
+            _ = window.CalendarTestAsync(e.Args[cal + 1]);
+            return;
+        }
+        int upd = Array.IndexOf(e.Args, "--updtest");
+        if (upd >= 0 && upd + 1 < e.Args.Length)
+        {
+            OpenSettings("about");
+            _ = _settingsWindow!.UpdateTestAsync(e.Args[upd + 1]);
+            return;
+        }
 
 #endif
         _tray = CreateTray();
@@ -159,6 +240,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         OsdHider.Restore(); // Windows gets its volume pop-up back
+        QuietMode.OnAppExit(); // ...and its notifications
         if (_tray != null)
         {
             _tray.Visible = false;
@@ -178,6 +260,21 @@ public partial class App : Application
         if (page != null) _settingsWindow.ShowPage(page);
         if (_settingsWindow.WindowState == WindowState.Minimized) _settingsWindow.WindowState = WindowState.Normal;
         _settingsWindow.Activate();
+    }
+
+    /// <summary>The assistant of the first opening (it can also be opened again from the settings).</summary>
+    public static void OpenSetup()
+    {
+        if (_setupWindow == null || !_setupWindow.IsLoaded)
+        {
+            _setupWindow = new SettingsWindow(setup: true);
+            _setupWindow.Closed += (_, _) => _setupWindow = null;
+            _setupWindow.Show();
+        }
+        // Windows opens it behind the app in use when Notchy isn't in front: this brings it up once, without keeping it on top
+        _setupWindow.Topmost = true;
+        _setupWindow.Activate();
+        _setupWindow.Topmost = false;
     }
 
     public static void Notify(string title, string text)

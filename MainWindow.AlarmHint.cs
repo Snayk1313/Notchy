@@ -77,8 +77,10 @@ public partial class MainWindow
     {
         get
         {
-            if (_compactMode != CompactMode.Music || !_alarmHas || _musicSoon == null) return 0;
-            return AlarmHintGap + AlarmBellSize + (_alarmSoon == null ? 0 : AlarmTimeGap + MeasureText(_musicSoon, _alarmSoon));
+            if (_compactMode != CompactMode.Music || (!_alarmHas && _calSign == null) || _musicSoon == null) return 0;
+            double extra = AlarmHintGap + (_calSign != null ? CalDotSize + CalDotGap : 0);
+            if (_alarmHas) extra += AlarmBellSize + (_alarmSoon == null ? 0 : AlarmTimeGap + MeasureText(_musicSoon, _alarmSoon));
+            return extra;
         }
     }
 
@@ -119,7 +121,8 @@ public partial class MainWindow
             t.Text = soon ?? "";
             t.Visibility = soon == null ? Visibility.Collapsed : Visibility.Visible;
         }
-        CompactAlarm.Visibility = has && _compactMode == CompactMode.Music ? Visibility.Visible : Visibility.Collapsed;
+        _musicBell.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
+        CompactAlarm.Visibility = (has || _calSign != null) && _compactMode == CompactMode.Music ? Visibility.Visible : Visibility.Collapsed;
         IdlePanel.Width = IdleWidth;
         if (!changed) return;
         if (_state == IslandState.Idle) AnimateIslandSize(TargetSize(IslandState.Idle), bigMove: false);

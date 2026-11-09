@@ -5,7 +5,7 @@ using Velopack.Sources;
 
 namespace Notchy;
 
-public enum UpdateStatus { NotInstalled, UpToDate, Ready, Error }
+public enum UpdatePhase { Idle, Checking, Retrying, Found, Downloading, Ready, Error }
 
 /// <summary>
 /// Auto-update through GitHub Releases (Velopack). Every push to the repository builds a new release
@@ -33,8 +33,37 @@ public static class Updater
     public static UpdateInfo? Pending { get; private set; }
     public static string? PendingVersion => Pending?.TargetFullRelease.Version.ToString();
 
+    /// <summary>How many times a failed check is repeated before giving up (GitHub sometimes answers 504).</summary>
+    public const int MaxRetries = 3;
+
+    public static UpdatePhase Phase { get; private set; }
+    /// <summary>Which retry is running, from 1 to <see cref="MaxRetries"/>, while <see cref="Phase"/> is Retrying.</summary>
+    public static int Retry { get; private set; }
+    public static int Progress { get; private set; }
+    public static string? TargetVersion { get; private set; }
+    public static long TotalBytes { get; private set; }
+    /// <summary>True when the last failure happened while downloading, not while looking for a version.</summary>
+    public static bool DownloadFailed { get; private set; }
+
     /// <summary>Raised (on a worker thread) when an update has been downloaded and is ready to apply.</summary>
     public static event Action? Ready;
+
+    /// <summary>Raised (on any thread) whenever the phase or the progress changes.</summary>
+    public static event Action? Changed;
+
+    public static string Megabytes(long bytes) => $"{Math.Max(1, Math.Round(bytes / 1048576d)):0} MB";
+
+    /// <summary>An old failure means nothing to someone only now opening the page.</summary>
+    public static void ForgetError()
+    {
+        if (Phase == UpdatePhase.Error) Phase = UpdatePhase.Idle;
+    }
+
+    private static void Set(UpdatePhase phase)
+    {
+        Phase = phase;
+        Changed?.Invoke();
+    }
 
     private static UpdateManager? Manager
     {
@@ -44,7 +73,7 @@ public static class Updater
             if (RepoUrl == null) return null; // local build: no repository to update from
             try
             {
-                _mgr = new UpdateManager(new GithubSource(RepoUrl, null, false));
+                _mgr = new UpdateManager(new GithubSource(RepoUrl, null, false, new FastUpdateDownloader()));
             }
             catch
             {
@@ -82,26 +111,38 @@ public static class Updater
     }
 
     /// <summary>Looks for a newer release and downloads it. Safe to call often; does nothing while busy.</summary>
-    public static async Task<UpdateStatus> CheckAndDownloadAsync()
+    public static async Task CheckAndDownloadAsync()
     {
-        if (!IsInstalled) return UpdateStatus.NotInstalled;
-        if (Pending != null) return UpdateStatus.Ready;
-        if (_busy) return UpdateStatus.UpToDate;
+        if (!IsInstalled || Pending != null || _busy) return;
         _busy = true;
         try
         {
             var mgr = Manager!;
-            var info = await mgr.CheckForUpdatesAsync().ConfigureAwait(false);
-            if (info == null) return UpdateStatus.UpToDate;
-            await mgr.DownloadUpdatesAsync(info).ConfigureAwait(false);
+            DownloadFailed = false;
+            Set(UpdatePhase.Checking);
+            var info = await CheckWithRetriesAsync(mgr).ConfigureAwait(false);
+            if (info == null)
+            {
+                Set(UpdatePhase.Idle);
+                return;
+            }
+            TargetVersion = info.TargetFullRelease.Version.ToString();
+            TotalBytes = DownloadSize(info);
+            Progress = 0;
+            Set(UpdatePhase.Found);
+            await Task.Delay(FoundNoticeMs).ConfigureAwait(false); // long enough to read that one was found
+            DownloadFailed = true;
+            Set(UpdatePhase.Downloading);
+            await mgr.DownloadUpdatesAsync(info, SetProgress).ConfigureAwait(false);
             Pending = info;
+            Progress = 100;
+            Set(UpdatePhase.Ready);
             Ready?.Invoke();
-            return UpdateStatus.Ready;
         }
         catch (Exception ex)
         {
             App.Log(ex);
-            return UpdateStatus.Error;
+            Set(UpdatePhase.Error);
         }
         finally
         {
@@ -109,13 +150,94 @@ public static class Updater
         }
     }
 
+    private const int FoundNoticeMs = 1500;
+
+    private static async Task<UpdateInfo?> CheckWithRetriesAsync(UpdateManager mgr)
+    {
+        for (int done = 0; ; done++)
+        {
+            try
+            {
+                return await mgr.CheckForUpdatesAsync().ConfigureAwait(false);
+            }
+            catch (Exception) when (done < MaxRetries)
+            {
+                Retry = done + 1;
+                Set(UpdatePhase.Retrying);
+                await Task.Delay(TimeSpan.FromSeconds(2 << done)).ConfigureAwait(false); // 2 s, 4 s, 8 s
+            }
+        }
+    }
+
+    /// <summary>What will really be downloaded: the small delta packages when they exist, otherwise the full package.</summary>
+    private static long DownloadSize(UpdateInfo info)
+    {
+        long deltas = 0;
+        foreach (var d in info.DeltasToTarget) deltas += d.Size;
+        long full = info.TargetFullRelease.Size;
+        return deltas > 0 && deltas < full ? deltas : full;
+    }
+
+    private static void SetProgress(int percent)
+    {
+        if (percent == Progress) return;
+        Progress = percent;
+        Changed?.Invoke();
+    }
+
+#if DEBUG
+    /// <summary>Debug builds aren't installed, so the page's states can only be seen by acting them out.</summary>
+    public static async Task SimulateAsync(string scenario)
+    {
+        if (_busy) return;
+        _busy = true;
+        Pending = null;
+        DownloadFailed = false;
+        Progress = 0;
+        Set(UpdatePhase.Checking);
+        await Task.Delay(1400);
+        if (scenario == "found")
+        {
+            TargetVersion = "2.2.7";
+            TotalBytes = 62L * 1048576;
+            Set(UpdatePhase.Found);
+            await Task.Delay(FoundNoticeMs);
+            DownloadFailed = true;
+            Set(UpdatePhase.Downloading);
+            for (int i = 1; i <= 100; i++)
+            {
+                SetProgress(i);
+                await Task.Delay(i % 13 == 0 ? 150 : 55);
+            }
+            Set(UpdatePhase.Ready);
+        }
+        else if (scenario == "flaky")
+        {
+            for (Retry = 1; Retry <= MaxRetries; Retry++)
+            {
+                Set(UpdatePhase.Retrying);
+                await Task.Delay(1700);
+            }
+            Set(UpdatePhase.Error);
+        }
+        else
+        {
+            Set(UpdatePhase.Idle);
+        }
+        _busy = false;
+    }
+#endif
+
     /// <summary>Closes Notchy, installs the downloaded version and starts it again.</summary>
     public static void ApplyAndRestart()
     {
         if (Pending == null || Manager == null) return;
         try
         {
-            Manager.ApplyUpdatesAndRestart(Pending.TargetFullRelease);
+            var target = Pending.TargetFullRelease;
+            bool card = InstallCard.Show(target.Version.ToString(), target.FileName); // no card: the updater shows its own window
+            Manager.WaitExitThenApplyUpdates(target, silent: card, restart: true, new[] { InstallCard.AfterUpdateArg });
+            Environment.Exit(0);
         }
         catch (Exception ex)
         {
@@ -140,6 +262,7 @@ public static class Updater
                 {
                     try { StartupManager.SetEnabled(false); } catch { }
                     try { if (ClaudeHooks.IsInstalled) ClaudeHooks.Uninstall(); } catch { }
+                    try { QuietMode.Undo(); } catch { }
                 })
                 .Run();
         }

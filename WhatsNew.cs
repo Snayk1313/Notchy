@@ -10,7 +10,7 @@ namespace Notchy;
 public static class WhatsNew
 {
     /// <summary>The version these notes are for (major.minor).</summary>
-    public const string Version = "2.1";
+    public const string Version = "2.2";
 
     public sealed record Highlight(string Art, Color Color, string TagPt, string TagEn, string TitlePt, string TitleEn, string TextPt, string TextEn)
     {
@@ -27,132 +27,101 @@ public static class WhatsNew
 
     public static readonly Highlight[] Highlights =
     {
-        new("clock", Color.FromRgb(0x7F, 0xD0, 0xFF), "Novo", "New", "Timer e alarmes", "Timers and alarms",
-            "Nova aba Relógio, com vários timers, alarmes que se repetem e um sininho na ilha.",
-            "A new Clock tab, with several timers, repeating alarms and a little bell on the island."),
-        new("level", Color.FromRgb(0xFF, 0xD3, 0x6B), "Novo", "New", "Volume e brilho", "Volume and brightness",
-            "O volume agora aparece na própria ilha, no lugar do aviso do Windows, com brilho e troca de saída de áudio.",
-            "Volume now shows on the island itself, instead of Windows' pop-up, with brightness and switching audio outputs."),
-        new("buds", Color.FromRgb(0x5E, 0xD6, 0x7D), "Novo", "New", "Fones Bluetooth", "Bluetooth earbuds",
-            "Ao conectar os fones, a ilha mostra o nome e a bateria, e avisa quando ela estiver acabando.",
-            "When you connect your earbuds, the island shows their name and battery, and warns you when it's running out."),
-        new("weather", Color.FromRgb(0x7C, 0xC8, 0xFF), "Novo", "New", "Clima", "Weather",
-            "Um novo cartão na tela inicial, com a temperatura de agora e a previsão de 3 dias.",
-            "A new card on the home screen, with the current temperature and a 3-day forecast."),
-        new("notices", Color.FromRgb(0xFF, 0x7E, 0xB6), "Novo", "New", "Notificações", "Notifications",
-            "Mensagens do WhatsApp, Discord e Telegram descem da ilha com a foto de quem mandou. Clique para abrir a conversa.",
-            "WhatsApp, Discord and Telegram messages drop from the island with the sender's photo. Click to open the chat."),
+        new("calendar", Color.FromRgb(0x7C, 0xC8, 0xFF), "Novo", "New", "Calendário", "Calendar",
+            "Clique na data da ilha para ver o mês, criar eventos com aviso e acompanhar feriados e aniversários.",
+            "Click the date on the island to see the month, create events with reminders and follow holidays and birthdays."),
+        new("chat", Color.FromRgb(0xFF, 0xAA, 0x4C), "Novo", "New", "Chat grátis", "Free Chat",
+            "O Notchy Chat agora também funciona com o Gemini, usando uma chave grátis do Google.",
+            "Notchy Chat now also works with Gemini, using a free key from Google."),
+        new("notices", Color.FromRgb(0xFF, 0x7E, 0xB6), "Novo", "New", "Notificações só no Notchy", "Notifications only on Notchy",
+            "Avisos e sons do Windows ficam em silêncio e tudo aparece na ilha, até em tela cheia, com um som próprio.",
+            "Windows' pop-ups and sounds stay quiet and everything shows on the island, even in full screen, with its own sound."),
+        new("settings", Color.FromRgb(0xA7, 0x8B, 0xFA), "Melhor", "Better", "Configurações organizadas", "Tidier settings",
+            "Novas abas para Notificações, Calendário e clima, Som e dispositivos e Notchy Chat.",
+            "New tabs for Notifications, Calendar and weather, Sound and devices and Notchy Chat."),
     };
 
     public static readonly Section[] Sections =
     {
-        new("Relógio (novo)", "Clock (new)",
+        new("Calendário (novo)", "Calendar (new)",
             new[]
             {
-                "Nova aba Relógio, com páginas de Timer e Alarmes.",
-                "Vários timers ao mesmo tempo, com a contagem na ilha.",
-                "Alarmes com repetição por dia da semana e ajuste de 1 em 1 minuto.",
-                "Quando toca, a ilha cresce e chama você, com opção de adiar.",
-                "Com um alarme ligado, um sininho fica na ilha. Quando faltam 10 minutos, o horário aparece por 15 segundos.",
-                "Volume próprio para o alarme, em Configurações → Sons."
+                "Clique na data da ilha para abrir o calendário, com os eventos do dia e os próximos.",
+                "Eventos com repetição, aviso antes, lembrar de novo e cores por tipo.",
+                "Aniversários com idade, feriados do Brasil e festinha com confete.",
+                "Clique no mês ou no ano para pular rapidamente de data."
             },
             new[]
             {
-                "A new Clock tab, with Timer and Alarms pages.",
-                "Several timers at once, counting down on the island.",
-                "Alarms that repeat by day of the week, set minute by minute.",
-                "When one rings, the island grows and calls you, with a snooze option.",
-                "With an alarm on, a little bell stays on the island. With 10 minutes left, its time shows for 15 seconds.",
-                "A volume of its own for the alarm, in Settings → Sounds."
+                "Click the date on the island to open the calendar, with today's and upcoming events.",
+                "Events with repeats, early reminders, snooze and colors by type.",
+                "Birthdays with age, Brazilian holidays and a little confetti party.",
+                "Click the month or the year to jump quickly to a date."
             }),
-        new("Volume e brilho (novo)", "Volume and brightness (new)",
+        new("Notchy Chat", "Notchy Chat",
             new[]
             {
-                "Novo indicador de volume na própria ilha, no lugar do aviso do Windows (dá para desligar nas Configurações).",
-                "Brilho na ilha, em notebooks e monitores compatíveis.",
-                "Troque o dispositivo de áudio direto pela ilha."
+                "Opção de usar o Gemini com uma chave grátis do Google, para quem não tem o Claude Code.",
+                "Aba própria nas Configurações, com quem responde e o idioma da tradução."
             },
             new[]
             {
-                "A new volume indicator on the island itself, instead of Windows' pop-up (you can turn it off in Settings).",
-                "Brightness on the island, on laptops and compatible monitors.",
-                "Switch audio devices right from the island."
+                "An option to use Gemini with a free key from Google, for those without Claude Code.",
+                "A tab of its own in Settings, with who answers and the translation language."
             }),
-        new("Fones Bluetooth (novo)", "Bluetooth earbuds (new)",
+        new("Notificações", "Notifications",
             new[]
             {
-                "Ao conectar os fones, a ilha mostra o nome e a bateria.",
-                "Aviso com brilho vermelho pulsando quando a bateria está baixa."
+                "Nova opção Só no Notchy: o aviso e o som do Windows somem, e as notificações continuam na central.",
+                "O cartão pode aparecer em tela cheia, com o mesmo fundo da ilha.",
+                "Som próprio para notificações, com opção de ligar e desligar.",
+                "Programas como o Lightshot agora mostram o ícone."
             },
             new[]
             {
-                "When you connect your earbuds, the island shows their name and battery.",
-                "A pulsing red glow warns you when the battery is low."
+                "A new Only on Notchy option: Windows' pop-up and sound go away, and notifications stay in the notification center.",
+                "The card can show in full screen, with the same background as the island.",
+                "A sound of its own for notifications, which you can turn on and off.",
+                "Programs like Lightshot now show their icon."
             }),
-        new("Clima (novo)", "Weather (new)",
+        new("Instalação e atualização", "Installing and updating",
             new[]
             {
-                "Novo cartão na tela inicial, com a temperatura de agora.",
-                "Previsão de 3 dias.",
-                "Use a localização do Windows ou escolha a cidade manualmente."
+                "Quem instala do zero agora tem um assistente com idioma, aparência, notificações e mais. Dá para abrir de novo em Configurações → Geral.",
+                "O download das atualizações mostra versão, tamanho e progresso em Configurações → Sobre.",
+                "A partir da próxima atualização, a instalação aparece num cartão no estilo do Notchy."
             },
             new[]
             {
-                "A new card on the home screen, with the current temperature.",
-                "A 3-day forecast.",
-                "Use Windows' location or pick the city yourself."
-            }),
-        new("Notificações (novo)", "Notifications (new)",
-            new[]
-            {
-                "As mensagens do WhatsApp, Discord, Telegram e outros apps descem da ilha, com a foto de quem mandou.",
-                "Clique para abrir direto na conversa (no Discord, a conversa abre no primeiro clique; nos seguintes, abre só o app).",
-                "Histórico das notificações na ilha, pelo sininho.",
-                "Escolha quais apps aparecem nas Configurações."
-            },
-            new[]
-            {
-                "Messages from WhatsApp, Discord, Telegram and other apps drop from the island, with the sender's photo.",
-                "Click to go straight to the chat (on Discord, the chat opens on the first click; after that, just the app).",
-                "A history of your notifications on the island, behind the bell.",
-                "Choose which apps show up in Settings."
-            }),
-        new("Prateleira e Downloads", "Shelf and Downloads",
-            new[]
-            {
-                "Arraste vários arquivos de uma vez: Ctrl + clique, Shift + clique, botão Selecionar ou laço.",
-                "Agora dá para arrastar os arquivos do histórico de Downloads para qualquer lugar.",
-                "Ícones coloridos por tipo de arquivo nos Downloads."
-            },
-            new[]
-            {
-                "Drag several files at once: Ctrl + click, Shift + click, the Select button or a lasso.",
-                "You can now drag files from the Downloads history anywhere.",
-                "Colored icons by file type in Downloads."
-            }),
-        new("Menus", "Menus",
-            new[]
-            {
-                "Novo menu da ilha em subpáginas: saída de áudio, fila do Spotify e clima.",
-                "Novo menu na bandeja do sistema."
-            },
-            new[]
-            {
-                "A new island menu with sub-pages: audio output, Spotify queue and weather.",
-                "A new system tray menu."
+                "New installs get an assistant with language, look, notifications and more. You can open it again in Settings → General.",
+                "Update downloads show the version, size and progress in Settings → About.",
+                "From the next update on, installing shows in a card in Notchy's own style."
             }),
         new("Melhorias", "Improvements",
             new[]
             {
-                "Com música tocando, a ilha abre direto no player. Para abrir um download ou o Claude, clique na bolha dele.",
-                "O player mostra a duração total da música.",
-                "Aba Foco com nome em português e novo ícone."
+                "Pílula na página de clima para atualizar na hora, mostrando há quanto tempo foi atualizado.",
+                "Configurações reorganizadas em abas por assunto.",
+                "Clima, Spotify, letras e atualizações conectam mais rápido em redes com IPv6 lento."
             },
             new[]
             {
-                "With music playing, the island opens on the player. To open a download or Claude, click its bubble.",
-                "The player shows the song's total length.",
-                "The Focus tab has a new icon."
+                "A pill on the weather page to refresh right away, showing how long ago it was updated.",
+                "Settings reorganized into tabs by subject.",
+                "Weather, Spotify, lyrics and updates connect faster on networks with slow IPv6."
+            }),
+        new("Correções", "Fixes",
+            new[]
+            {
+                "Pedidos de permissão do Claude não ficam mais escondidos atrás de outro chat.",
+                "Downloads pequenos que terminam antes de você escolher a pasta agora contam como concluídos.",
+                "Erros de atualização tentam de novo sozinhos e explicam o que houve."
+            },
+            new[]
+            {
+                "Claude's permission requests no longer hide behind another chat.",
+                "Small downloads that finish before you pick the folder now count as completed.",
+                "Update errors retry on their own and explain what happened."
             }),
     };
 }

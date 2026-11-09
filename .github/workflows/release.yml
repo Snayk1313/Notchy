@@ -65,6 +65,11 @@ jobs:
           --packDir publish --mainExe Notchy.exe --packTitle Notchy --packAuthors Notchy
           --icon Notchy.ico --releaseNotes notes.md
 
+      - name: Notchy's own installer around the setup (if this fails, the regular setup is published)
+        continue-on-error: true
+        shell: pwsh
+        run: ./UpdateCard/wrap-setup.ps1 -PackId ${{ env.PACK_ID }} -Version ${{ steps.ver.outputs.version }}
+
       - name: Publish GitHub Release
         run: >
           vpk upload github --repoUrl https://github.com/${{ github.repository }}

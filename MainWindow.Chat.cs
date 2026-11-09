@@ -27,7 +27,9 @@ public partial class MainWindow
 
     private enum ChatView { Idle, Answer }
 
-    private ClaudeRunner? _runner;
+    private ClaudeRunner? _claudeRunner;
+    private GeminiRunner? _geminiRunner;
+    private IChatRunner? _runner => S.ChatUseGemini ? _geminiRunner : _claudeRunner;
     private ChatView _chatView = ChatView.Idle;
     private CapturedText? _ctxText;
     private string? _ctxImage;
@@ -63,13 +65,17 @@ public partial class MainWindow
 
     private void InitChat()
     {
-        _runner = new ClaudeRunner(Dispatcher);
-        _runner.TextChanged += t =>
+        _claudeRunner = new ClaudeRunner(Dispatcher);
+        _geminiRunner = new GeminiRunner(Dispatcher);
+        foreach (IChatRunner runner in new IChatRunner[] { _claudeRunner, _geminiRunner })
         {
-            _answer = t;
-            RenderAnswer(t, streaming: true);
-        };
-        _runner.Finished += OnChatFinished;
+            runner.TextChanged += t =>
+            {
+                _answer = t;
+                RenderAnswer(t, streaming: true);
+            };
+            runner.Finished += OnChatFinished;
+        }
 
         ChatTab.RowDefinitions.Add(new RowDefinition());
         ChatTab.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -778,6 +784,7 @@ public partial class MainWindow
     };
 
     private string SystemPrompt => Loc.F("chat.system", S.Language == "en" ? "English" : "português do Brasil");
+    private string FreeSystemPrompt => Loc.F("chat.system.free", S.Language == "en" ? "English" : "português do Brasil");
 
     private async void RunChatAction(string action, string question)
     {
@@ -807,7 +814,7 @@ public partial class MainWindow
                 "summarize" => Loc.T("chat.pi.summarize"),
                 _ => Loc.F("chat.pi.ask", question)
             };
-            prompt.Append(Loc.F("chat.pi.open", System.IO.Path.GetFileName(_ctxImage))).Append("\n\n").Append(task);
+            prompt.Append(S.ChatUseGemini ? Loc.T("chat.pi.attached") : Loc.F("chat.pi.open", System.IO.Path.GetFileName(_ctxImage))).Append("\n\n").Append(task);
         }
         else
         {
@@ -837,7 +844,7 @@ public partial class MainWindow
         _replaceButton.Visibility = Visibility.Collapsed;
         SetChatView(ChatView.Answer);
 
-        _runner.Run(prompt.ToString(), SystemPrompt, followUp);
+        _runner.Run(prompt.ToString(), S.ChatUseGemini ? FreeSystemPrompt : SystemPrompt, followUp, includeContext ? _ctxImage : null);
     }
 
     private void OnChatFinished(string text, bool isError)

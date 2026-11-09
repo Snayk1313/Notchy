@@ -18,7 +18,7 @@ namespace Notchy;
 /// and smile when you turn something on), a search box and one category per feature, each in the colour of
 /// its tab on the island. Built in code so it can be rebuilt on language change.
 /// </summary>
-public sealed class SettingsWindow : Window
+public sealed partial class SettingsWindow : Window
 {
     private static readonly Color Bg = Color.FromRgb(0x12, 0x13, 0x17);
     private static readonly Color Side = Color.FromRgb(0x0B, 0x0C, 0x0F);
@@ -33,12 +33,14 @@ public sealed class SettingsWindow : Window
     {
         new("general", "", false, Color.FromRgb(0xE6, 0xE6, 0xEE)),
         new("look", "", false, Color.FromRgb(0xA7, 0x8B, 0xFA)),
-        new("behave", "", false, Color.FromRgb(0x7C, 0xC8, 0xFF)),
+        new("notif", "\uEA8F", false, Color.FromRgb(0xFF, 0x7A, 0x7A)),
+        new("sounds", "", false, Color.FromRgb(0xFF, 0xD3, 0x6B)),
         new("music", "", false, Color.FromRgb(0xFF, 0x7E, 0xB6)),
-        new("claude", "✻", true, Color.FromRgb(0xE8, 0x82, 0x5F)),
+        new("calendar", "\uE787", false, Color.FromRgb(0x7C, 0xC8, 0xFF)),
         new("focus", "", false, Color.FromRgb(0xB7, 0x9C, 0xFF)),
         new("files", "", false, Color.FromRgb(0x5E, 0xD6, 0x7D)),
-        new("sounds", "", false, Color.FromRgb(0xFF, 0xD3, 0x6B)),
+        new("claude", "✻", true, Color.FromRgb(0xE8, 0x82, 0x5F)),
+        new("chat", "", false, Color.FromRgb(0xFF, 0xAA, 0x4C)),
         new("about", "", false, Color.FromRgb(0x9A, 0xA3, 0xB5)),
     };
 
@@ -60,22 +62,29 @@ public sealed class SettingsWindow : Window
     private readonly ScaleTransform _eyesBlink = new(1, 1);
     private readonly List<Rectangle> _eyes = new();
     private readonly List<Path> _smiles = new();
-    private readonly DispatcherTimer _eyesTimer = new() { Interval = TimeSpan.FromMilliseconds(16) };
+    private const double SideGlowRoom = 8, EyesFollowSeconds = 0.06, EyesMaxFrameSeconds = 0.05;
+    private readonly DropShadowEffect _eyesGlow = new() { ShadowDepth = 0, BlurRadius = 8, Opacity = 0.9 };
+    private TimeSpan _eyesLastFrame;
     private FrameworkElement? _eyesPill;
     private DateTime _joyUntil;
 
     // search: while a page is built for the results, every row is collected here
     private List<(Grid row, string text)>? _collect;
 
+    // the "Sobre" page's update row: repainted whenever Updater changes
+    private Action? _paintUpdate;
+    private UpdatePhase _lastUpdatePhase = Updater.Phase;
+
     /// <summary>Everything is drawn this much bigger, for comfortable reading.</summary>
     private const double Scale = 1.2;
 
-    public SettingsWindow()
+    public SettingsWindow(bool setup = false)
     {
+        _setup = setup;
         Title = "Notchy";
         var area = SystemParameters.WorkArea;
-        Width = Math.Min(920 * Scale, area.Width - 40);
-        Height = Math.Min(640 * Scale, area.Height - 40);
+        Width = Math.Min((setup ? 700 : 920) * Scale, area.Width - 40);
+        Height = Math.Min((setup ? 590 : 640) * Scale, area.Height - 40);
         MinWidth = 680;
         MinHeight = 440;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -105,16 +114,22 @@ public sealed class SettingsWindow : Window
         sideGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         sideGrid.RowDefinitions.Add(new RowDefinition());
         sideGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        sideGrid.Children.Add(Brand());
-        var search = SearchBox();
-        Grid.SetRow(search, 1);
-        sideGrid.Children.Add(search);
-        var itemsScroll = new ScrollViewer { Content = _sideItems, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FocusVisualStyle = null };
+        sideGrid.Children.Add(setup ? SetupBrand() : Brand());
+        if (!setup)
+        {
+            var search = SearchBox();
+            Grid.SetRow(search, 1);
+            sideGrid.Children.Add(search);
+        }
+        // (the scroll area clips at its own edge: this extra room keeps the selected icon's glow whole, and nothing moves on screen)
+        _sideItems.Margin = new Thickness(SideGlowRoom, SideGlowRoom, SideGlowRoom, 0);
+        var itemsScroll = new ScrollViewer { Content = _sideItems, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FocusVisualStyle = null,
+            Margin = new Thickness(-SideGlowRoom, -SideGlowRoom, -SideGlowRoom, 0) };
         Grid.SetRow(itemsScroll, 2);
         sideGrid.Children.Add(itemsScroll);
         var version = new TextBlock { Text = "Notchy " + Updater.CurrentVersion, FontSize = 10.5, Foreground = Dim(0x44), Margin = new Thickness(10, 8, 0, 0) };
         Grid.SetRow(version, 3);
-        sideGrid.Children.Add(version);
+        if (!setup) sideGrid.Children.Add(version);
         side.Child = sideGrid;
         root.Children.Add(side);
 
@@ -126,11 +141,27 @@ public sealed class SettingsWindow : Window
         {
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             Content = _pageHost,
-            Padding = new Thickness(34, 0, 34, 30),
             FocusVisualStyle = null
         };
-        Grid.SetRow(_scroll, 1);
+        // The scroll area clips at its own edge, so the margins go inside it: the glows have room and nothing moves on screen
+        Grid.SetRowSpan(_scroll, 2);
+        _scroll.Margin = new Thickness(0, 16, 0, 0);
+        _pageHost.Margin = new Thickness(34, 24, 34, 30);
+        _scroll.Loaded += (_, _) =>
+        {
+            // ...but the scroll bar stays clear of the window's buttons
+            if (_scroll.Template?.FindName("PART_VerticalScrollBar", _scroll) is FrameworkElement bar) bar.Margin = new Thickness(0, 24, 0, 0);
+        };
         content.Children.Add(_scroll);
+        if (setup)
+        {
+            content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            Grid.SetRow(_setupFoot, 2);
+            content.Children.Add(_setupFoot);
+            content.Children.Insert(0, BuildSetupAura());
+            content.ClipToBounds = true;
+            BuildSetupFoot();
+        }
         Grid.SetColumn(content, 1);
         root.Children.Add(content);
 
@@ -147,15 +178,24 @@ public sealed class SettingsWindow : Window
 
         AppSettings.Changed += OnSettingsChanged;
         Cheer += OnCheer;
-        _eyesTimer.Tick += (_, _) => AnimateEyes();
-        _eyesTimer.Start();
+        Updater.Changed += OnUpdaterChanged;
+        CompositionTarget.Rendering += OnEyesFrame;
+        if (setup) InitSetup();
         Closed += (_, _) =>
         {
             AppSettings.Changed -= OnSettingsChanged;
             Cheer -= OnCheer;
-            _eyesTimer.Stop();
+            Updater.Changed -= OnUpdaterChanged;
+            CompositionTarget.Rendering -= OnEyesFrame;
         };
     }
+
+    private void OnUpdaterChanged() => Dispatcher.BeginInvoke(() =>
+    {
+        if (Updater.Phase == UpdatePhase.Ready && _lastUpdatePhase == UpdatePhase.Downloading) RaiseCheer();
+        _lastUpdatePhase = Updater.Phase;
+        _paintUpdate?.Invoke();
+    });
 
     private void OnSettingsChanged()
     {
@@ -190,7 +230,8 @@ public sealed class SettingsWindow : Window
             _eyes.Add(eye);
             _smiles.Add(smile);
         }
-        look.Effect = new DropShadowEffect { ShadowDepth = 0, BlurRadius = 8, Opacity = 0.9 };
+        // on the part that stays still: an element with an effect moves in whole pixels, so the eyes would go in little jumps
+        eyes.Effect = _eyesGlow;
         eyes.Children.Add(look);
         var pill = new Border
         {
@@ -214,14 +255,25 @@ public sealed class SettingsWindow : Window
         var b = new SolidColorBrush(_accent);
         foreach (var e in _eyes) e.Fill = b;
         foreach (var s in _smiles) s.Stroke = b;
-        if (_eyes.Count > 0 && _eyes[0].Parent is FrameworkElement cell && cell.Parent is StackPanel look && look.Effect is DropShadowEffect glow)
-            glow.Color = _accent;
+        _eyesGlow.Color = _accent;
     }
 
-    private void OnCheer() => _joyUntil = DateTime.Now.AddMilliseconds(750);
+    private void OnCheer()
+    {
+        _joyUntil = DateTime.Now.AddMilliseconds(750);
+        if (_setup) Island?.SetupCheer();
+    }
 
     /// <summary>Eyes follow the mouse, blink now and then, and smile (^ ^) for a moment after something's turned on.</summary>
-    private void AnimateEyes()
+    private void OnEyesFrame(object? sender, EventArgs e)
+    {
+        if (e is not RenderingEventArgs frame || frame.RenderingTime == _eyesLastFrame) return; // (raised more than once per frame sometimes)
+        double seconds = Math.Min((frame.RenderingTime - _eyesLastFrame).TotalSeconds, EyesMaxFrameSeconds);
+        _eyesLastFrame = frame.RenderingTime;
+        AnimateEyes(seconds);
+    }
+
+    private void AnimateEyes(double seconds)
     {
         if (_eyesPill == null || !IsVisible) return;
         bool joy = DateTime.Now < _joyUntil;
@@ -239,8 +291,9 @@ public sealed class SettingsWindow : Window
         {
             // not on screen yet
         }
-        _eyesLook.X += (tx - _eyesLook.X) * 0.25;
-        _eyesLook.Y += (ty - _eyesLook.Y) * 0.25;
+        double follow = 1 - Math.Exp(-seconds / EyesFollowSeconds); // the same speed at any frame rate
+        _eyesLook.X += (tx - _eyesLook.X) * follow;
+        _eyesLook.Y += (ty - _eyesLook.Y) * follow;
         double t = Environment.TickCount64 / 1000.0;
         _eyesBlink.ScaleY = t % 4.3 < 0.13 ? 0.15 : 1;
     }
@@ -290,6 +343,7 @@ public sealed class SettingsWindow : Window
         panel.Children.Add(Caption("", () => WindowState = WindowState.Minimized));
         panel.Children.Add(Caption("", () => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized));
         panel.Children.Add(Caption("", Close, close: true));
+        if (_setup) panel.Children.RemoveAt(1); // the assistant has a fixed size: no maximize
         return panel;
     }
 
@@ -310,6 +364,11 @@ public sealed class SettingsWindow : Window
 
     private void BuildSidebar()
     {
+        if (_setup)
+        {
+            BuildSetupSidebar();
+            return;
+        }
         if (_sideSub != null) _sideSub.Text = Loc.T("set.title");
         if (_searchHint != null) _searchHint.Text = Loc.T("s.search");
         _sideItems.Children.Clear();
@@ -377,6 +436,11 @@ public sealed class SettingsWindow : Window
 
     private void ShowPage(string key, bool animate)
     {
+        if (_setup)
+        {
+            ShowSetupStep(animate);
+            return;
+        }
         key = key switch { "island" => "look", "spotify" => "music", _ => key }; // old names
         if (Categories.All(c => c.Key != key)) key = "general";
         _page = key;
@@ -392,9 +456,11 @@ public sealed class SettingsWindow : Window
     private StackPanel BuildPage(string key) => key switch
     {
         "look" => LookPage(),
-        "behave" => BehavePage(),
+        "notif" => NoticesPage(),
+        "calendar" => CalendarPage(),
         "music" => MusicPage(),
         "claude" => ClaudePage(),
+        "chat" => ChatPage(),
         "focus" => FocusPage(),
         "files" => FilesPage(),
         "sounds" => SoundsPage(),
@@ -539,11 +605,7 @@ public sealed class SettingsWindow : Window
             Segmented(new[] { ("pt", "Português"), ("en", "English") }, S.Language, v => { S.Language = v; Loc.Language = v; }));
         Row(main, Loc.T("s.startup"), Loc.T("s.startup.d"), new Switch(StartupManager.IsEnabled, StartupManager.SetEnabled, _accent));
         Row(main, Loc.T("s.game"), Loc.T("s.game.d"), Toggle(S.GameMode, v => S.GameMode = v));
-
-        var bat = Section(p, Loc.T("s.sec.battery"));
-        Row(bat, Loc.T("s.bat"), Loc.T("s.bat.d"), Toggle(S.BatteryAlerts, v => S.BatteryAlerts = v));
-        Row(bat, Loc.T("s.batlow"), Loc.T("s.batlow.d"),
-            Segmented(new[] { (10, "10%"), (15, "15%"), (20, "20%"), (30, "30%") }, S.BatteryLowPercent, v => S.BatteryLowPercent = v));
+        Row(main, Loc.T("s.setup.redo"), Loc.T("s.setup.redo.d"), ActionButton(Loc.T("s.setup.redo.b"), App.OpenSetup));
         return p;
     }
 
@@ -587,6 +649,12 @@ public sealed class SettingsWindow : Window
         intro.Children.Add(watch);
         intro.Children.Add(Toggle(S.IntroAnimation, v => S.IntroAnimation = v));
         Row(eyes, Loc.T("s.intro"), Loc.T("s.intro.d"), intro);
+
+        var behave = Section(p, Loc.T("s.sec.behave"));
+        Row(behave, Loc.T("s.open"), Loc.T("s.open.d"),
+            Segmented(new[] { (OpenMode.Hover, Loc.T("isl.open.hover")), (OpenMode.Click, Loc.T("isl.open.click")) }, S.Open, v => S.Open = v));
+        Row(behave, Loc.T("s.speed"), Loc.T("s.speed.d"),
+            Segmented(new[] { (AnimSpeed.Fast, Loc.T("gen.speed.fast")), (AnimSpeed.Normal, Loc.T("gen.speed.normal")), (AnimSpeed.Smooth, Loc.T("gen.speed.smooth")) }, S.Speed, v => S.Speed = v));
         return p;
     }
 
@@ -611,9 +679,11 @@ public sealed class SettingsWindow : Window
             S.EyeColor = hex;
             S.EyesUseAlbumColor = false;
             AppSettings.Commit();
-            Dispatcher.InvokeAsync(Rebuild);
+            if (_setup) PaintSwatches();
+            else Dispatcher.InvokeAsync(Rebuild);
         }
 
+        _swatches.Clear();
         foreach (var hex in EyePresets)
         {
             var color = (Color)ColorConverter.ConvertFromString(hex);
@@ -627,7 +697,9 @@ public sealed class SettingsWindow : Window
             if (selected) dot.Effect = new DropShadowEffect { Color = color, ShadowDepth = 0, BlurRadius = 10, Opacity = 0.9 };
             dot.MouseLeftButtonUp += (_, _) => { SoundService.Play(Sfx.Toggle); Cheer?.Invoke(); Pick(hex); };
             panel.Children.Add(dot);
+            _swatches.Add((dot, hex));
         }
+        if (_setup) PrepareSwatches();
 
         bool custom = manual && Array.FindIndex(EyePresets, h => string.Equals(h, S.EyeColor, StringComparison.OrdinalIgnoreCase)) < 0;
         var customButton = ActionButton("+", () =>
@@ -656,28 +728,23 @@ public sealed class SettingsWindow : Window
         return panel;
     }
 
-    // ------------------------------------------------------------------ Comportamento
+    // ------------------------------------------------------------------ Notificações, Calendário e clima
 
-    private StackPanel BehavePage()
+    private StackPanel NoticesPage()
     {
-        var p = Page("behave");
-        var main = Section(p);
-        Row(main, Loc.T("s.open"), Loc.T("s.open.d"),
-            Segmented(new[] { (OpenMode.Hover, Loc.T("isl.open.hover")), (OpenMode.Click, Loc.T("isl.open.click")) }, S.Open, v => S.Open = v));
-        Row(main, Loc.T("s.speed"), Loc.T("s.speed.d"),
-            Segmented(new[] { (AnimSpeed.Fast, Loc.T("gen.speed.fast")), (AnimSpeed.Normal, Loc.T("gen.speed.normal")), (AnimSpeed.Smooth, Loc.T("gen.speed.smooth")) }, S.Speed, v => S.Speed = v));
-        Row(main, Loc.T("s.scroll"), Loc.T("s.scroll.d"), Toggle(S.ScrollVolume, v => S.ScrollVolume = v));
-        Row(main, Loc.T("s.volume"), Loc.T("s.volume.d"), Toggle(S.VolumeOsd, v => S.VolumeOsd = v));
-        Row(main, Loc.T("s.buds"), Loc.T("s.buds.d"), Toggle(S.BudsAlerts, v => S.BudsAlerts = v));
-        WeatherRows(main);
-        NotifyRows(main);
-        Row(main, Loc.T("s.hideosd"), Loc.T("s.hideosd.d"), Toggle(S.HideWindowsOsd, v =>
-        {
-            S.HideWindowsOsd = v;
-            if (!v) OsdHider.Restore();
-        }));
-        Row(main, Loc.T("s.clock"), Loc.T("s.clock.d"),
+        var p = Page("notif");
+        NotifyRows(p);
+        return p;
+    }
+
+    private StackPanel CalendarPage()
+    {
+        var p = Page("calendar");
+        var calendar = Section(p, Loc.T("s.sec.calendar"));
+        Row(calendar, Loc.T("s.calholidays"), Loc.T("s.calholidays.d"), Toggle(S.CalendarHolidays, v => S.CalendarHolidays = v));
+        Row(calendar, Loc.T("s.clock"), Loc.T("s.clock.d"),
             Segmented(new[] { (ClockMode.Auto, Loc.T("isl.clock.auto")), (ClockMode.H12, "12h"), (ClockMode.H24, "24h") }, S.Clock, v => S.Clock = v));
+        WeatherRows(Section(p, Loc.T("s.sec.weather")));
         return p;
     }
 
@@ -762,7 +829,13 @@ public sealed class SettingsWindow : Window
     private void WeatherRows(StackPanel section)
     {
         Row(section, Loc.T("s.weather"), Loc.T("s.weather.d"),
-            Segmented(new[] { (true, Loc.T("weather.auto")), (false, Loc.T("weather.manual")) }, S.WeatherAuto, v => S.WeatherAuto = v));
+            Segmented(new[] { (true, Loc.T("weather.auto")), (false, Loc.T("weather.manual")) }, S.WeatherAuto, v =>
+            {
+                S.WeatherAuto = v;
+                _focusCityBox = !v;
+                Dispatcher.InvokeAsync(() => Rebuild());
+            }));
+        if (S.WeatherAuto) return; // the box is only for picking a city by hand
 
         var cityBox = new TextBox
         {
@@ -778,6 +851,7 @@ public sealed class SettingsWindow : Window
             results.Children.Clear();
             if (text.Trim().Length < 2 || text == S.WeatherCity) return;
             results.Children.Add(new TextBlock { Text = Loc.T("weather.searching"), FontSize = 12, Foreground = Dim(0x88), Margin = new Thickness(4, 2, 0, 4) });
+            RevealWhenLaidOut(results);
             var found = await WeatherService.SearchAsync(text);
             if (cityBox.Text != text) return;
             results.Children.Clear();
@@ -804,6 +878,7 @@ public sealed class SettingsWindow : Window
                 };
                 results.Children.Add(row);
             }
+            RevealWhenLaidOut(results); // the list opens below the box, often past the bottom of the window
         };
         cityBox.TextChanged += (_, _) =>
         {
@@ -812,20 +887,52 @@ public sealed class SettingsWindow : Window
         };
         Row(section, Loc.T("s.weather.city"), Loc.T("s.weather.city.d"), cityBox);
         section.Children.Add(results);
+        if (_focusCityBox)
+        {
+            _focusCityBox = false;
+            if (_setup && cityBox.Parent is FrameworkElement cityRow) Appear(cityRow);
+            Dispatcher.BeginInvoke(() =>
+            {
+                cityBox.Focus();
+                cityBox.BringIntoView();
+            }, DispatcherPriority.Loaded);
+        }
     }
 
+    private bool _focusCityBox;
+
+    private void RevealWhenLaidOut(FrameworkElement element) =>
+        Dispatcher.BeginInvoke(() => element.BringIntoView(), DispatcherPriority.Loaded);
+
     /// <summary>Notifications on the island, and an on/off per app that has sent one.</summary>
-    private void NotifyRows(StackPanel section)
+    private void NotifyRows(StackPanel page)
     {
-        Row(section, Loc.T("s.notif"), Loc.T("s.notif.d"), Toggle(S.NotifyEnabled, v => S.NotifyEnabled = v));
+        var section = Section(page);
+        Row(section, Loc.T("s.notif"), Loc.T("s.notif.d"), new Switch(S.NotifyEnabled, v =>
+        {
+            S.NotifyEnabled = v;
+            AppSettings.Commit();
+            Dispatcher.InvokeAsync(() => Rebuild());
+        }, _accent));
+        if (S.NotifyEnabled)
+        {
+            Row(section, Loc.T("s.notif.only"), Loc.T("s.notif.only.d"), Toggle(S.NotifyOnlyNotchy, v => S.NotifyOnlyNotchy = v), sub: true);
+            Row(section, Loc.T("s.notif.full"), Loc.T("s.notif.full.d"), Toggle(S.NotifyFullscreen, v => S.NotifyFullscreen = v), sub: true);
+            Row(section, Loc.T("s.so.notice"), Loc.T("s.so.notice.d"), WithListen(Sfx.Notice, Toggle(S.SoundNotice, v => S.SoundNotice = v)), sub: true);
+        }
+#if DEBUG
+        Row(section, "Enviar notificação de teste", "Só na versão de testes", ActionButton("Enviar", () => Island?.SendNoticeTest(), primary: true));
+#endif
+        if (S.NotifyApps.Count == 0) return;
+        var apps = Section(page, Loc.T("s.sec.apps"));
         foreach (var app in S.NotifyApps.OrderBy(a => a))
         {
             var name = app;
-            Row(section, name, Loc.T("s.notif.app.d"), Toggle(!S.NotifyMuted.Contains(name), on =>
+            Row(apps, name, Loc.T("s.notif.app.d"), Toggle(!S.NotifyMuted.Contains(name), on =>
             {
                 S.NotifyMuted.Remove(name);
                 if (!on) S.NotifyMuted.Add(name);
-            }), sub: true);
+            }));
         }
     }
 
@@ -881,7 +988,13 @@ public sealed class SettingsWindow : Window
         Row(alerts, Loc.T("s.cl.notify"), Loc.T("s.cl.notify.d"), Toggle(S.ClaudeWindowsNotifications, v => S.ClaudeWindowsNotifications = v));
         Row(alerts, Loc.T("s.cl.test"), Loc.T("s.cl.test.d"), ActionButton(Loc.T("cl.test.b"), () => Island?.SimulateClaudeTask()));
 
-        var chat = Section(p, Loc.T("s.sec.chat"));
+        return p;
+    }
+
+    private StackPanel ChatPage()
+    {
+        var p = Page("chat");
+        var chat = Section(p);
         var chatStatus = new TextBlock { FontSize = 11.5, Foreground = Dim(0x99), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) };
         var check = new StackPanel { Orientation = Orientation.Horizontal };
         check.Children.Add(chatStatus);
@@ -893,11 +1006,12 @@ public sealed class SettingsWindow : Window
             chatStatus.Foreground = new SolidColorBrush(found && loggedIn ? Color.FromRgb(0x5E, 0xD6, 0x7D) : Color.FromRgb(0xF5, 0xA5, 0x24));
         }
         check.Children.Add(ActionButton(Loc.T("cl.check"), Check));
-        Row(chat, Loc.T("s.cl.chat"), Loc.T("s.cl.chat.d"), check);
+        ChatEngineRows(chat);
+        if (!S.ChatUseGemini) Row(chat, Loc.T("s.cl.chat"), Loc.T("s.cl.chat.d"), check);
         Row(chat, Loc.T("s.cl.translate"), Loc.T("s.cl.translate.d"),
             Segmented(new[] { ("pt", "Português"), ("en", "English"), ("es", "Español") }, S.ChatTranslateTo, v => S.ChatTranslateTo = v));
         // (not while only searching; and after the page is on screen, so opening it never stutters)
-        if (_collect == null) Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(Check));
+        if (_collect == null && !S.ChatUseGemini) Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(Check));
         return p;
     }
 
@@ -935,6 +1049,21 @@ public sealed class SettingsWindow : Window
         var when = Section(p, Loc.T("s.sec.when"));
         Row(when, Loc.T("s.so.openclose"), Loc.T("s.so.openclose.d"), WithListen(Sfx.Expand, Toggle(S.SoundOpenClose, v => S.SoundOpenClose = v)));
         Row(when, Loc.T("s.so.clicks"), Loc.T("s.so.clicks.d"), WithListen(Sfx.Click, Toggle(S.SoundClicks, v => S.SoundClicks = v)));
+
+        var volume = Section(p, Loc.T("s.sec.volume"));
+        Row(volume, Loc.T("s.scroll"), Loc.T("s.scroll.d"), Toggle(S.ScrollVolume, v => S.ScrollVolume = v));
+        Row(volume, Loc.T("s.volume"), Loc.T("s.volume.d"), Toggle(S.VolumeOsd, v => S.VolumeOsd = v));
+        Row(volume, Loc.T("s.hideosd"), Loc.T("s.hideosd.d"), Toggle(S.HideWindowsOsd, v =>
+        {
+            S.HideWindowsOsd = v;
+            if (!v) OsdHider.Restore();
+        }));
+
+        var devices = Section(p, Loc.T("s.sec.devices"));
+        Row(devices, Loc.T("s.buds"), Loc.T("s.buds.d"), Toggle(S.BudsAlerts, v => S.BudsAlerts = v));
+        Row(devices, Loc.T("s.bat"), Loc.T("s.bat.d"), Toggle(S.BatteryAlerts, v => S.BatteryAlerts = v));
+        Row(devices, Loc.T("s.batlow"), Loc.T("s.batlow.d"),
+            Segmented(new[] { (10, "10%"), (15, "15%"), (20, "20%"), (30, "30%") }, S.BatteryLowPercent, v => S.BatteryLowPercent = v));
         return p;
     }
 
@@ -944,36 +1073,17 @@ public sealed class SettingsWindow : Window
     {
         var p = Page("about");
         var upd = Section(p, Loc.T("s.sec.updates"));
-        TextBlock? status = null;
-        Button? check = null;
-        void Paint(UpdateStatus st)
-        {
-            if (status != null)
-                status.Text = st switch
-                {
-                    UpdateStatus.NotInstalled => Loc.T("upd.dev"),
-                    UpdateStatus.Ready => Loc.F("upd.found", Updater.PendingVersion ?? ""),
-                    UpdateStatus.Error => Loc.T("upd.error"),
-                    _ => Loc.T("upd.latest")
-                };
-            if (check?.Content is TextBlock t) t.Text = Loc.T(st == UpdateStatus.Ready ? "upd.install.b" : "upd.check.b");
-            if (check != null) check.IsEnabled = st != UpdateStatus.NotInstalled;
-        }
-        check = ActionButton(Loc.T("upd.check.b"), async () =>
-        {
-            if (Updater.Pending != null)
-            {
-                Updater.ApplyAndRestart();
-                return;
-            }
-            if (status != null) status.Text = Loc.T("upd.checking");
-            Paint(await Updater.CheckAndDownloadAsync());
-        }, primary: true);
-        status = Row(upd, "Notchy " + Updater.CurrentVersion, Loc.T("upd.latest"), check);
-        if (!Updater.IsInstalled) Paint(UpdateStatus.NotInstalled);
-        else if (Updater.Pending != null) Paint(UpdateStatus.Ready);
+        UpdateRow(upd);
         Row(upd, Loc.T("s.ab.auto"), Loc.T("s.ab.auto.d"), Toggle(S.AutoUpdate, v => S.AutoUpdate = v));
         Row(upd, Loc.T("s.ab.news"), Loc.F("s.ab.news.d", WhatsNew.Version), ActionButton(Loc.T("s.ab.news.b"), () => Island?.ShowWhatsNew()));
+#if DEBUG
+        var simulate = new StackPanel { Orientation = Orientation.Horizontal };
+        simulate.Children.Add(ActionButton("Tem atualização", () => _ = Updater.SimulateAsync("found")));
+        simulate.Children.Add(ActionButton("Já atualizado", () => _ = Updater.SimulateAsync("latest")));
+        simulate.Children.Add(ActionButton("GitHub instável", () => _ = Updater.SimulateAsync("flaky")));
+        simulate.Children.Add(ActionButton("Cartão de instalação", () => _ = InstallCard.DemoAsync()));
+        Row(upd, "Simular atualização", "Só na versão de testes", simulate);
+#endif
 
         var app = Section(p);
         Row(app, Loc.T("s.ab.reset"), Loc.T("s.ab.reset.d"), ActionButton(Loc.T("gen.reset.b"), () =>
@@ -991,6 +1101,196 @@ public sealed class SettingsWindow : Window
     // =====================================================================================
     // controls (in the page's colour)
     // =====================================================================================
+
+#if DEBUG
+    /// <summary>Acts out every update state on the "Sobre" page, saves a picture of each and quits.</summary>
+    public async System.Threading.Tasks.Task UpdateTestAsync(string dir)
+    {
+        System.IO.Directory.CreateDirectory(dir);
+        void Save(string name)
+        {
+            var root = (FrameworkElement)Content;
+            var picture = new System.Windows.Media.Imaging.RenderTargetBitmap((int)root.ActualWidth, (int)root.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+            picture.Render(root);
+            var png = new System.Windows.Media.Imaging.PngBitmapEncoder();
+            png.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(picture));
+            using var file = System.IO.File.Create(System.IO.Path.Combine(dir, name + ".png"));
+            png.Save(file);
+        }
+        await System.Threading.Tasks.Task.Delay(900);
+        var run = Updater.SimulateAsync("found");
+        await System.Threading.Tasks.Task.Delay(700);
+        Save("1-procurando");
+        await System.Threading.Tasks.Task.Delay(1500);
+        Save("2-encontrou");
+        await System.Threading.Tasks.Task.Delay(2500);
+        Save("3-baixando");
+        ShowPage("general", animate: false);
+        ShowPage("about", animate: false);
+        await System.Threading.Tasks.Task.Delay(200);
+        Save("4-voltou-a-pagina");
+        await run;
+        await System.Threading.Tasks.Task.Delay(500);
+        Save("5-pronto");
+        run = Updater.SimulateAsync("flaky");
+        await System.Threading.Tasks.Task.Delay(2400);
+        Save("6-tentando");
+        await run;
+        await System.Threading.Tasks.Task.Delay(500);
+        Save("7-erro");
+        run = Updater.SimulateAsync("found");
+        await System.Threading.Tasks.Task.Delay(2400);
+        Save("8-reabriu");
+        Application.Current.Shutdown();
+    }
+#endif
+
+    /// <summary>The version row and, below it, the panel that opens while a new version is found and downloaded.</summary>
+    private void UpdateRow(StackPanel section)
+    {
+        Color accent = _accent, blue = Color.FromRgb(0x5A, 0xC8, 0xFA), green = Color.FromRgb(0x5E, 0xD6, 0x7D), amber = Color.FromRgb(0xF5, 0xA5, 0x24);
+        Updater.ForgetError();
+
+        var check = ActionButton(Loc.T("upd.check.b"), () =>
+        {
+            if (Updater.Phase == UpdatePhase.Ready) Updater.ApplyAndRestart();
+            else _ = Updater.CheckAndDownloadAsync();
+        }, primary: true);
+        var status = Row(section, "Notchy " + Updater.CurrentVersion, Loc.T("upd.latest"), check);
+
+        // ---- the panel
+        var tileBrush = new SolidColorBrush(blue);
+        var tileGlow = new DropShadowEffect { ShadowDepth = 0, BlurRadius = 12, Opacity = 0.55, Color = blue };
+        var icon = new TextBlock { FontFamily = (FontFamily)Application.Current.FindResource("IconFont"), FontSize = 14, Foreground = new SolidColorBrush(Ink), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        var tile = new Grid { Width = 30, Height = 30 };
+        tile.Children.Add(new Border { CornerRadius = new CornerRadius(10), Background = tileBrush, Effect = tileGlow });
+        tile.Children.Add(icon);
+
+        var title = new TextBlock { FontSize = 13, FontWeight = FontWeights.SemiBold };
+        var sub = new TextBlock { FontSize = 11.5, Foreground = Dim(0x99), Margin = new Thickness(0, 1, 0, 0) };
+        var texts = new StackPanel { Margin = new Thickness(11, 0, 11, 0), VerticalAlignment = VerticalAlignment.Center };
+        texts.Children.Add(title);
+        texts.Children.Add(sub);
+        Grid.SetColumn(texts, 1);
+
+        var percent = new TextBlock { FontSize = 20, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center };
+        System.Windows.Documents.Typography.SetNumeralAlignment(percent, FontNumeralAlignment.Tabular);
+        Grid.SetColumn(percent, 2);
+
+        var line = new Grid();
+        line.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        line.ColumnDefinitions.Add(new ColumnDefinition());
+        line.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        line.Children.Add(tile);
+        line.Children.Add(texts);
+        line.Children.Add(percent);
+
+        var doneColumn = new ColumnDefinition { Width = new GridLength(0, GridUnitType.Star) };
+        var restColumn = new ColumnDefinition { Width = new GridLength(100, GridUnitType.Star) };
+        var fillBrush = new SolidColorBrush(blue);
+        var fillGlow = new DropShadowEffect { ShadowDepth = 0, BlurRadius = 10, Opacity = 0.9, Color = blue };
+        var bar = new Grid { Height = 6, Margin = new Thickness(0, 10, 0, 0) };
+        bar.ColumnDefinitions.Add(doneColumn);
+        bar.ColumnDefinitions.Add(restColumn);
+        var track = new Border { CornerRadius = new CornerRadius(3), Background = Dim(0x14) };
+        Grid.SetColumnSpan(track, 2);
+        bar.Children.Add(track);
+        bar.Children.Add(new Border { CornerRadius = new CornerRadius(3), Background = fillBrush, Effect = fillGlow });
+
+        var content = new StackPanel();
+        content.Children.Add(line);
+        content.Children.Add(bar);
+        var inner = new Border { Background = new SolidColorBrush(Color.FromArgb(0x33, 0, 0, 0)), CornerRadius = new CornerRadius(11), Padding = new Thickness(14, 12, 14, 12), Child = content };
+        var panel = new Border { Child = inner, Padding = new Thickness(0, 0, 0, 12), Margin = new Thickness(12, 0, 12, 0), ClipToBounds = true, MaxHeight = 0, Opacity = 0 };
+        section.Children.Add(panel);
+
+        bool open = false;
+        void Slide(bool show, bool animate)
+        {
+            open = show;
+            if (!animate)
+            {
+                panel.MaxHeight = show ? double.PositiveInfinity : 0;
+                panel.Opacity = show ? 1 : 0;
+                return;
+            }
+            inner.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            double target = show ? inner.DesiredSize.Height + panel.Padding.Bottom : 0;
+            var time = TimeSpan.FromMilliseconds(350);
+            var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+            panel.BeginAnimation(MaxHeightProperty, new DoubleAnimation(panel.ActualHeight, target, time) { EasingFunction = ease });
+            panel.BeginAnimation(OpacityProperty, new DoubleAnimation(show ? 1 : 0, time) { EasingFunction = ease });
+        }
+
+        void PaintButton(string text, Color background, Color foreground, bool enabled, Effect? effect = null)
+        {
+            if (check.Content is TextBlock t) t.Text = text;
+            check.Background = new SolidColorBrush(background);
+            check.Foreground = new SolidColorBrush(foreground);
+            check.IsEnabled = enabled;
+            check.Effect = effect;
+        }
+
+        void Paint(bool animate)
+        {
+            var phase = Updater.Phase;
+            string version = Updater.TargetVersion ?? "", size = Updater.Megabytes(Updater.TotalBytes);
+            bool ready = phase == UpdatePhase.Ready, warn = phase is UpdatePhase.Retrying or UpdatePhase.Error;
+            Color busyBack = Color.FromArgb(0x0D, 255, 255, 255), busyInk = Color.FromArgb(0x88, 255, 255, 255);
+
+            status.Foreground = warn ? new SolidColorBrush(amber) : Dim(0x80);
+            status.Text = phase switch
+            {
+                UpdatePhase.Checking => Loc.T("upd.checking"),
+                UpdatePhase.Retrying => Loc.F("upd.retry", Updater.Retry, Updater.MaxRetries),
+                UpdatePhase.Found => Loc.F("upd.found.new", version, size),
+                UpdatePhase.Downloading => Loc.T("upd.downloading"),
+                UpdatePhase.Ready => Loc.F("upd.found", version, size),
+                UpdatePhase.Error => Loc.T(Updater.DownloadFailed ? "upd.error.down" : "upd.error"),
+                _ => Loc.T(Updater.IsInstalled ? "upd.latest" : "upd.dev")
+            };
+
+            switch (phase)
+            {
+                case UpdatePhase.Checking or UpdatePhase.Retrying:
+                    PaintButton(Loc.T("upd.checking"), busyBack, busyInk, false);
+                    break;
+                case UpdatePhase.Found or UpdatePhase.Downloading:
+                    PaintButton(Loc.T("upd.downloading.b"), busyBack, busyInk, false);
+                    break;
+                case UpdatePhase.Ready:
+                    PaintButton(Loc.T("upd.install.b"), green, Color.FromRgb(0x07, 0x21, 0x0F), true,
+                        new DropShadowEffect { ShadowDepth = 0, BlurRadius = 14, Opacity = 0.5, Color = green });
+                    break;
+                default:
+                    PaintButton(Loc.T("upd.check.b"), accent, Ink, Updater.IsInstalled);
+                    break;
+            }
+
+            bool show = phase is UpdatePhase.Found or UpdatePhase.Downloading or UpdatePhase.Ready;
+            if (show)
+            {
+                int done = ready ? 100 : Updater.Progress;
+                var color = ready ? green : blue;
+                icon.Text = ((char)(ready ? 0xE73E : 0xE896)).ToString();
+                tileBrush.Color = color;
+                tileGlow.Color = color;
+                fillBrush.Color = color;
+                fillGlow.Color = color;
+                title.Text = Loc.F("upd.panel.version", version);
+                sub.Text = ready ? Loc.F("upd.panel.ready", size)
+                    : phase == UpdatePhase.Found ? Loc.F("upd.panel.found", size)
+                    : Loc.F("upd.panel.progress", Updater.Megabytes(Updater.TotalBytes * done / 100), size);
+                percent.Text = done + "%";
+                doneColumn.Width = new GridLength(done, GridUnitType.Star);
+                restColumn.Width = new GridLength(100 - done, GridUnitType.Star);
+            }
+            if (show != open) Slide(show, animate);
+        }
+
+        Paint(false);
+        _paintUpdate = () => Paint(true);
+    }
 
     private static SolidColorBrush Dim(byte alpha) => new(Color.FromArgb(alpha, 255, 255, 255));
 
@@ -1020,6 +1320,7 @@ public sealed class SettingsWindow : Window
 
     private UIElement Segmented<T>(IEnumerable<(T value, string label)> options, T current, Action<T> set)
     {
+        if (_setup) return SlidingSegmented(options, current, set);
         var accent = _accent;
         var host = new Border { Background = Dim(0x0E), CornerRadius = new CornerRadius(9), Padding = new Thickness(2) };
         var panel = new StackPanel { Orientation = Orientation.Horizontal };

@@ -23,6 +23,8 @@ public sealed record Notice(uint Id, string App, string AppId, string Title, str
     /// </summary>
     public string? Payload { get; init; }
     public string? Tag { get; init; }
+    /// <summary>Set on the calendar's own notices: the type of the event, for its icon in the history.</summary>
+    public CalType? CalendarType { get; init; }
 }
 
 /// <summary>
@@ -34,7 +36,7 @@ public sealed record Notice(uint Id, string App, string AppId, string Title, str
 /// </summary>
 public sealed class NotificationService
 {
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(8) };
+    private static readonly HttpClient Http = FastHttp.Client(TimeSpan.FromSeconds(8));
     private static readonly string DbPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         @"Microsoft\Windows\Notifications\wpndatabase.db");
 
@@ -45,11 +47,23 @@ public sealed class NotificationService
 
     public bool Available { get; private set; }
 
+    /// <summary>Windows has answered whether Notchy may read notifications (<see cref="Available"/> means something from here on).</summary>
+    public bool AccessKnown { get; private set; }
+    public event Action? AccessChecked;
+
     /// <summary>The latest notifications, newest first (kept while Notchy runs).</summary>
     public List<Notice> History { get; } = new();
 
     public event Action<Notice>? Arrived;
     public event Action? HistoryChanged;
+
+    /// <summary>Puts one of Notchy's own notices (the calendar's) in the history.</summary>
+    public void AddLocal(Notice notice)
+    {
+        History.Insert(0, notice);
+        if (History.Count > 60) History.RemoveAt(History.Count - 1);
+        HistoryChanged?.Invoke();
+    }
 
     public async void Start()
     {
@@ -63,6 +77,8 @@ public sealed class NotificationService
             App.Log(ex);
             Available = false;
         }
+        AccessKnown = true;
+        AccessChecked?.Invoke();
         if (!Available) return;
         _timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
         _timer.Tick += async (_, _) => await PollAsync();
@@ -98,6 +114,7 @@ public sealed class NotificationService
                 HistoryChanged?.Invoke();
                 Arrived?.Invoke(notice);
             }
+            PollTrayApps();
         }
         catch (Exception ex)
         {
@@ -115,6 +132,81 @@ public sealed class NotificationService
         HistoryChanged?.Invoke();
     }
 
+    // ---- tray apps during "Do not disturb" ----------------------------------------------
+
+    /// <summary>The id Windows makes up for a program that notifies through a tray balloon (Lightshot…).</summary>
+    public const string TrayAppPrefix = "NotifyIconGeneratedAumid_";
+    private const int TrayNameWaitSeconds = 30;
+
+    private readonly Dictionary<string, long> _trayLast = new();
+    private bool _watchTray;
+    private long _trayFrom;
+
+    /// <summary>
+    /// Windows throws tray balloons away during "Do not disturb", text included, and only notes when the app sent one.
+    /// While that's on (Notchy's "only on Notchy"), that note is enough for a card with the app's name and icon.
+    /// </summary>
+    public bool WatchTray
+    {
+        set
+        {
+            if (value && !_watchTray) _trayFrom = DateTime.UtcNow.ToFileTimeUtc();
+            _watchTray = value;
+        }
+    }
+
+    private void PollTrayApps()
+    {
+        if (!_watchTray) return;
+        using var settings = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Notifications\Settings");
+        if (settings == null) return;
+        foreach (string appId in settings.GetSubKeyNames().Where(k => k.StartsWith(TrayAppPrefix, StringComparison.Ordinal)))
+        {
+            using var key = settings.OpenSubKey(appId);
+            if (key?.GetValue("LastNotificationAddedTime") is not long sent || sent <= _trayLast.GetValueOrDefault(appId, _trayFrom)) continue;
+            var when = DateTime.FromFileTimeUtc(sent).ToLocalTime();
+            string app = TrayAppName(appId);
+            if (app.Length == 0 && (DateTime.Now - when).TotalSeconds < TrayNameWaitSeconds) continue; // Windows may not have written the name yet
+            _trayLast[appId] = sent;
+            if (app.Length == 0 || IsIgnoredApp(app, appId)) continue;
+
+            if (!_appIcons.TryGetValue(appId, out var icon) && (icon = DesktopAppIcon.Find(appId, app)) != null) _appIcons[appId] = icon;
+#if DEBUG
+            try { File.AppendAllText(Path.Combine(AppSettings.Folder, "notice-icons.log"), $"{DateTime.Now:HH:mm:ss} BANDEJA {app} enviado={when:HH:mm:ss} imagem={icon?.PixelWidth}x{icon?.PixelHeight}\n"); } catch { }
+#endif
+            var notice = new Notice(0, app, appId, Loc.T("notif.tray"), "", when, icon, false);
+            History.Insert(0, notice);
+            if (History.Count > 60) History.RemoveAt(History.Count - 1);
+            HistoryChanged?.Invoke();
+            Arrived?.Invoke(notice);
+        }
+    }
+
+    private static string TrayAppName(string appId)
+    {
+        using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Classes\AppUserModelId\" + appId);
+        return key?.GetValue("DisplayName") as string ?? "";
+    }
+
+    /// <summary>Claude has its own tab and bubble; Notchy's own messages are already on the island.</summary>
+    private static bool IsIgnoredApp(string app, string appId) =>
+        app.Contains("Claude", StringComparison.OrdinalIgnoreCase) || app.Contains("Notchy", StringComparison.OrdinalIgnoreCase) ||
+        appId.Contains("Notchy", StringComparison.OrdinalIgnoreCase);
+
+#if DEBUG
+    /// <summary>Test: a real Windows notification. It goes out as Snipping Tool's because Windows only shows notifications from apps it knows.</summary>
+    public void SendTest()
+    {
+        var xml = Windows.UI.Notifications.ToastNotificationManager.GetTemplateContent(Windows.UI.Notifications.ToastTemplateType.ToastText02);
+        var lines = xml.GetElementsByTagName("text");
+        lines[0].AppendChild(xml.CreateTextNode("Teste do Notchy"));
+        lines[1].AppendChild(xml.CreateTextNode("Notificação de teste"));
+        Windows.UI.Notifications.ToastNotificationManager
+            .CreateToastNotifier("Microsoft.ScreenSketch_8wekyb3d8bbwe!App")
+            .Show(new Windows.UI.Notifications.ToastNotification(xml));
+    }
+#endif
+
     private async Task<Notice?> ToNoticeAsync(UserNotification n, bool avatar)
     {
         string app, appId;
@@ -127,8 +219,7 @@ public sealed class NotificationService
         {
             return null; // Windows has no app for some of its notifications: skip it, not the ones after it
         }
-        // Claude has its own tab and bubble; Notchy's own messages are already on the island
-        if (app.Length == 0 || app.Contains("Claude", StringComparison.OrdinalIgnoreCase) || appId.Contains("Notchy", StringComparison.OrdinalIgnoreCase)) return null;
+        if (app.Length == 0 || IsIgnoredApp(app, appId)) return null;
         var texts = n.Notification?.Visual?.GetBinding(KnownNotificationBindings.ToastGeneric)?.GetTextElements();
         // one line each: messages with line breaks (a price, a link…) would spill out of the card
         string title = OneLine(texts?.Count > 0 ? texts[0].Text : app);
@@ -141,7 +232,10 @@ public sealed class NotificationService
             picture = await SenderPhotoAsync(n.Id, appId, title);
             photo = picture != null;
         }
-        picture ??= await AppIconAsync(n, appId);
+        picture ??= await AppIconAsync(n, appId, app);
+#if DEBUG
+        try { File.AppendAllText(Path.Combine(AppSettings.Folder, "notice-icons.log"), $"{DateTime.Now:HH:mm:ss} {app} foto={photo} imagem={picture?.PixelWidth}x{picture?.PixelHeight}\n"); } catch { }
+#endif
         var notice = new Notice(n.Id, app, appId, title, body, n.CreationTime.LocalDateTime, picture, photo);
         return notice with { Payload = PayloadFor(notice), Tag = TagFor(notice) };
     }
@@ -246,7 +340,7 @@ public sealed class NotificationService
 
     // ---- the app's icon ----------------------------------------------------------------
 
-    private async Task<BitmapSource?> AppIconAsync(UserNotification n, string appId)
+    private async Task<BitmapSource?> AppIconAsync(UserNotification n, string appId, string app)
     {
         if (_appIcons.TryGetValue(appId, out var cached)) return cached;
         BitmapSource? icon = null;
@@ -263,9 +357,10 @@ public sealed class NotificationService
         }
         catch
         {
-            // ignore
+            // desktop apps have no logo here
         }
-        _appIcons[appId] = icon;
+        icon ??= DesktopAppIcon.Find(appId, app);
+        if (icon != null) _appIcons[appId] = icon; // (not found: the next notification tries again)
         return icon;
     }
 

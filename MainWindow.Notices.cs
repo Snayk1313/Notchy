@@ -77,9 +77,39 @@ public partial class MainWindow
         ((Panel)CompactPanel.Parent).Children.Add(_noticePanel);
 
         BuildBell();
+        _notices.AccessChecked += SyncQuietMode;
         _notices.Arrived += OnNotice;
         _notices.HistoryChanged += () => { if (_subOpen && _subTitle.Text == Loc.T("notif.title")) RefreshSubPage(NoticesPage); };
         _notices.Start();
+    }
+
+#if DEBUG
+    internal void SendNoticeTest() => _notices.SendTest();
+#endif
+
+    /// <summary>"Só no Notchy" only applies once Notchy is known to be able to read notifications: otherwise they'd show nowhere.</summary>
+    private void SyncQuietMode()
+    {
+        if (!_notices.AccessKnown) return;
+        bool quiet = S.NotifyEnabled && S.NotifyOnlyNotchy && _notices.Available;
+        QuietMode.Sync(quiet);
+        _notices.WatchTray = quiet;
+    }
+
+    /// <summary>A full-screen game or video hides the island, except while a notification card is up (if that's turned on).</summary>
+    private void ApplyFullscreenHide()
+    {
+        Island.Visibility = _hiddenForFullscreen && !(S.NotifyFullscreen && _noticeShown != null) ? Visibility.Hidden : Visibility.Visible;
+        // the game may have covered the glass under the island since it was last put in place
+        if (_hiddenForFullscreen && Island.Visibility == Visibility.Visible && _backdrop != null && _backdrop.Hwnd != IntPtr.Zero) _backdrop.KeepBelow(_hwnd);
+    }
+
+    /// <summary>Hides the island again once the card has finished closing.</summary>
+    private async void HideAfterCard()
+    {
+        if (!_hiddenForFullscreen) return;
+        await System.Threading.Tasks.Task.Delay(350);
+        if (_noticeShown == null) ApplyFullscreenHide();
     }
 
     /// <summary>The bell next to the clock, with how many arrived since you last looked.</summary>
@@ -131,8 +161,8 @@ public partial class MainWindow
         if (!S.NotifyEnabled || S.NotifyMuted.Contains(n.App)) return;
         _noticeUnseen++;
         UpdateBell();
-        // focusing with "Não perturbe", or a game/video full screen: kept in the history, not shown
-        if (SoundService.Hushed || _hiddenForFullscreen) return;
+        // focusing with "Não perturbe", or a game/video full screen (unless the card may show there): kept in the history, not shown
+        if (SoundService.Hushed || _hiddenForFullscreen && !S.NotifyFullscreen) return;
         _noticeQueue.Enqueue(n);
         if (_noticeShown == null) ShowNextNotice();
         else _noticeMore.Text = "+" + _noticeQueue.Count;
@@ -156,7 +186,8 @@ public partial class MainWindow
         _noticeAvatar.Background = n.Avatar != null ? new ImageBrush(n.Avatar) { Stretch = Stretch.UniformToFill } : White(0x14);
         _noticeMore.Text = "+" + _noticeQueue.Count;
         _noticeMore.Visibility = _noticeQueue.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        SoundService.Play(Sfx.Toggle);
+        ApplyFullscreenHide();
+        SoundService.Play(Sfx.Notice);
         ShowTransient(CompactMode.Notice, "", "", NoticeSeconds);
     }
 
@@ -165,6 +196,7 @@ public partial class MainWindow
         if (_transient == CompactMode.Notice) _transient = CompactMode.None;
         _noticeShown = null;
         UpdateState();
+        HideAfterCard();
     }
 
     /// <summary>Every frame: when a card's time is up, the next one (if any) comes down.</summary>
@@ -176,6 +208,7 @@ public partial class MainWindow
         if (_transient == CompactMode.Notice && DateTime.UtcNow < _transientUntil) return;
         _noticeShown = null;
         if (_noticeQueue.Count > 0) ShowNextNotice();
+        else HideAfterCard();
     }
 
     // =====================================================================================
@@ -211,6 +244,11 @@ public partial class MainWindow
     {
         string appId = n.AppId;
         if (appId.Length == 0) return;
+        if (appId == CalendarAppId)
+        {
+            OpenCalendar(DateTime.Today);
+            return;
+        }
         if (_hwnd != IntPtr.Zero)
         {
             Native.SetActivatable(_hwnd, true);
@@ -219,7 +257,8 @@ public partial class MainWindow
         Native.AllowSetForegroundWindow(-1); // ASFW_ANY: whoever opens next may come to the front
         // like a click on Windows' own pop-up: the app's activator goes to that chat; otherwise just the app
         Collapse();
-        if (!await NotificationOpener.OpenAsync(n)) NotificationService.OpenApp(appId);
+        // (tray programs have nothing Windows can open: the search below brings their window, if they have one)
+        if (!appId.StartsWith(NotificationService.TrayAppPrefix, StringComparison.Ordinal) && !await NotificationOpener.OpenAsync(n)) NotificationService.OpenApp(appId);
         // apps living in the tray (Discord…) show their window but may stay behind: find it and bring it forward
         string app = _notices.History.FirstOrDefault(n => n.AppId == appId)?.App ?? "";
         int tries = 0;
@@ -240,8 +279,9 @@ public partial class MainWindow
 
     private Border NoticeRow(Notice n)
     {
-        var avatar = new Border { Width = 30, Height = 30, CornerRadius = new CornerRadius(n.IsPhoto ? 15 : 8), VerticalAlignment = VerticalAlignment.Center,
-            Background = n.Avatar != null ? new ImageBrush(n.Avatar) { Stretch = Stretch.UniformToFill } : White(0x14) };
+        var avatar = n.CalendarType is CalType calType ? CalNoticeIcon(calType)
+            : new Border { Width = 30, Height = 30, CornerRadius = new CornerRadius(n.IsPhoto ? 15 : 8), VerticalAlignment = VerticalAlignment.Center,
+                Background = n.Avatar != null ? new ImageBrush(n.Avatar) { Stretch = Stretch.UniformToFill } : White(0x14) };
         var texts = new StackPanel { Margin = new Thickness(10, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
         texts.Children.Add(new TextBlock { Text = n.Title, FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, TextTrimming = TextTrimming.CharacterEllipsis });
         if (n.Body.Length > 0) texts.Children.Add(new TextBlock { Text = n.Body, FontSize = 11, Foreground = White(0x99), TextTrimming = TextTrimming.CharacterEllipsis });

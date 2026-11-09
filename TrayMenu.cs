@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -19,9 +20,11 @@ public sealed class TrayMenu : Window
     private static TrayMenu? _open;
     private static readonly Color Blue = Color.FromRgb(0x7F, 0xD0, 0xFF), Ink = Color.FromRgb(0x0B, 0x1A, 0x26), Red = Color.FromRgb(0xFF, 0x8A, 0x80);
 
+    private bool _closing;
+
     public static void ShowAtCursor()
     {
-        _open?.Close();
+        _open?.CloseOnce();
         var m = new TrayMenu();
         _open = m;
         m.Closed += (_, _) => { if (_open == m) _open = null; };
@@ -44,7 +47,7 @@ public sealed class TrayMenu : Window
         var list = new StackPanel { Margin = new Thickness(6) };
         list.Children.Add(Row("", Loc.T("menu.settings"), null, () =>
         {
-            Close();
+            CloseOnce();
             App.OpenSettings();
         }));
         bool startup = StartupManager.IsEnabled;
@@ -82,8 +85,20 @@ public sealed class TrayMenu : Window
             ((TranslateTransform)card.RenderTransform).BeginAnimation(TranslateTransform.YProperty,
                 new DoubleAnimation(6, 0, d) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
         };
-        Deactivated += (_, _) => Close();
-        KeyDown += (_, e) => { if (e.Key == Key.Escape) Close(); };
+        Deactivated += (_, _) => CloseOnce();
+        KeyDown += (_, e) => { if (e.Key == Key.Escape) CloseOnce(); };
+    }
+
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        _closing = true;
+        base.OnClosing(e);
+    }
+
+    /// <summary>Losing focus also fires while the window is closing, and WPF throws if Close is called again then.</summary>
+    private void CloseOnce()
+    {
+        if (!_closing) Close();
     }
 
     private Border Row(string glyph, string text, UIElement? right, Action click, Color? color = null)

@@ -523,7 +523,8 @@ public partial class MainWindow
         // shared with the Relógio tab: a running timer's light empties, a ringing one pulses all the way round
         bool timer = _compactMode is CompactMode.Timer or CompactMode.TimerRing;
         var buds = _state == IslandState.Compact ? BudsLight() : null; // Bluetooth earbuds: the battery level
-        bool show = _state == IslandState.Compact && (_compactMode == CompactMode.Focus || timer || buds != null) && !_introActive && !_islandMorphing;
+        bool cal = _compactMode == CompactMode.CalNotice; // a calendar notice: all the way round, in the event's colour
+        bool show = _state == IslandState.Compact && (_compactMode == CompactMode.Focus || timer || cal || buds != null) && !_introActive && !_islandMorphing;
         double k = Ease(Math.Clamp(0.14 / Math.Max(0.3, S.SpeedFactor), 0.05, 0.5));
         _focusLightOpacity += ((show ? 1 : 0) - _focusLightOpacity) * k;
         if (_focusLightOpacity < 0.01 && !show)
@@ -545,7 +546,7 @@ public partial class MainWindow
         FocusLight.Margin = FocusTrack.Margin = Island.Margin;
         FocusLight.RenderTransform = FocusTrack.RenderTransform = Island.RenderTransform;
 
-        var color = buds?.color ?? (timer ? TimerColor : FocusModeColor);
+        var color = cal ? _calColor : buds?.color ?? (timer ? TimerColor : FocusModeColor);
         if (color != _focusLightColor)
         {
             _focusLightColor = color;
@@ -561,7 +562,7 @@ public partial class MainWindow
         FocusLightGlow.BlurRadius = budsLow ? 10 + 12 * (pulse - 0.55) / 0.45 : 10;
         FocusLight.Opacity = _focusLightOpacity * pulse;
         FocusTrack.Opacity = _focusLightOpacity * (ringing || budsLow ? 0.15 + 0.45 * pulse : 0.22);
-        double p = Math.Clamp(buds?.share ?? (ringing ? 1 : timer ? _clock.Soonest?.LeftShare ?? 0 : _focus.Progress), 0, 1);
+        double p = Math.Clamp(cal ? 1 : buds?.share ?? (ringing ? 1 : timer ? _clock.Soonest?.LeftShare ?? 0 : _focus.Progress), 0, 1);
         if (_focusDrawn < 0 || Math.Abs(p - _focusDrawn) > 0.0004)
         {
             _focusDrawn = p;

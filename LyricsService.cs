@@ -25,7 +25,8 @@ public sealed class LyricsService
 
     private static HttpClient CreateClient()
     {
-        var client = new HttpClient { BaseAddress = new Uri("https://lrclib.net/"), Timeout = TimeSpan.FromSeconds(12) };
+        var client = FastHttp.Client(TimeSpan.FromSeconds(12));
+        client.BaseAddress = new Uri("https://lrclib.net/");
         client.DefaultRequestHeaders.UserAgent.ParseAdd("Notchy/1.0");
         return client;
     }

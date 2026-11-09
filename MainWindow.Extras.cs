@@ -152,7 +152,8 @@ public partial class MainWindow
         _backdrop.SetBounds(new Int32Rect((int)Math.Round(Left * dpi.DpiScaleX), (int)Math.Round(Top * dpi.DpiScaleY),
             (int)Math.Round(Width * dpi.DpiScaleX), (int)Math.Round(Height * dpi.DpiScaleY)), _hwnd);
         if (++_blurSyncCount % 240 == 0) _backdrop.KeepBelow(_hwnd);
-        bool show = !_hiddenForFullscreen && Island.Visibility == Visibility.Visible;
+        bool islandShown = Island.Visibility == Visibility.Visible; // (also true for a notification card over a full-screen game)
+        bool show = !_hiddenForFullscreen && islandShown;
 
         (Rect r, double radius) Px(FrameworkElement el, double cornerRadius)
         {
@@ -165,7 +166,7 @@ public partial class MainWindow
 
         // an island pulled all the way up (while a bubble takes its place) has nothing on screen: no blur, no shadow
         bool islandOnScreen = Island.ActualHeight - _topHidden > 0.5;
-        var island = show && islandOnScreen ? Px(Island, Island.CornerRadius.TopLeft) : (new Rect(), 0);
+        var island = islandShown && islandOnScreen ? Px(Island, Island.CornerRadius.TopLeft) : (new Rect(), 0);
         bool podVisible = show && ClaudePod.Visibility == Visibility.Visible;
         var pod = podVisible ? Px(ClaudePod, ClaudePod.CornerRadius.TopLeft) : (new Rect(), 0);
         bool dlVisible = show && DownloadPod.Visibility == Visibility.Visible;

@@ -14,7 +14,7 @@ namespace Notchy;
 /// Runs Claude Code in headless mode ("claude -p") for Notchy Chat and streams the answer back.
 /// Uses the user's own Claude Code login; nothing else is needed.
 /// </summary>
-public sealed class ClaudeRunner
+public sealed class ClaudeRunner : IChatRunner
 {
     public static readonly string WorkDir = Path.Combine(AppSettings.Folder, "chat");
 
@@ -115,7 +115,8 @@ public sealed class ClaudeRunner
     }
 
     /// <param name="followUp">Continue the previous conversation (claude --continue).</param>
-    public void Run(string prompt, string systemPrompt, bool followUp)
+    /// <param name="imagePath">Not used here: the prompt tells Claude to open the image with its Read tool.</param>
+    public void Run(string prompt, string systemPrompt, bool followUp, string? imagePath)
     {
         Cancel();
         int id = ++_runId;

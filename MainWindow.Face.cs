@@ -121,6 +121,7 @@ public partial class MainWindow
         _compactFaceLast = now;
         _compactFace.Color = S.EyesUseAlbumColor ? Bright(_musicAccent) : ParseColor(S.EyeColor);
         _compactFace.BaseMood = _media.IsPlaying ? Mood.Normal : Mood.Sleepy;
+        SyncSetupFace();
         _compactFace.Update(dt, S.LivelyEyes && _media.IsPlaying ? 1 : 0);
     }
 

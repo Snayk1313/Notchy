@@ -28,7 +28,7 @@ public sealed record CityResult(string Name, string Region, double Lat, double L
 /// </summary>
 public sealed class WeatherService
 {
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(12) };
+    private static readonly HttpClient Http = FastHttp.Client(TimeSpan.FromSeconds(12));
     private (double lat, double lon)? _where;
     private DateTime _whereAt;
     private string _city = "";

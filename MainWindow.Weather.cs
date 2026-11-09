@@ -3,6 +3,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using System.Windows.Input;
@@ -24,11 +25,13 @@ public partial class MainWindow
         _weather.Changed += () => Dispatcher.BeginInvoke(() =>
         {
             UpdateWeatherCard();
-            // (not while you're typing a city: that would wipe the box and its matches)
-            if (_subOpen && _subTitle.Text == Loc.T("weather.title") && !_cityEditing) RefreshSubPage(WeatherPage);
+            // (a refresh asked for by the button redraws the page when it ends, together with its animation)
+            if (!_weatherRefreshing) RedrawWeatherPage();
         });
         _weatherTimer.Tick += async (_, _) => await _weather.RefreshAsync();
         _weatherTimer.Start();
+        _weatherAgeTimer.Tick += (_, _) => { if (!_weatherRefreshing && !_weatherJustDone) PaintRefreshPill(); };
+        _weatherAgeTimer.Start();
         Loaded += async (_, _) => await _weather.RefreshAsync(force: true);
         UpdateWeatherCard();
     }
@@ -169,7 +172,8 @@ public partial class MainWindow
         now.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         now.Children.Add(SkyPath(w.Sky, w.Day, 40));
         var mid = new StackPanel { Margin = new Thickness(14, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
-        mid.Children.Add(new TextBlock { Text = $"{Math.Round(w.Temp)}°", FontSize = 30, FontWeight = FontWeights.Bold, Foreground = Brushes.White, Margin = new Thickness(0, -4, 0, -2) });
+        _weatherTemp = new TextBlock { Text = $"{Math.Round(w.Temp)}°", FontSize = 30, FontWeight = FontWeights.Bold, Foreground = Brushes.White, Margin = new Thickness(0, -4, 0, -2) };
+        mid.Children.Add(_weatherTemp);
         mid.Children.Add(new TextBlock { Text = SkyName(w.Sky, w.Day) + (w.City.Length > 0 ? " · " + w.City : ""), FontSize = 11.5, Foreground = White(0x99),
             TextTrimming = TextTrimming.CharacterEllipsis });
         Grid.SetColumn(mid, 1);
@@ -258,6 +262,7 @@ public partial class MainWindow
         var box = new StackPanel { Margin = new Thickness(4, 8, 4, 0) };
         var line = new DockPanel();
         var pills = new StackPanel { Orientation = Orientation.Horizontal };
+        pills.Children.Add(RefreshPill());
         bool manual = !S.WeatherAuto;
         pills.Children.Add(ListPill("", Loc.T("weather.auto"), !manual, () =>
         {
@@ -289,6 +294,127 @@ public partial class MainWindow
         box.Children.Add(line);
 
         return box;
+    }
+
+    // =====================================================================================
+    // refreshing by hand
+    // =====================================================================================
+
+    private const double RefreshMinMs = 900, RefreshDoneMs = 1700;
+    private static readonly Color RefreshDoneColor = Color.FromRgb(0x5E, 0xD6, 0x7D);
+
+    private readonly DispatcherTimer _weatherAgeTimer = new() { Interval = TimeSpan.FromSeconds(30) };
+    private bool _weatherRefreshing, _weatherJustDone;
+    private TextBlock? _weatherTemp, _refreshLabel;
+    private Border? _refreshPill;
+    private FrameworkElement? _refreshArrow;
+    private Path? _refreshArrowPath, _refreshCheck;
+
+    private void RedrawWeatherPage()
+    {
+        // (not while you're typing a city: that would wipe the box and its matches)
+        if (_subOpen && _subTitle.Text == Loc.T("weather.title") && !_cityEditing) RefreshSubPage(WeatherPage);
+    }
+
+    /// <summary>"↻ há 12 min": how fresh the numbers are, and a click fetches them again.</summary>
+    private Border RefreshPill()
+    {
+        _refreshArrowPath = RefreshGlyph("M20 11a8 8 0 1 0-2.3 6.3M20 5v6h-6");
+        _refreshCheck = RefreshGlyph("M5 13l4.5 4.5L19 7");
+        _refreshCheck.StrokeDashArray = new DoubleCollection { 10, 10 };
+        var canvas = new Grid { Width = 24, Height = 24 };
+        canvas.Children.Add(_refreshArrowPath);
+        canvas.Children.Add(_refreshCheck);
+        _refreshArrow = new Viewbox { Width = 12, Height = 12, Child = canvas, VerticalAlignment = VerticalAlignment.Center,
+            RenderTransformOrigin = new Point(0.5, 0.5), RenderTransform = new RotateTransform() };
+        _refreshLabel = new TextBlock { FontSize = 11, FontWeight = FontWeights.SemiBold, Margin = new Thickness(5, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(_refreshArrow);
+        row.Children.Add(_refreshLabel);
+        var pill = new Border { Child = row, CornerRadius = new CornerRadius(11), Padding = new Thickness(8, 4, 10, 4), Margin = new Thickness(0, 0, 5, 0), Cursor = Cursors.Hand,
+            VerticalAlignment = VerticalAlignment.Center, Background = White(0x14), RenderTransform = new TranslateTransform() };
+        pill.MouseEnter += (_, _) => pill.Opacity = 0.8;
+        pill.MouseLeave += (_, _) => pill.Opacity = 1;
+        pill.MouseLeftButtonUp += (_, e) =>
+        {
+            e.Handled = true;
+            SoundService.Play(Sfx.Click);
+            RefreshWeatherNow();
+        };
+        _refreshPill = pill;
+        PaintRefreshPill();
+        return pill;
+    }
+
+    private static Path RefreshGlyph(string data) => new()
+    {
+        Data = Geometry.Parse(data), StrokeThickness = 2, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round, StrokeLineJoin = PenLineJoin.Round
+    };
+
+    private void PaintRefreshPill()
+    {
+        if (_refreshLabel == null || _refreshArrow == null || _refreshArrowPath == null || _refreshCheck == null) return;
+        var ink = _weatherJustDone ? new SolidColorBrush(RefreshDoneColor) : White(0xDD);
+        _refreshLabel.Foreground = ink;
+        _refreshLabel.Text = _weatherRefreshing ? Loc.T("weather.updating") : _weatherJustDone ? Loc.T("weather.justnow") : WeatherAge();
+        _refreshArrowPath.Stroke = ink;
+        _refreshArrowPath.Visibility = _weatherJustDone ? Visibility.Collapsed : Visibility.Visible;
+        _refreshCheck.Stroke = ink;
+        _refreshCheck.Visibility = _weatherJustDone ? Visibility.Visible : Visibility.Collapsed;
+        if (_weatherJustDone)
+            _refreshCheck.BeginAnimation(Shape.StrokeDashOffsetProperty, new DoubleAnimation(10, 0, TimeSpan.FromMilliseconds(Dur(350))) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+        ((RotateTransform)_refreshArrow.RenderTransform).BeginAnimation(RotateTransform.AngleProperty,
+            _weatherRefreshing ? new DoubleAnimation(0, 360, TimeSpan.FromMilliseconds(800)) { RepeatBehavior = RepeatBehavior.Forever } : null);
+    }
+
+    private string WeatherAge()
+    {
+        if (_weather.Current is not { } w) return Loc.T("weather.refresh");
+        var age = DateTime.Now - w.Fetched;
+        if (age.TotalMinutes < 1) return Loc.T("weather.justnow");
+        return age.TotalMinutes < 60 ? Loc.F("weather.ago.min", (int)age.TotalMinutes) : Loc.F("weather.ago.h", (int)age.TotalHours);
+    }
+
+    private async void RefreshWeatherNow()
+    {
+        if (_weatherRefreshing) return;
+        var before = _weather.Current?.Fetched;
+        _weatherRefreshing = true;
+        _weatherJustDone = false;
+        PaintRefreshPill();
+        await System.Threading.Tasks.Task.WhenAll(_weather.RefreshAsync(force: true), System.Threading.Tasks.Task.Delay(TimeSpan.FromMilliseconds(Dur(RefreshMinMs))));
+        _weatherRefreshing = false;
+
+        _weatherJustDone = _weather.Current != null && _weather.Current.Fetched != before;
+        RedrawWeatherPage();
+        PaintRefreshPill();
+        if (!_weatherJustDone)
+        {
+            ShakeRefreshPill();
+            return;
+        }
+        RollWeatherTemp();
+        await System.Threading.Tasks.Task.Delay(TimeSpan.FromMilliseconds(Dur(RefreshDoneMs)));
+        _weatherJustDone = false;
+        PaintRefreshPill();
+    }
+
+    /// <summary>The new temperature comes up from below.</summary>
+    private void RollWeatherTemp()
+    {
+        if (_weatherTemp == null) return;
+        var move = new TranslateTransform();
+        _weatherTemp.RenderTransform = move;
+        var time = TimeSpan.FromMilliseconds(Dur(450));
+        move.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(16, 0, time) { EasingFunction = new BackEase { Amplitude = 0.4, EasingMode = EasingMode.EaseOut } });
+        _weatherTemp.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, time));
+    }
+
+    /// <summary>No answer from the internet: a little shake, and the numbers that were there stay.</summary>
+    private void ShakeRefreshPill()
+    {
+        if (_refreshPill?.RenderTransform is TranslateTransform move)
+            move.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(-3, 3, TimeSpan.FromMilliseconds(55)) { AutoReverse = true, RepeatBehavior = new RepeatBehavior(3), FillBehavior = FillBehavior.Stop });
     }
 
     /// <summary>"‹ Escolher cidade": only the search box and its matches; picking one goes back to the weather.</summary>

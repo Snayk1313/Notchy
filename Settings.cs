@@ -58,6 +58,13 @@ public sealed class AppSettings
     public bool WeatherAuto { get; set; } = true;
     /// <summary>Other apps' notifications on the island; the apps you turned off; the apps seen so far (for the settings list).</summary>
     public bool NotifyEnabled { get; set; } = true;
+    /// <summary>Windows stays quiet (no pop-up, no sound) and notifications show only on the island.</summary>
+    public bool NotifyOnlyNotchy { get; set; }
+    /// <summary>The notification card still appears when the island is hidden by a full-screen game or video.</summary>
+    public bool NotifyFullscreen { get; set; }
+    /// <summary>Brazil's national holidays on the calendar; the date's outline already blinked once to show it can be clicked.</summary>
+    public bool CalendarHolidays { get; set; } = true;
+    public bool CalendarHintSeen { get; set; }
     public List<string> NotifyMuted { get; set; } = new();
     public List<string> NotifyApps { get; set; } = new();
     public string WeatherCity { get; set; } = "";
@@ -89,6 +96,8 @@ public sealed class AppSettings
     public bool SoundOpenClose { get; set; } = true;
     public bool SoundClicks { get; set; } = true;
     public bool SoundFocus { get; set; } = true;
+    public bool SoundNotice { get; set; } = true;
+    public bool ChatUseGemini { get; set; }
 
     // Claude Code
     public bool ClaudeEnabled { get; set; } = true;

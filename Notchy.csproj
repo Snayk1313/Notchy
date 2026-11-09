@@ -13,7 +13,7 @@
     <RootNamespace>Notchy</RootNamespace>
     <Product>Notchy</Product>
     <!-- Major.minor here; the build number comes from GitHub Actions (each push = a new release). -->
-    <Version>2.1.0</Version>
+    <Version>2.2.0</Version>
     <ApplicationIcon>Notchy.ico</ApplicationIcon>
     <!-- Custom Main (Program.cs) so the hook mode can run without starting WPF. -->
     <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
@@ -31,5 +31,19 @@
     <!-- GitHub repository the updater reads Releases from (set by the release workflow). -->
     <AssemblyMetadata Include="NotchyRepo" Value="$(NotchyRepo)" Condition="'$(NotchyRepo)' != ''" />
   </ItemGroup>
+
+  <!-- The card shown during an update: a tiny separate program, carried inside Notchy and run from the temp folder. -->
+  <PropertyGroup>
+    <WindowsFramework>$(WINDIR)\Microsoft.NET\Framework64\v4.0.30319</WindowsFramework>
+    <UpdateCardExe>$(MSBuildProjectDirectory)\obj\UpdateCard\UpdateCard.exe</UpdateCardExe>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="UpdateCard\**" />
+    <EmbeddedResource Include="$(UpdateCardExe)" LogicalName="UpdateCard.exe" Visible="false" />
+  </ItemGroup>
+  <Target Name="BuildUpdateCard" BeforeTargets="BeforeBuild" Inputs="UpdateCard\UpdateCard.cs" Outputs="$(UpdateCardExe)">
+    <MakeDir Directories="$(MSBuildProjectDirectory)\obj\UpdateCard" />
+    <Exec WorkingDirectory="$(MSBuildProjectDirectory)" Command="&quot;$(WindowsFramework)\csc.exe&quot; /nologo /target:winexe /optimize+ /platform:anycpu /win32icon:Notchy.ico /out:&quot;$(UpdateCardExe)&quot; /r:&quot;$(WindowsFramework)\WPF\PresentationFramework.dll&quot; /r:&quot;$(WindowsFramework)\WPF\PresentationCore.dll&quot; /r:&quot;$(WindowsFramework)\WPF\WindowsBase.dll&quot; /r:&quot;$(WindowsFramework)\System.Xaml.dll&quot; UpdateCard\UpdateCard.cs" />
+  </Target>
 
 </Project>

@@ -44,7 +44,7 @@ public sealed class SpotifyService
 
     private const string Scopes = "user-read-playback-state user-modify-playback-state user-read-currently-playing user-library-read user-library-modify";
 
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
+    private static readonly HttpClient Http = FastHttp.Client(TimeSpan.FromSeconds(10));
     private static AppSettings S => AppSettings.Current;
 
     private string? _accessToken;

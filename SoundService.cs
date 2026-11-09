@@ -5,7 +5,7 @@ using System.Windows.Media;
 
 namespace Notchy;
 
-public enum Sfx { Expand, Collapse, Click, Toggle, Done, Attention, FocusEnd, Like, Hello, Wave, Alarm }
+public enum Sfx { Expand, Collapse, Click, Toggle, Done, Attention, FocusEnd, Like, Hello, Wave, Alarm, Notice }
 
 /// <summary>
 /// Soft, short UI sounds synthesized at startup (no third-party audio files).
@@ -67,6 +67,7 @@ public static class SoundService
             Sfx.FocusEnd => st.SoundFocus,
             Sfx.Done => st.ClaudeSoundDone,
             Sfx.Attention => st.ClaudeSoundAttention,
+            Sfx.Notice => st.SoundNotice,
             _ => true
         };
         if (allowed) PlayNow(sfx);
@@ -174,6 +175,8 @@ public static class SoundService
                 }
                 return b;
             }
+            case Sfx.Notice: // a notification from another app: one clear, glassy "ding"
+                return Ding(1.0, 2093.0, 0.13, 2.0, 1.0, 0.03, 0.36, 0.74);
             case Sfx.FocusEnd: // three-note chime
             {
                 var b = Buffer(1.6);
@@ -187,6 +190,45 @@ public static class SoundService
     }
 
     private static float[] Buffer(double seconds) => new float[(int)(seconds * Rate)];
+
+    /// <summary>One FM strike (a glassy, electronic bell) with a very fast attack and a small room around it, normalized to <paramref name="peak"/>.</summary>
+    private static float[] Ding(double seconds, double freq, double decay, double ratio, double index, double indexDecay, double room, double peak)
+    {
+        int n = (int)(seconds * Rate);
+        double attack = 0.0015 * Rate;
+        var dry = new double[n];
+        for (int i = 0; i < n; i++)
+        {
+            double t = (double)i / Rate;
+            double mod = index * Math.Exp(-t / indexDecay) * Math.Sin(2 * Math.PI * freq * ratio * t);
+            dry[i] = Math.Sin(2 * Math.PI * freq * t + mod) * Math.Min(1, i / attack) * Math.Exp(-t / decay);
+        }
+
+        // the room: four parallel echoes that fade at slightly different rates
+        var wet = new double[n];
+        foreach (var (delayMs, feedback) in new[] { (29.7, 0.62), (37.1, 0.58), (41.1, 0.55), (43.7, 0.52) })
+        {
+            int delay = (int)(delayMs / 1000 * Rate);
+            var line = new double[n];
+            for (int i = 0; i < n; i++)
+            {
+                line[i] = dry[i] + (i >= delay ? feedback * line[i - delay] : 0);
+                wet[i] += line[i] / 4;
+            }
+        }
+
+        double fade = 0.06 * Rate;
+        var mixed = new double[n];
+        double max = 0;
+        for (int i = 0; i < n; i++)
+        {
+            mixed[i] = (dry[i] + room * wet[i]) * Math.Min(1, (n - 1 - i) / (double)(int)fade);
+            max = Math.Max(max, Math.Abs(mixed[i]));
+        }
+        var result = new float[n];
+        for (int i = 0; i < n; i++) result[i] = (float)(mixed[i] * peak / Math.Max(max, 1e-9));
+        return result;
+    }
 
     /// <summary>Adds a short band-passed noise "whoosh" that swells and fades (air moving).</summary>
     private static void Swish(float[] buf, double start, double length, double amp)

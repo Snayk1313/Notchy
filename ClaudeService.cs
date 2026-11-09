@@ -53,6 +53,7 @@ public sealed class PermissionAsk
     public string Tool { get; init; } = "";
     public string Summary { get; init; } = "";
     public string InputJson { get; init; } = "";
+    public DateTime Created { get; } = DateTime.Now;
     internal TcpClient? Client { get; init; }
     internal bool Closed { get; set; }
 }
@@ -84,10 +85,14 @@ public sealed class ClaudeService
         LoadStats();
     }
 
-    /// <summary>The session to display: the most recently active one (within the last hour).</summary>
+    /// <summary>
+    /// The session to display: one waiting for an answer comes first, whichever chat it is in (the oldest question,
+    /// so what's on the island never swaps under the mouse), then the most recently active one (within the last hour).
+    /// </summary>
     public ClaudeSession? Active =>
         _sessions.Values.Where(s => (DateTime.Now - s.LastEvent).TotalMinutes < 60)
-            .OrderByDescending(s => s.IsWorking || s.NeedsAttention)
+            .OrderBy(s => s.Ask?.Created ?? DateTime.MaxValue)
+            .ThenByDescending(s => s.IsWorking || s.NeedsAttention)
             .ThenByDescending(s => s.LastEvent)
             .FirstOrDefault();
 
@@ -322,7 +327,7 @@ public sealed class ClaudeService
 
             case "PreToolUse":
                 if (!s.IsWorking) BeginTask(s);
-                s.NeedsAttention = false;
+                s.NeedsAttention = s.Asks.Count > 0; // another tool of the same chat (a subagent) doesn't answer a waiting question
                 OnTool(s, Str(root, "tool_name"), root.TryGetProperty("tool_input", out var input) ? input : default);
                 break;
 
@@ -383,8 +388,25 @@ public sealed class ClaudeService
                 _sessions.Remove(id);
                 break;
         }
+#if DEBUG
+        LogEvent(evt, id, Str(root, "tool_name"));
+#endif
         Changed?.Invoke();
     }
+
+#if DEBUG
+    /// <summary>Test: which events arrive and what the island would show (names only, no prompts or file contents).</summary>
+    private void LogEvent(string evt, string id, string tool)
+    {
+        try
+        {
+            var a = Active;
+            File.AppendAllText(Path.Combine(AppSettings.Folder, "claude-events.log"),
+                $"{DateTime.Now:HH:mm:ss.fff} {evt} chat={id[..Math.Min(8, id.Length)]} tool={tool} | ilha={a?.Id[..Math.Min(8, a.Id.Length)]} pedido={a?.Ask?.Tool} alerta={a?.NeedsAttention}\n");
+        }
+        catch { }
+    }
+#endif
 
     private static void BeginTask(ClaudeSession s)
     {

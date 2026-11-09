@@ -18,7 +18,7 @@ public partial class MainWindow : Window
 {
     private enum IslandState { None, Idle, Compact, Volume, Expanded }
     private enum Tab { Home, Claude, Music, Chat, Focus, Clock, Shelf, Downloads, News }
-    private enum CompactMode { None, Music, MusicPaused, Claude, ClaudeDone, ClaudeAttention, Focus, FocusDone, Battery, BatteryLow, Update, Transfer, TransferDone, TransferFailed, WhatsNew, Timer, TimerRing, Buds, BudsLow, BudsOff, Notice }
+    private enum CompactMode { None, Music, MusicPaused, Claude, ClaudeDone, ClaudeAttention, Focus, FocusDone, Battery, BatteryLow, Update, Transfer, TransferDone, TransferFailed, WhatsNew, Timer, TimerRing, Buds, BudsLow, BudsOff, Notice, CalNotice }
 
     private static readonly Color ClaudeColor = Color.FromRgb(0xE8, 0x82, 0x5F);
     private static readonly Color FocusColor = Color.FromRgb(0xB7, 0x9C, 0xFF);
@@ -122,6 +122,7 @@ public partial class MainWindow : Window
         InitBuds();
         InitWeather();
         InitNotices();
+        InitCalendar();
         UpdateOutputIcon();
         _menu = BuildMenu();
         BuildNav();
@@ -167,6 +168,7 @@ public partial class MainWindow : Window
             _frame.Start();
             StartFrameLoop();
             _claude.Start();
+            if (AppSettings.WasFirstRun) _ = OpenSetupAfterIntroAsync();
             try
             {
                 await _media.InitAsync();
@@ -241,6 +243,7 @@ public partial class MainWindow : Window
         _focus.Refresh();
         if (_weather.PlaceChanged) _ = _weather.RefreshAsync(); // the weather's place was changed in the settings
         if (_bell != null) UpdateBell();
+        SyncQuietMode();
         ApplyTexts();
         ApplyGlow();
         _lineIdx = int.MinValue;
@@ -309,6 +312,7 @@ public partial class MainWindow : Window
         bool ringing = _ring != null && !_hiddenForFullscreen; // a timer/alarm calling you takes the island
         // a notification card stays a card under the mouse (so you can click it), instead of opening the island
         ringing |= _noticeShown != null && _transient == CompactMode.Notice && DateTime.UtcNow < _transientUntil;
+        ringing |= CalNoticeHolds;
         if (_forcedState is { } forced) next = forced;
         else if (!ringing && _hoverActive || _clickOpened || _menu.IsOpen || _devicesMenuOpen?.IsOpen == true || _dragOver || _lassoing || ChatKeepsOpen) next = IslandState.Expanded;
         else if (!ringing && DateTime.UtcNow < _volumeOsdUntil || !ringing && (_state == IslandState.Volume && (_volHover || _outMenuOpen?.IsOpen == true)))
@@ -337,7 +341,7 @@ public partial class MainWindow : Window
         IslandState.Idle => new Size(IdleWidth, 30),
         IslandState.Volume => LevelSize(),
         IslandState.Expanded => new Size(480, _subOpen ? SubPageHeight : TabHeight(_tab)),
-        _ => new Size(CompactWidth(_compactMode), _compactMode == CompactMode.TimerRing ? RingHeight : _compactMode == CompactMode.Notice ? NoticeHeight : IsTransferMode(_compactMode) ? TransferHeight : 34)
+        _ => new Size(CompactWidth(_compactMode), _compactMode == CompactMode.TimerRing ? RingHeight : _compactMode == CompactMode.Notice ? NoticeHeight : _compactMode == CompactMode.CalNotice ? CalNoticeHeight : IsTransferMode(_compactMode) ? TransferHeight : 34)
     };
 
     private double TabHeight(Tab t) => 34 + 40 + 2 + t switch
@@ -364,6 +368,7 @@ public partial class MainWindow : Window
         CompactMode.Buds or CompactMode.BudsLow => BudsWidth,
         CompactMode.BudsOff => BudsOffWidth,
         CompactMode.Notice => NoticeWidth,
+        CompactMode.CalNotice => _calWidth,
         CompactMode.WhatsNew => WhatsNewWidth(),
         CompactMode.Transfer or CompactMode.TransferDone or CompactMode.TransferFailed => TransferWidth,
         _ => 320
@@ -399,6 +404,7 @@ public partial class MainWindow : Window
             if (!_dragOver) SelectTab(target, animate: false);
             if (playSound && prev != IslandState.None) SoundService.Play(Sfx.Expand);
             UpdateClock();
+            MaybePulseDate();
         }
         else if (prev == IslandState.Expanded && playSound)
         {
@@ -408,9 +414,10 @@ public partial class MainWindow : Window
         AnimateIslandSize(TargetSize(state), expanding || prev == IslandState.Expanded);
 
         Fade(IdlePanel, state == IslandState.Idle);
-        Fade(CompactPanel, state == IslandState.Compact && !IsTransferMode(_compactMode) && !IsClaudeMode(_compactMode) && _compactMode is not (CompactMode.WhatsNew or CompactMode.TimerRing) && !IsBudsMode(_compactMode) && _compactMode != CompactMode.Notice);
+        Fade(CompactPanel, state == IslandState.Compact && !IsTransferMode(_compactMode) && !IsClaudeMode(_compactMode) && _compactMode is not (CompactMode.WhatsNew or CompactMode.TimerRing) && !IsBudsMode(_compactMode) && _compactMode is not (CompactMode.Notice or CompactMode.CalNotice));
         Fade(_budsPanel, state == IslandState.Compact && IsBudsMode(_compactMode));
         Fade(_noticePanel, state == IslandState.Compact && _compactMode == CompactMode.Notice);
+        Fade(_calPanel, state == IslandState.Compact && _compactMode == CompactMode.CalNotice);
         Fade(_ringPanel, state == IslandState.Compact && _compactMode == CompactMode.TimerRing);
         Fade(WhatsNewPanel, state == IslandState.Compact && _compactMode == CompactMode.WhatsNew);
         Fade(ClaudePanel, state == IslandState.Compact && IsClaudeMode(_compactMode));
@@ -546,6 +553,7 @@ public partial class MainWindow : Window
         UpdateVolumeIsland();
         UpdateBudsFrame();
         UpdateNoticesFrame();
+        UpdateCalendarFrame();
         var pos = _media.Position;
 
         if (_state == IslandState.Expanded)
@@ -622,8 +630,9 @@ public partial class MainWindow : Window
     {
         var now = DateTime.Now;
         var culture = Loc.Culture;
-        DateRun.Text = now.ToString("ddd d MMM yyyy", culture);
+        DateRun.Text = now.ToString("ddd d MMM", culture); // (the pill needs the room the year took; the calendar shows it)
         TimeRun.Text = FormatClock(now);
+        UpdateDateDot();
 
         var power = System.Windows.Forms.SystemInformation.PowerStatus;
         if (power.BatteryChargeStatus.HasFlag(System.Windows.Forms.BatteryChargeStatus.NoSystemBattery) ||
@@ -651,7 +660,7 @@ public partial class MainWindow : Window
         bool fullscreen = Native.IsForegroundFullscreen(_hwnd);
         if (fullscreen == _hiddenForFullscreen) return;
         _hiddenForFullscreen = fullscreen;
-        Island.Visibility = fullscreen ? Visibility.Hidden : Visibility.Visible;
+        ApplyFullscreenHide();
     }
 
     // =====================================================================================
@@ -849,10 +858,10 @@ public partial class MainWindow : Window
         (string a, string b) = _tab switch
         {
             Tab.Claude => ("Claude", " Code"),
-            Tab.Music => ("Music", " Player"),
+            Tab.Music => (Loc.T("music.head.a"), Loc.T("music.head.b")),
             Tab.Focus => (Loc.T("focus.head.a"), Loc.T("focus.head.b")),
-            Tab.Shelf => ("File", " Shelf"),
-            Tab.Downloads => ("Download", " Center"),
+            Tab.Shelf => (Loc.T("shelf.head.a"), Loc.T("shelf.head.b")),
+            Tab.Downloads => (Loc.T("downloads.head.a"), Loc.T("downloads.head.b")),
             Tab.Chat => ("Notchy", " Chat"),
             Tab.News => (Loc.T("news.title"), " " + WhatsNew.Version),
             _ => ("Notchy", "")
@@ -961,7 +970,7 @@ public partial class MainWindow : Window
     {
         var m = _compactMode;
         // Claude / download alone have their own panels: leave the generic one as it was while it fades out
-        if (IsClaudeMode(m) || IsTransferMode(m) || m is CompactMode.WhatsNew or CompactMode.TimerRing or CompactMode.Notice || IsBudsMode(m))
+        if (IsClaudeMode(m) || IsTransferMode(m) || m is CompactMode.WhatsNew or CompactMode.TimerRing or CompactMode.Notice or CompactMode.CalNotice || IsBudsMode(m))
         {
             if (IsTransferMode(m)) UpdateTransferPanel();
             ShowCompactFace(false);
@@ -2122,6 +2131,12 @@ public partial class MainWindow : Window
             OpenSubPage(Loc.T("weather.title"), WeatherPage);
             await Shot("12_weather");
             await Shot("12_weather_place");
+            RefreshWeatherNow();
+            await Shot("12_refresh_busy");
+            for (int i = 0; i < 60 && _weatherRefreshing; i++) await Task.Delay(250);
+            await Shot("12_refresh_done");
+            await Task.Delay(2500);
+            await Shot("12_refresh_idle");
             OpenCityPage();
             _cityBox!.Text = "Alagoinha";
             for (int i = 0; i < 40 && (_cityResults?.Children.Count ?? 0) < 2; i++) await Task.Delay(500);
@@ -2305,11 +2320,25 @@ public partial class MainWindow : Window
             await Shot("7_chat_streaming");
             for (int i = 0; i < 60 && _runner!.Busy; i++) await Task.Delay(500);
             await Shot("7_chat_answer");
+            if (S.ChatUseGemini)
+            {
+                RunChatAction("ask", "E o que mais?"); // a follow-up: the earlier messages go along
+                await Task.Delay(300);
+                for (int i = 0; i < 60 && _runner!.Busy; i++) await Task.Delay(250);
+                await Shot("7_chat_followup");
+                _ctxText = null;
+                _ctxImage = System.IO.Path.Combine(folder, "7_chat_context.png");
+                _ctxChangedSinceAnswer = true;
+                RunChatAction("explain", "");
+                await Task.Delay(300);
+                for (int i = 0; i < 60 && _runner!.Busy; i++) await Task.Delay(250);
+                await Shot("7_chat_image");
+            }
         }
 
         var sw = new SettingsWindow { WindowStartupLocation = WindowStartupLocation.Manual, Left = 100, Top = 100 };
         sw.Show();
-        foreach (var page in new[] { "general", "island", "sounds", "claude", "spotify", "focus" })
+        foreach (var page in new[] { "general", "look", "notif", "sounds", "music", "calendar", "focus", "files", "claude", "chat", "about" })
         {
             sw.ShowPage(page);
             await Task.Delay(700);

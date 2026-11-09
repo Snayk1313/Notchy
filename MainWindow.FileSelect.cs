@@ -75,7 +75,7 @@ public partial class MainWindow
             _selPill.Background = new SolidColorBrush(Color.FromArgb(0x24, c.R, c.G, c.B));
         }
         _selPill.Visibility = n > 0 ? Visibility.Visible : Visibility.Collapsed;
-        ((TextBlock)DateRun.Parent).Visibility = n > 0 ? Visibility.Collapsed : Visibility.Visible;
+        DatePill.Visibility = HeaderTime.Visibility = n > 0 ? Visibility.Collapsed : Visibility.Visible;
 
         bool shelfMode = _shelfSel.Mode;
         ShelfSelect.Visibility = _shelf.Count >= 2 ? Visibility.Visible : Visibility.Collapsed;

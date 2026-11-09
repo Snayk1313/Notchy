@@ -461,6 +461,39 @@ public partial class MainWindow
                 });
                 break;
             }
+            case "calendar":
+            {
+                // the month, with the day of the event lit up and walking along
+                const int columns = 7, rows = 4;
+                const double left = 27, top = 14, gap = 13.5, size = 8;
+                for (int row = 0; row < rows; row++)
+                    for (int column = 0; column < columns; column++)
+                        Pill(left + column * gap, top + row * gap, size, size, new SolidColorBrush(Color.FromArgb(0x24, 255, 255, 255)));
+                var today = Pill(left, top, size + 2, size + 2, new SolidColorBrush(color));
+                today.Effect = glow;
+                _newsArtFrames.Add(t =>
+                {
+                    int day = (int)(t / 0.55) % (columns * rows);
+                    Canvas.SetLeft(today, left + day % columns * gap - 1);
+                    Canvas.SetTop(today, top + day / columns * gap - 1);
+                });
+                break;
+            }
+            case "chat":
+            {
+                // the island's eyes, and an answer writing itself below them
+                Pill(30, 4, 80, 28, Brushes.Black);
+                Eyes(70, 18, color);
+                double[] widths = { 112, 96, 64 };
+                var lines = new Rectangle[widths.Length];
+                for (int i = 0; i < widths.Length; i++) lines[i] = Pill(14, 44 + i * 12, widths[i], 6, new SolidColorBrush(Color.FromArgb(0xB0, 255, 255, 255)));
+                _newsArtFrames.Add(t =>
+                {
+                    double written = t % 4 / 2.6 * widths.Length;
+                    for (int i = 0; i < lines.Length; i++) lines[i].Width = Math.Max(0.01, widths[i] * Math.Clamp(written - i, 0, 1));
+                });
+                break;
+            }
             case "focus":
             {
                 // the ring filling up around concentrating eyes
