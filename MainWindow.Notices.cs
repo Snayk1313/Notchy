@@ -12,7 +12,7 @@ namespace Notchy;
 
 /// <summary>
 /// Notifications from other apps on the island. When one arrives, the island drops down into a card (like an
-/// iPhone banner): the sender's photo (or the app's icon), Notchy's eyes with "WhatsApp · agora", who sent it and
+/// iPhone banner): the sender's photo (or the app's icon), "WhatsApp · agora", who sent it and
 /// the message. Several in a row come one after another ("+2" while more wait). A bell next to the clock counts
 /// the new ones and opens "‹ Notificações", grouped by app; clicking one opens its app.
 /// </summary>
@@ -44,15 +44,9 @@ public partial class MainWindow
             Background = White(0x14) };
         _noticePanel.Children.Add(_noticeAvatar);
 
-        var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 22, 0) };
+        var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 44, 0) };
         Grid.SetColumn(texts, 1);
         var top = new StackPanel { Orientation = Orientation.Horizontal };
-        // Notchy's eyes, small, before the app's name
-        var eyes = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 7, 0),
-            Effect = new DropShadowEffect { Color = Colors.White, BlurRadius = 6, ShadowDepth = 0, Opacity = 0.6 } };
-        eyes.Children.Add(new Rectangle { Width = 4, Height = 7, RadiusX = 2, RadiusY = 2, Fill = Brushes.White, Margin = new Thickness(0, 0, 3, 0) });
-        eyes.Children.Add(new Rectangle { Width = 4, Height = 7, RadiusX = 2, RadiusY = 2, Fill = Brushes.White });
-        top.Children.Add(eyes);
         _noticeApp = new TextBlock { FontSize = 10.5, Foreground = White(0x88), VerticalAlignment = VerticalAlignment.Center };
         top.Children.Add(_noticeApp);
         texts.Children.Add(top);
@@ -67,15 +61,18 @@ public partial class MainWindow
         Grid.SetColumn(_noticeMore, 1);
         _noticePanel.Children.Add(_noticeMore);
 
-        // a click on the card opens the app
-        _noticePanel.MouseLeftButtonUp += (_, e) =>
-        {
-            e.Handled = true;
-            if (_noticeShown is { } n) OpenNoticeApp(n);
-            EndNotice();
-        };
+        var close = NoticeCloseButton();
+        close.HorizontalAlignment = HorizontalAlignment.Right;
+        close.Margin = new Thickness(0, 4, 16, 0);
+        Grid.SetColumn(close, 1);
+        _noticePanel.Children.Add(close);
+
+        // a click on the card opens the app; dragging it sideways dismisses it
+        _noticePanel.RenderTransform = _noticeCardMove;
+        MakeSwipeable(_noticePanel, _noticeCardMove, close, ClickNotice);
         ((Panel)CompactPanel.Parent).Children.Add(_noticePanel);
 
+        BuildNoticePill();
         BuildBell();
         _notices.AccessChecked += SyncQuietMode;
         _notices.Arrived += OnNotice;
@@ -165,8 +162,13 @@ public partial class MainWindow
         if (SoundService.Hushed || _hiddenForFullscreen && !S.NotifyFullscreen) return;
         _noticeQueue.Enqueue(n);
         if (_noticeShown == null) ShowNextNotice();
-        else _noticeMore.Text = "+" + _noticeQueue.Count;
-        _noticeMore.Visibility = _noticeQueue.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        else UpdateNoticeCount();
+    }
+
+    private void UpdateNoticeCount()
+    {
+        _noticeMore.Text = _pillMore.Text = "+" + _noticeQueue.Count;
+        _noticeMore.Visibility = _pillMore.Visibility = _noticeQueue.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void ShowNextNotice()
@@ -184,11 +186,18 @@ public partial class MainWindow
         _noticeBody.Visibility = n.Body.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         _noticeAvatar.CornerRadius = new CornerRadius(n.IsPhoto ? 20 : 11);
         _noticeAvatar.Background = n.Avatar != null ? new ImageBrush(n.Avatar) { Stretch = Stretch.UniformToFill } : White(0x14);
-        _noticeMore.Text = "+" + _noticeQueue.Count;
-        _noticeMore.Visibility = _noticeQueue.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        _noticeAccent = n.Accent ?? NoticeNoAccent;
+        UpdateNoticeCount();
         ApplyFullscreenHide();
         SoundService.Play(Sfx.Notice);
+        // the island in use isn't disturbed: under it, as a pill
+        if (NoticeGoesUnderIsland)
+        {
+            ShowNoticePill(n);
+            return;
+        }
         ShowTransient(CompactMode.Notice, "", "", NoticeSeconds);
+        if (_state == IslandState.Compact && _compactMode == CompactMode.Notice) Fade(_noticePanel, true); // (the one before may have been swiped away)
     }
 
     private void EndNotice()
@@ -202,9 +211,25 @@ public partial class MainWindow
     /// <summary>Every frame: when a card's time is up, the next one (if any) comes down.</summary>
     private void UpdateNoticesFrame()
     {
+        PlaceNoticePill();
         if (_noticeShown == null) return;
+        if (_pillMorphing) return;
+        CheckCardStillFits();
+        if (_noticeInPill)
+        {
+            if (_noticePill.IsMouseOver || _noticeSwiping) _pillUntil = DateTime.UtcNow.AddSeconds(PillKeepSeconds);
+            if (DateTime.UtcNow < _pillUntil)
+            {
+                CheckPillStillNeeded();
+                return;
+            }
+            HideNoticePill();
+            _noticeShown = null;
+            if (_noticeQueue.Count > 0) ShowNextNotice();
+            return;
+        }
         // reading it: it waits while the mouse is on it
-        if (_transient == CompactMode.Notice && _noticePanel.IsMouseOver) _transientUntil = DateTime.UtcNow.AddSeconds(1.5);
+        if (_transient == CompactMode.Notice && (_noticePanel.IsMouseOver || _noticeSwiping)) _transientUntil = DateTime.UtcNow.AddSeconds(1.5);
         if (_transient == CompactMode.Notice && DateTime.UtcNow < _transientUntil) return;
         _noticeShown = null;
         if (_noticeQueue.Count > 0) ShowNextNotice();

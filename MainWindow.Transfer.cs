@@ -501,6 +501,7 @@ public partial class MainWindow
         _clickOpened = true;
         _hoverRequested = false;
         _hoverTimer.Stop();
+        KeepOpenOverDownloadPod();
         UpdateState();
     }
 
@@ -509,6 +510,18 @@ public partial class MainWindow
         if (S.Open != OpenMode.Hover) return;
         _dlOpenRequest = true;
         Island_MouseEnter(sender, e);
+        KeepOpenOverDownloadPod();
+    }
+
+    /// <summary>
+    /// The bubble sits further out than the open island reaches: from its far corner the mouse ends up outside the island
+    /// that just opened, which would close it, bring the bubble back under the mouse and start over. Until the mouse
+    /// moves away from where the bubble was, that doesn't count as leaving.
+    /// </summary>
+    private void KeepOpenOverDownloadPod()
+    {
+        if (DownloadPod.ActualWidth < 1) return;
+        _keepOpenArea = DownloadPod.TransformToAncestor(this).TransformBounds(new Rect(0, _topHidden, DownloadPod.ActualWidth, DownloadPod.ActualHeight - _topHidden));
     }
 
     // ------------------------------------------------------------------ Downloads tab
@@ -533,7 +546,7 @@ public partial class MainWindow
         var files = t == null ? new List<DownloadFile>() : _transfers.Files.ToList();
         var history = _dlHistory.Entries;
         string key = string.Join("|", files.Select(f => f.PartialPath)) + "#" + string.Join("|", history.Select(h => h.Path)) +
-                     "#" + (_dlCanceling ?? "");
+                     "#" + (_dlCanceling ?? "") + "#" + (_dlCleared != null);
         if (force || key != _dlTabKey)
         {
             _dlTabKey = key;
@@ -577,6 +590,7 @@ public partial class MainWindow
     private void BuildDownloadsTab(TransferInfo? t, List<DownloadFile> files, IReadOnlyList<DownloadEntry> history)
     {
         DownloadsList.Children.Clear();
+        _dlHistoryRows.Clear();
         _dlRows.Clear();
         _dlSel.Items.Clear();
         _dlSelectText = _dlAllText = null;
@@ -584,7 +598,12 @@ public partial class MainWindow
         double h = 0;
 
         _dlEmpty = files.Count == 0 && history.Count == 0;
-        if (files.Count == 0 && history.Count == 0)
+        if (_dlCleared != null)
+        {
+            DownloadsList.Children.Add(ClearedRow());
+            h += DlUndoRowHeight;
+        }
+        else if (files.Count == 0 && history.Count == 0)
         {
             var empty = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 18, 0, 0) };
             empty.Children.Add(SleepyCloud());
@@ -612,7 +631,9 @@ public partial class MainWindow
             h += 18;
             foreach (var e in history)
             {
-                DownloadsList.Children.Add(HistoryRow(e));
+                var row = HistoryRow(e);
+                _dlHistoryRows.Add(row);
+                DownloadsList.Children.Add(row);
                 h += 38;
             }
         }
@@ -643,7 +664,6 @@ public partial class MainWindow
         title.Margin = new Thickness(0);
         var grid = new Grid { Height = 14, Margin = new Thickness(4, 2, 0, 4) };
         grid.Children.Add(title);
-        if (count < 2) return grid;
 
         Border Link(Action click, out TextBlock text)
         {
@@ -658,12 +678,91 @@ public partial class MainWindow
             return b;
         }
         var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-        _dlAllLink = Link(() => _dlSel.MarkAll(), out var all);
-        _dlAllText = all;
-        row.Children.Add(_dlAllLink);
-        row.Children.Add(Link(() => _dlSel.SetMode(!_dlSel.Mode), out var select));
-        _dlSelectText = select;
+        if (count >= 2)
+        {
+            _dlAllLink = Link(() => _dlSel.MarkAll(), out var all);
+            _dlAllText = all;
+            row.Children.Add(_dlAllLink);
+            row.Children.Add(Link(() => _dlSel.SetMode(!_dlSel.Mode), out var select));
+            _dlSelectText = select;
+        }
+        row.Children.Add(Link(ClearDownloads, out var clear));
+        clear.Text = Loc.T("dl.clear");
         grid.Children.Add(row);
+        return grid;
+    }
+
+    // ------------------------------------------------------------------ clearing the list (the files stay)
+
+    private const double DlUndoRowHeight = 44, DlUndoSeconds = 5;
+    private List<DownloadEntry>? _dlCleared;
+    private DateTime _dlUndoUntil;
+    private System.Windows.Threading.DispatcherTimer? _dlUndoTimer;
+    private readonly List<FrameworkElement> _dlHistoryRows = new();
+
+    private static void SlideRowAway(FrameworkElement row, TimeSpan delay, TimeSpan time)
+    {
+        var move = new TranslateTransform();
+        row.RenderTransform = move;
+        row.IsHitTestVisible = false;
+        move.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(20, time) { BeginTime = delay });
+        row.BeginAnimation(OpacityProperty, new DoubleAnimation(0, time) { BeginTime = delay });
+    }
+
+    private async void ClearDownloads()
+    {
+        double stagger = Dur(30), fade = Dur(200);
+        var rows = _dlHistoryRows.ToList();
+        for (int i = 0; i < rows.Count; i++) SlideRowAway(rows[i], TimeSpan.FromMilliseconds(i * stagger), TimeSpan.FromMilliseconds(fade));
+        await Task.Delay((int)(rows.Count * stagger + fade));
+        _dlCleared = _dlHistory.Clear();
+        _dlUndoTimer?.Stop();
+        _dlUndoUntil = DateTime.UtcNow.AddSeconds(DlUndoSeconds);
+        _dlUndoTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(DlUndoSeconds) };
+        _dlUndoTimer.Tick += (_, _) => EndUndo();
+        _dlUndoTimer.Start();
+        UpdateDownloadsTab(force: true);
+    }
+
+    private void EndUndo()
+    {
+        _dlUndoTimer?.Stop();
+        _dlCleared = null;
+        UpdateDownloadsTab(force: true);
+    }
+
+    private void RemoveDownload(string path, FrameworkElement row)
+    {
+        var time = TimeSpan.FromMilliseconds(Dur(200));
+        SlideRowAway(row, TimeSpan.Zero, time);
+        Task.Delay(time).ContinueWith(_ => Dispatcher.BeginInvoke(() =>
+        {
+            _dlHistory.Remove(path);
+            UpdateDownloadsTab(force: true);
+        }));
+    }
+
+    /// <summary>"Lista limpa", a bar running out, and the way back.</summary>
+    private FrameworkElement ClearedRow()
+    {
+        var grid = new Grid { Height = DlUndoRowHeight - 4, Margin = new Thickness(4, 0, 2, 4) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition());
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var left = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        left.Children.Add(new TextBlock { Text = Loc.T("dl.cleared"), FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White });
+        var scale = new ScaleTransform(1, 1);
+        left.Children.Add(new Border { Height = 3, CornerRadius = new CornerRadius(1.5), Margin = new Thickness(0, 6, 14, 0), Background = new SolidColorBrush(DoneGreen), RenderTransform = scale });
+        // from where it really is: this row is drawn again whenever the tab is rebuilt (the island reopening, say)
+        double secondsLeft = Math.Clamp((_dlUndoUntil - DateTime.UtcNow).TotalSeconds, 0, DlUndoSeconds);
+        scale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(secondsLeft / DlUndoSeconds, 0, TimeSpan.FromSeconds(secondsLeft)));
+        grid.Children.Add(left);
+        var undo = ListPill("", Loc.T("dl.undo"), false, () =>
+        {
+            if (_dlCleared is { } items) _dlHistory.Restore(items);
+            EndUndo();
+        });
+        Grid.SetColumn(undo, 1);
+        grid.Children.Add(undo);
         return grid;
     }
 
@@ -772,6 +871,7 @@ public partial class MainWindow
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition());
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         // what kind of file it is, in a soft little circle (hidden while the check or the ring is showing)
         var (kindGlyph, kindColor) = FileKind(e.Path);
         var glyph = new Grid { Width = 26, Height = 26, VerticalAlignment = VerticalAlignment.Center };
@@ -807,12 +907,16 @@ public partial class MainWindow
             Child = grid, CornerRadius = new CornerRadius(10), Padding = new Thickness(8.5, 2.5, 6.5, 2.5), Margin = new Thickness(0, 0, 0, 2),
             BorderThickness = new Thickness(1.5), BorderBrush = Brushes.Transparent, Background = Brushes.Transparent, Cursor = Cursors.Hand, Height = 36, ToolTip = Loc.T("dl.open")
         };
+        var remove = SmallButton("", Loc.T("dl.remove"), () => RemoveDownload(path, row));
+        remove.Opacity = 0;
+        Grid.SetColumn(remove, 3);
+        grid.Children.Add(remove);
         bool hovering = false, isMarked = false;
         void Tint() => row.Background = isMarked
             ? new SolidColorBrush(Color.FromArgb(0x1C, DoneGreen.R, DoneGreen.G, DoneGreen.B))
             : hovering ? new SolidColorBrush(Color.FromArgb(0x12, 255, 255, 255)) : Brushes.Transparent;
-        row.MouseEnter += (_, _) => { hovering = true; Tint(); };
-        row.MouseLeave += (_, _) => { hovering = false; Tint(); };
+        row.MouseEnter += (_, _) => { hovering = true; remove.Opacity = 1; Tint(); };
+        row.MouseLeave += (_, _) => { hovering = false; remove.Opacity = 0; Tint(); };
         _dlSel.Items.Add(new SelItem
         {
             Path = path,
@@ -883,10 +987,10 @@ public partial class MainWindow
 /// <summary>A finished download kept in the Downloads tab.</summary>
 public sealed record DownloadEntry(string Path, long Size, DateTime Finished);
 
-/// <summary>The last 5 finished downloads (files you deleted drop out), saved next to the settings.</summary>
+/// <summary>The last 10 finished downloads (files you deleted drop out), saved next to the settings.</summary>
 public sealed class DownloadHistory
 {
-    private const int Max = 5;
+    private const int Max = 10;
     private static readonly string FilePath = System.IO.Path.Combine(AppSettings.Folder, "downloads.json");
     private List<DownloadEntry> _list = new();
 
@@ -920,6 +1024,28 @@ public sealed class DownloadHistory
         _list.RemoveAll(e => string.Equals(e.Path, path, StringComparison.OrdinalIgnoreCase));
         _list.Insert(0, new DownloadEntry(path, size, DateTime.UtcNow));
         if (_list.Count > Max) _list.RemoveRange(Max, _list.Count - Max);
+        Save();
+    }
+
+    public void Remove(string path)
+    {
+        _list.RemoveAll(e => string.Equals(e.Path, path, StringComparison.OrdinalIgnoreCase));
+        Save();
+    }
+
+    /// <summary>Empties the list and hands back what was in it (only the list: the files stay).</summary>
+    public List<DownloadEntry> Clear()
+    {
+        var old = _list;
+        _list = new();
+        Save();
+        return old;
+    }
+
+    /// <summary>Puts cleared items back, after anything that finished in the meantime.</summary>
+    public void Restore(IEnumerable<DownloadEntry> items)
+    {
+        _list = _list.Concat(items.Where(i => !_list.Any(e => string.Equals(e.Path, i.Path, StringComparison.OrdinalIgnoreCase)))).Take(Max).ToList();
         Save();
     }
 

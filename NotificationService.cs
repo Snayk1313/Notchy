@@ -25,6 +25,8 @@ public sealed record Notice(uint Id, string App, string AppId, string Title, str
     public string? Tag { get; init; }
     /// <summary>Set on the calendar's own notices: the type of the event, for its icon in the history.</summary>
     public CalType? CalendarType { get; init; }
+    /// <summary>The colour of the app that sent it (its icon's), for the card's outline.</summary>
+    public System.Windows.Media.Color? Accent { get; init; }
 }
 
 /// <summary>
@@ -42,6 +44,7 @@ public sealed class NotificationService
 
     private readonly HashSet<uint> _seen = new();
     private readonly Dictionary<string, BitmapSource?> _appIcons = new();
+    private readonly Dictionary<string, System.Windows.Media.Color?> _appAccents = new();
     private System.Windows.Threading.DispatcherTimer? _timer;
     private bool _primed, _busy;
 
@@ -174,7 +177,7 @@ public sealed class NotificationService
 #if DEBUG
             try { File.AppendAllText(Path.Combine(AppSettings.Folder, "notice-icons.log"), $"{DateTime.Now:HH:mm:ss} BANDEJA {app} enviado={when:HH:mm:ss} imagem={icon?.PixelWidth}x{icon?.PixelHeight}\n"); } catch { }
 #endif
-            var notice = new Notice(0, app, appId, Loc.T("notif.tray"), "", when, icon, false);
+            var notice = new Notice(0, app, appId, Loc.T("notif.tray"), "", when, icon, false) { Accent = AccentFor(appId, icon) };
             History.Insert(0, notice);
             if (History.Count > 60) History.RemoveAt(History.Count - 1);
             HistoryChanged?.Invoke();
@@ -232,12 +235,13 @@ public sealed class NotificationService
             picture = await SenderPhotoAsync(n.Id, appId, title);
             photo = picture != null;
         }
-        picture ??= await AppIconAsync(n, appId, app);
+        var appIcon = await AppIconAsync(n, appId, app);
+        picture ??= appIcon;
 #if DEBUG
         try { File.AppendAllText(Path.Combine(AppSettings.Folder, "notice-icons.log"), $"{DateTime.Now:HH:mm:ss} {app} foto={photo} imagem={picture?.PixelWidth}x{picture?.PixelHeight}\n"); } catch { }
 #endif
         var notice = new Notice(n.Id, app, appId, title, body, n.CreationTime.LocalDateTime, picture, photo);
-        return notice with { Payload = PayloadFor(notice), Tag = TagFor(notice) };
+        return notice with { Payload = PayloadFor(notice), Tag = TagFor(notice), Accent = AccentFor(appId, appIcon) };
     }
 
     private static string OneLine(string text) => Regex.Replace(text ?? "", @"\s+", " ").Trim();
@@ -362,6 +366,14 @@ public sealed class NotificationService
         icon ??= DesktopAppIcon.Find(appId, app);
         if (icon != null) _appIcons[appId] = icon; // (not found: the next notification tries again)
         return icon;
+    }
+
+    private System.Windows.Media.Color? AccentFor(string appId, BitmapSource? icon)
+    {
+        if (_appAccents.TryGetValue(appId, out var known)) return known;
+        var accent = DesktopAppIcon.Accent(icon);
+        if (icon != null) _appAccents[appId] = accent;
+        return accent;
     }
 
     private static BitmapSource? Decode(byte[] bytes)

@@ -171,8 +171,16 @@ public partial class MainWindow
         var pod = podVisible ? Px(ClaudePod, ClaudePod.CornerRadius.TopLeft) : (new Rect(), 0);
         bool dlVisible = show && DownloadPod.Visibility == Visibility.Visible;
         var dl = dlVisible ? Px(DownloadPod, DownloadPod.CornerRadius.TopLeft) : (new Rect(), 0);
-        _backdrop.Update(island.Item1, island.Item2, pod.Item1, pod.Item2, podVisible ? ClaudePod.Opacity : 0,
-            dl.Item1, dl.Item2, dlVisible ? DownloadPod.Opacity : 0);
+        double podOpacity = podVisible ? ClaudePod.Opacity : 0, dlOpacity = dlVisible ? DownloadPod.Opacity : 0;
+        // the notification pill under the open island has the same glass, in whichever bubble's place is free
+        if (show && _noticePill.Visibility == Visibility.Visible)
+        {
+            if (!podVisible) (pod, podOpacity) = (Px(_noticePill, PillRadius), _noticePill.Opacity);
+            else if (!dlVisible) (dl, dlOpacity) = (Px(_noticePill, PillRadius), _noticePill.Opacity);
+            else _pillBody.Background = PillNoGlass; // both bubbles are out: no glass left for it, so it can't be see-through
+        }
+        _backdrop.Update(island.Item1, island.Item2, pod.Item1, pod.Item2, podOpacity,
+            dl.Item1, dl.Item2, dlOpacity);
     }
 
     // =====================================================================================

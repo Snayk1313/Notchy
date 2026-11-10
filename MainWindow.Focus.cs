@@ -31,6 +31,8 @@ public partial class MainWindow
     private int _reelValue = -1;
     private double _dialShown = -1;
     private readonly IslandOutline _focusOutline = new();
+    private bool _lightIsNotice;
+    private const double _focusLightThickness = 2.2;
     private double _focusLightOpacity, _focusDrawn = -1;
     private Color _focusLightColor;
 
@@ -524,7 +526,10 @@ public partial class MainWindow
         bool timer = _compactMode is CompactMode.Timer or CompactMode.TimerRing;
         var buds = _state == IslandState.Compact ? BudsLight() : null; // Bluetooth earbuds: the battery level
         bool cal = _compactMode == CompactMode.CalNotice; // a calendar notice: all the way round, in the event's colour
-        bool show = _state == IslandState.Compact && (_compactMode == CompactMode.Focus || timer || cal || buds != null) && !_introActive && !_islandMorphing;
+        bool noticeNow = _compactMode == CompactMode.Notice; // a notification: a soft line all the way round, in the app's colour
+        bool show = _state == IslandState.Compact && (_compactMode == CompactMode.Focus || timer || cal || noticeNow || buds != null) && !_introActive && !_islandMorphing;
+        if (show) _lightIsNotice = noticeNow; // (while fading out it keeps the look it had: no flash of another style)
+        bool notice = _lightIsNotice;
         double k = Ease(Math.Clamp(0.14 / Math.Max(0.3, S.SpeedFactor), 0.05, 0.5));
         _focusLightOpacity += ((show ? 1 : 0) - _focusLightOpacity) * k;
         if (_focusLightOpacity < 0.01 && !show)
@@ -546,7 +551,7 @@ public partial class MainWindow
         FocusLight.Margin = FocusTrack.Margin = Island.Margin;
         FocusLight.RenderTransform = FocusTrack.RenderTransform = Island.RenderTransform;
 
-        var color = cal ? _calColor : buds?.color ?? (timer ? TimerColor : FocusModeColor);
+        var color = cal ? _calColor : notice ? _noticeAccent : buds?.color ?? (timer ? TimerColor : FocusModeColor);
         if (color != _focusLightColor)
         {
             _focusLightColor = color;
@@ -559,10 +564,12 @@ public partial class MainWindow
         bool budsLow = buds?.pulse == true; // low battery: the light breathes in red, with a red glow around
         double pulse = ringing ? 0.45 + 0.55 * Math.Abs(Math.Sin(AnimNow * 4))
             : budsLow ? 0.55 + 0.45 * (0.5 + 0.5 * Math.Sin(AnimNow * 4.2)) : 1;
-        FocusLightGlow.BlurRadius = budsLow ? 10 + 12 * (pulse - 0.55) / 0.45 : 10;
-        FocusLight.Opacity = _focusLightOpacity * pulse;
-        FocusTrack.Opacity = _focusLightOpacity * (ringing || budsLow ? 0.15 + 0.45 * pulse : 0.22);
-        double p = Math.Clamp(cal ? 1 : buds?.share ?? (ringing ? 1 : timer ? _clock.Soonest?.LeftShare ?? 0 : _focus.Progress), 0, 1);
+        FocusLightGlow.BlurRadius = notice ? NoticeGlowBlur : budsLow ? 10 + 12 * (pulse - 0.55) / 0.45 : 10;
+        FocusLightGlow.Opacity = notice ? NoticeGlowOpacity : 1;
+        FocusLight.StrokeThickness = notice ? NoticeLineThickness : _focusLightThickness;
+        FocusLight.Opacity = _focusLightOpacity * pulse * (notice ? NoticeLineOpacity : 1);
+        FocusTrack.Opacity = notice ? 0 : _focusLightOpacity * (ringing || budsLow ? 0.15 + 0.45 * pulse : 0.22);
+        double p = Math.Clamp(cal || notice ? 1 : buds?.share ?? (ringing ? 1 : timer ? _clock.Soonest?.LeftShare ?? 0 : _focus.Progress), 0, 1);
         if (_focusDrawn < 0 || Math.Abs(p - _focusDrawn) > 0.0004)
         {
             _focusDrawn = p;

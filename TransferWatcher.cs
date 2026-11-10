@@ -60,6 +60,7 @@ public sealed class TransferWatcher
         public long Size;
         public DateTime Changed;
         public double Speed;
+        public string? Final; // where the browser says it will end up, once known
     }
 
     private readonly Dictionary<string, Growing> _files = new(StringComparer.OrdinalIgnoreCase);
@@ -68,9 +69,10 @@ public sealed class TransferWatcher
     private bool _primed;
     private string _lastPath = "", _lastName = "";
 
-    private const int WatcherSettleMs = 200, MaxRecentFiles = 400, MaxMoves = 200;
-    private static readonly TimeSpan RecentFileWindow = TimeSpan.FromSeconds(15), MaxWaitForSave = TimeSpan.FromHours(1);
-    private readonly Dictionary<string, (long bytes, DateTime since)> _waiting = new(StringComparer.OrdinalIgnoreCase);
+    private const int WatcherSettleMs = 200, MaxRecentFiles = 400, MaxMoves = 200, ActiveSeconds = 20;
+    private static readonly TimeSpan RecentFileWindow = TimeSpan.FromSeconds(15);
+    private readonly List<(string path, Growing file)> _vanished = new();
+    private readonly HashSet<string> _reported = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> _moved = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentQueue<(string path, DateTime when)> _recent = new();
 
@@ -97,49 +99,48 @@ public sealed class TransferWatcher
 
         var prev = Current;
         Current = next;
-        if (prev != null && (next == null || next.Kind != prev.Kind))
+        if (prev is { Kind: TransferKind.Copy } && next?.Kind != TransferKind.Copy) Finished?.Invoke(prev.Kind, prev.Name, null);
+        ResolveVanished(now);
+    }
+
+    /// <summary>
+    /// Each in-progress file that went away, one by one (several downloads don't end together): it became a real file,
+    /// or it was canceled. One that had long stopped growing (paused, or left in a "save as" window) goes without an animation.
+    /// </summary>
+    private void ResolveVanished(DateTime now)
+    {
+        if (_vanished.Count == 0)
         {
-            // a download "ends" also when it's paused or fails: only a finished file counts
-            if (prev.Kind == TransferKind.Copy) Finished?.Invoke(prev.Kind, prev.Name, null);
-            else if (FinishedFile(prev.PartialPath, prev.Bytes) is string finalPath) Report(finalPath);
-            else if (File.Exists(prev.PartialPath)) _waiting[prev.PartialPath] = (prev.Bytes, now); // the browser may still be asking where to save it
-            else
-            {
-#if DEBUG
-                try { File.AppendAllText(Path.Combine(AppSettings.Folder, "transfer-test.log"), $"{DateTime.Now:HH:mm:ss} cancelado {prev.Name}\n"); } catch { }
-#endif
-                Failed?.Invoke(prev.Name); // gone without a result: failed / canceled
-            }
+            if (_files.Count == 0) _reported.Clear();
+            return;
         }
-        CheckWaiting(now);
+        System.Threading.Thread.Sleep(WatcherSettleMs); // (Windows tells us about a rename a moment after it happens)
+        foreach (var (path, file) in _vanished)
+        {
+            if (FinishedFile(path, file.Size, file.Final) is string finalPath) Report(finalPath);
+            else if (!RenamedStillDownloading(path) && (now - file.Changed).TotalSeconds < ActiveSeconds) ReportFailed(CleanName(path));
+        }
+        _vanished.Clear();
+    }
+
+    /// <summary>Chrome renames "Unconfirmed 123.crdownload" to "name.crdownload" a moment in: the same download, going on.</summary>
+    private bool RenamedStillDownloading(string partial) => _moved.TryGetValue(partial, out var next) && IsPartial(next);
+
+    private void ReportFailed(string name)
+    {
+#if DEBUG
+        try { File.AppendAllText(Path.Combine(AppSettings.Folder, "transfer-test.log"), $"{DateTime.Now:HH:mm:ss} cancelado {name}\n"); } catch { }
+#endif
+        Failed?.Invoke(name);
     }
 
     private void Report(string finalPath)
     {
+        if (!_reported.Add(finalPath)) return; // (it can get here through more than one name)
 #if DEBUG
         try { File.AppendAllText(Path.Combine(AppSettings.Folder, "transfer-test.log"), $"{DateTime.Now:HH:mm:ss} concluido {finalPath}\n"); } catch { }
 #endif
         Finished?.Invoke(TransferKind.Download, Path.GetFileName(finalPath), finalPath);
-    }
-
-    /// <summary>
-    /// Downloads that stopped growing with their file still there: a small file finishes while the browser's
-    /// "save as" window is still open (or the download is paused). Once the file goes, it either became a real file or
-    /// was given up on, which at this point isn't worth an animation.
-    /// </summary>
-    private void CheckWaiting(DateTime now)
-    {
-        foreach (var (path, info) in _waiting.ToList())
-        {
-            if (_files.TryGetValue(path, out var g) && (now - g.Changed).TotalSeconds < 20 || now - info.since > MaxWaitForSave)
-            {
-                _waiting.Remove(path); // growing again (back to the normal way), or left there for good
-                continue;
-            }
-            if (File.Exists(path)) continue;
-            _waiting.Remove(path);
-            if (FinishedFile(path, info.bytes) is string finalPath) Report(finalPath);
-        }
     }
 
     // ------------------------------------------------------------------ downloads
@@ -149,22 +150,20 @@ public sealed class TransferWatcher
     /// "name.crdownload" → "name"; Edge keeps "Unconfirmed 123.crdownload" until the very end, so then it's
     /// the file that just appeared in the folder with (about) the size we saw.
     /// </summary>
-    private string? FinishedFile(string partial, long bytes)
+    private string? FinishedFile(string partial, long bytes, string? knownFinal)
     {
-        if (partial == "") return null;
-        if (!File.Exists(partial)) System.Threading.Thread.Sleep(WatcherSettleMs); // (Windows tells us about a rename a moment after it happens)
         if (MovedTo(partial) is string moved) return moved;
+        if (RenamedStillDownloading(partial)) return null;
         // Firefox/Zen create the final (empty) file at the start: it only counts once it has the data
-        string? ffFinal = _ffFor == partial ? _ffFinal : null;
-        string direct = ffFinal ?? StripPartial(partial);
+        string? final = knownFinal ?? (_ffFor == partial ? _ffFinal : null);
+        string direct = final ?? StripPartial(partial);
         try
         {
             var fi = new FileInfo(direct);
             if (fi.Exists && fi.Length >= bytes * 0.9) return fi.FullName;
-            if (File.Exists(partial)) return null;
             string? folder = Path.GetDirectoryName(partial);
-            var fresh = folder == null || (CleanName(partial) != "" && ffFinal == null) ? null : new DirectoryInfo(folder).EnumerateFiles()
-                .Where(f => !PartialExtensions.Contains(f.Extension, StringComparer.OrdinalIgnoreCase) &&
+            var fresh = folder == null || (CleanName(partial) != "" && final == null) ? null : new DirectoryInfo(folder).EnumerateFiles()
+                .Where(f => !PartialExtensions.Contains(f.Extension, StringComparer.OrdinalIgnoreCase) && !_reported.Contains(f.FullName) &&
                             (DateTime.Now - f.LastWriteTime).TotalSeconds < 15 && f.Length >= bytes * 0.9)
                 .OrderByDescending(f => f.LastWriteTime).FirstOrDefault();
             return fresh?.FullName ?? CreatedElsewhere(bytes);
@@ -194,7 +193,7 @@ public sealed class TransferWatcher
         var since = DateTime.UtcNow - RecentFileWindow;
         foreach (var (path, when) in _recent.Reverse())
         {
-            if (when < since) continue;
+            if (when < since || _reported.Contains(path)) continue;
             try
             {
                 var f = new FileInfo(path);
@@ -241,11 +240,15 @@ public sealed class TransferWatcher
             // folder missing / no access
         }
         _primed = true;
-        foreach (var gone in _files.Keys.Where(k => !seen.Contains(k)).ToList()) _files.Remove(gone);
+        foreach (var gone in _files.Keys.Where(k => !seen.Contains(k)).ToList())
+        {
+            if (_files[gone].Changed != DateTime.MinValue) _vanished.Add((gone, _files[gone])); // (never grew while we watched: not one of ours)
+            _files.Remove(gone);
+        }
 
         // only files that grew in the last few seconds (paused or failed downloads leave their file behind)
         // (a download that stops growing stays a while: the eyes get sleepy before it's dropped)
-        var active = _files.Where(f => (now - f.Value.Changed).TotalSeconds < 20).ToList();
+        var active = _files.Where(f => (now - f.Value.Changed).TotalSeconds < ActiveSeconds).ToList();
         // Chrome/Edge/Opera...: each download's size is in the profile's History database
         if (active.Any(f => IsChromiumPartial(f.Key) && !_chromium.Running.ContainsKey(f.Key)))
         {
@@ -257,12 +260,20 @@ public sealed class TransferWatcher
             long? size = null;
             if (_ffByPart.TryGetValue(f.Key, out var ff))
             {
-                if (ff.Final is { Length: > 0 } final) n = Path.GetFileName(final);
+                if (ff.Final is { Length: > 0 } final)
+                {
+                    n = Path.GetFileName(final);
+                    f.Value.Final = final;
+                }
                 if (ff.Total >= f.Value.Size) size = ff.Total;
             }
             else if (_chromium.Running.TryGetValue(f.Key, out var ch))
             {
-                if (ch.Target is { Length: > 0 } target) n = Path.GetFileName(target);
+                if (ch.Target is { Length: > 0 } target)
+                {
+                    n = Path.GetFileName(target);
+                    f.Value.Final = target;
+                }
                 if (ch.Total >= f.Value.Size) size = ch.Total;
             }
             return new DownloadFile(f.Key, n, f.Value.Size, f.Value.Speed, size);

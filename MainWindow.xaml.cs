@@ -314,7 +314,7 @@ public partial class MainWindow : Window
         ringing |= _noticeShown != null && _transient == CompactMode.Notice && DateTime.UtcNow < _transientUntil;
         ringing |= CalNoticeHolds;
         if (_forcedState is { } forced) next = forced;
-        else if (!ringing && _hoverActive || _clickOpened || _menu.IsOpen || _devicesMenuOpen?.IsOpen == true || _dragOver || _lassoing || ChatKeepsOpen) next = IslandState.Expanded;
+        else if (!ringing && _hoverActive || _clickOpened || _holdOpenAfterPill || _menu.IsOpen || _devicesMenuOpen?.IsOpen == true || _dragOver || _lassoing || ChatKeepsOpen) next = IslandState.Expanded;
         else if (!ringing && DateTime.UtcNow < _volumeOsdUntil || !ringing && (_state == IslandState.Volume && (_volHover || _outMenuOpen?.IsOpen == true)))
             next = IslandState.Volume;
         else
@@ -433,6 +433,7 @@ public partial class MainWindow : Window
         AccentGlow.BeginAnimation(OpacityProperty,
             new DoubleAnimation(expanding ? 1 : 0, TimeSpan.FromMilliseconds(Dur(expanding ? 420 : 160))));
         if (expanding) Dispatcher.InvokeAsync(() => MoveNavPill(false), DispatcherPriority.Loaded);
+        if (prev == IslandState.Expanded && !expanding) TurnPillIntoCard();
     }
 
     private void AnimateIslandSize(Size size, bool bigMove)
@@ -1789,6 +1790,14 @@ public partial class MainWindow : Window
 
     private void Island_MouseEnter(object sender, MouseEventArgs e)
     {
+        if (DateTime.UtcNow < _ignoreHoverUntil) return; // a notification was just dismissed right here
+        if (_holdOpenAfterPill && ReferenceEquals(sender, Island))
+        {
+            // back on the island after dismissing a pill: from here on, leaving it closes it as usual
+            _holdOpenAfterPill = false;
+            if (S.Open == OpenMode.Hover) _hoverActive = true;
+            else _clickOpened = true;
+        }
         RememberForeground();
         if (_chatPinned && !_draggingEyes)
         {
@@ -1876,6 +1885,7 @@ public partial class MainWindow : Window
 
     private void Collapse()
     {
+        _holdOpenAfterPill = false;
         _hoverActive = false;
         _clickOpened = false;
         _forcedState = null;
@@ -2118,6 +2128,100 @@ public partial class MainWindow : Window
             OpenSubPage(Loc.T("notif.title"), NoticesPage);
             await Shot("13_history");
             CloseSubPage(animate: false);
+        }
+
+        // a notification under the open island: the pill, how it goes up with the island, dismissing; and clearing the downloads
+        if (Environment.GetEnvironmentVariable("NOTCHY_PILLTEST") == "1")
+        {
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            SelectTab(Tab.Home, false);
+            await Task.Delay(700);
+            OnNotice(new Notice(999991, "WhatsApp", "", "Maria", "Já chegou em casa?", DateTime.Now, null, false) { Accent = Color.FromRgb(0x25, 0xD3, 0x66) });
+            OnNotice(new Notice(999992, "Discord", "", "João", "Bora jogar?", DateTime.Now, null, false) { Accent = Color.FromRgb(0x58, 0x65, 0xF2) });
+            await Task.Delay(800);
+            await Shot("14_pill");
+            _forcedState = null;
+            _hoverActive = _clickOpened = false;
+            UpdateState();
+            await Task.Delay(120);
+            await Shot("14_merging");
+            await Task.Delay(900);
+            await Shot("14_card");
+            DismissNotice();
+            await Task.Delay(900);
+            await Shot("14_next");
+            // the mouse was on the card when it was dismissed: the island must not open
+            OnNotice(new Notice(999994, "WhatsApp", "", "Maria", "Oi", DateTime.Now, null, false) { Accent = Color.FromRgb(0x25, 0xD3, 0x66) });
+            await Task.Delay(500);
+            await Shot("14_line");
+            _hoverActive = _hoverRequested = true;
+            DismissNotice();
+            await Task.Delay(700);
+            string afterCard = $"{_state} hover={_hoverActive}";
+            // a pill dismissed: the island stays open even with nothing asking for it, until the mouse has been back
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            await Task.Delay(600);
+            OnNotice(new Notice(999993, "WhatsApp", "", "Maria", "Oi", DateTime.Now, null, false) { Accent = Color.FromRgb(0x25, 0xD3, 0x66) });
+            await Task.Delay(500);
+            DismissNotice();
+            _forcedState = null;
+            _hoverActive = _clickOpened = false;
+            UpdateState();
+            await Task.Delay(800);
+            string held = $"{_state} hold={_holdOpenAfterPill} pill={_noticePill.Visibility}";
+            _holdOpenAfterPill = false;
+            UpdateState();
+            await Task.Delay(800);
+            string musicBefore = $"{_state} {_compactMode} tocando={_media.IsPlaying}";
+            OnNotice(new Notice(999995, "WhatsApp", "", "Maria", "Com música", DateTime.Now, null, false) { Accent = Color.FromRgb(0x25, 0xD3, 0x66) });
+            await Task.Delay(700);
+            await Shot("14_music");
+            string musicDuring = $"{_state} {_compactMode} napilula={_noticeInPill}";
+            DismissNotice();
+            await Task.Delay(500);
+            string musicAfter = $"{_state} {_compactMode} segura={_holdOpenAfterPill}";
+            // the activity ends with the pill on screen: up it goes, as the card
+            OnNotice(new Notice(999996, "WhatsApp", "", "Maria", "Acabou", DateTime.Now, null, false) { Accent = Color.FromRgb(0x25, 0xD3, 0x66) });
+            await Task.Delay(400);
+            string endBefore = $"{_state} {_compactMode} napilula={_noticeInPill}";
+            _testIslandNotBusy = true;
+            await Task.Delay(480);
+            await Shot("14_morph_up");
+            await Task.Delay(800);
+            await Shot("14_morph_card");
+            string endAfter = $"{_state} {_compactMode} napilula={_noticeInPill} transiente={_transient} ilha={Island.ActualWidth:0}x{Island.ActualHeight:0}";
+            _testIslandNotBusy = false; // the activity is back: the card goes down as a pill
+            await Task.Delay(420);
+            await Shot("14_morph_down");
+            await Task.Delay(800);
+            await Shot("14_morph_pill");
+            string backAfter = $"{_state} {_compactMode} napilula={_noticeInPill} transiente={_transient} forma={_noticePill.Height:0}/{_pillMove.Y:0}";
+            DismissNotice();
+            await Task.Delay(400);
+            System.IO.File.WriteAllLines(System.IO.Path.Combine(folder, "music.txt"), new[] { "antes: " + musicBefore, "durante: " + musicDuring, "depois: " + musicAfter, "pilula antes de acabar: " + endBefore, "depois de acabar: " + endAfter, "atividade voltou: " + backAfter });
+            _holdOpenAfterPill = true;
+            Island_MouseEnter(Island, null!);
+            string back = $"depois de voltar: hold={_holdOpenAfterPill} hover={_hoverActive}";
+            _hoverTimer.Stop();
+            _hoverRequested = false;
+            Collapse();
+            await Task.Delay(500);
+            System.IO.File.WriteAllLines(System.IO.Path.Combine(folder, "pill.txt"), new[] { "cartao dispensado: " + afterCard, "pilula dispensada: " + held, back, "fechou: " + _state });
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            SelectTab(Tab.Downloads, false);
+            var entries = Enumerable.Range(1, 10).Select(i => new DownloadEntry($@"C:\teste\arquivo{i}.pdf", i * 1234567, DateTime.UtcNow)).ToList();
+            BuildDownloadsTab(null, new List<DownloadFile>(), entries);
+            await Task.Delay(700);
+            await Shot("14_dl_list");
+            _dlCleared = new List<DownloadEntry>();
+            BuildDownloadsTab(null, new List<DownloadFile>(), new List<DownloadEntry>());
+            await Task.Delay(500);
+            await Shot("14_dl_undo");
+            _dlCleared = null;
+            _forcedState = null;
         }
 
         // weather: the home card and the "‹ Clima" sub-page (real data: Windows location + Open-Meteo)

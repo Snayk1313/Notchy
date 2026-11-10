@@ -16,10 +16,55 @@ namespace Notchy;
 /// </summary>
 internal static class DesktopAppIcon
 {
-    private const int IconSize = 96;
+    private const int IconSize = 96, AccentSampleSize = 32, AccentHues = 12;
+    private const double AccentMinBrightness = 0.85;
 
     public static BitmapSource? Find(string appId, string appName) =>
         FromShell(@"shell:AppsFolder\" + appId) ?? FromRunningApp(appName) ?? FromRegistry(appId); // (sharpest first: the registered image is small)
+
+    /// <summary>The icon's main colour, bright enough to glow on a dark island; null for a greyish icon.</summary>
+    public static Color? Accent(BitmapSource? icon)
+    {
+        if (icon == null) return null;
+        try
+        {
+            double shrink = (double)AccentSampleSize / Math.Max(icon.PixelWidth, icon.PixelHeight);
+            var small = new FormatConvertedBitmap(new TransformedBitmap(icon, new ScaleTransform(shrink, shrink)), PixelFormats.Bgra32, null, 0);
+            int width = small.PixelWidth, height = small.PixelHeight, stride = width * 4;
+            var pixels = new byte[stride * height];
+            small.CopyPixels(pixels, stride, 0);
+
+            // the colour family with the most vivid pixels wins (an average of everything would come out muddy)
+            var weight = new double[AccentHues];
+            var red = new double[AccentHues];
+            var green = new double[AccentHues];
+            var blue = new double[AccentHues];
+            for (int i = 0; i < pixels.Length; i += 4)
+            {
+                if (pixels[i + 3] < 128) continue;
+                double b = pixels[i] / 255.0, g = pixels[i + 1] / 255.0, r = pixels[i + 2] / 255.0;
+                double max = Math.Max(r, Math.Max(g, b)), min = Math.Min(r, Math.Min(g, b)), range = max - min;
+                if (range < 0.12) continue; // white, black and greys say nothing about the app
+                double hue = max == r ? (g - b) / range % 6 : max == g ? (b - r) / range + 2 : (r - g) / range + 4;
+                int bin = (int)((hue + 6) % 6 / 6 * AccentHues) % AccentHues;
+                double w = range * max;
+                weight[bin] += w;
+                red[bin] += r * w;
+                green[bin] += g * w;
+                blue[bin] += b * w;
+            }
+            int best = Array.IndexOf(weight, weight.Max());
+            if (weight[best] <= 0) return null;
+            double R = red[best] / weight[best], G = green[best] / weight[best], B = blue[best] / weight[best];
+            double top = Math.Max(R, Math.Max(G, B));
+            if (top < AccentMinBrightness) (R, G, B) = (R * AccentMinBrightness / top, G * AccentMinBrightness / top, B * AccentMinBrightness / top);
+            return Color.FromRgb((byte)(R * 255), (byte)(G * 255), (byte)(B * 255));
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     /// <summary>The image Windows keeps for this app id (usually a generated file in the temporary folder, which may be gone).</summary>
     private static BitmapSource? FromRegistry(string appId)
@@ -187,6 +232,8 @@ internal static class DesktopAppIcon
             using var file = File.Create(Path.Combine(folder, $"{appName}-{name}.png"));
             png.Save(file);
         }
+        var chosen = Find(appId, appName);
+        File.AppendAllText(Path.Combine(folder, "result.txt"), $"{appName} cor: {Accent(chosen)}\n");
         Save("registro", FromRegistry(appId));
         Save("iniciar", FromShell(@"shell:AppsFolder\" + appId));
         Save("programa", FromRunningApp(appName));
