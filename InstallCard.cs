@@ -73,7 +73,8 @@ internal static class InstallCard
         using (var file = File.Create(exe))
             card.CopyTo(file);
 
-        var start = new ProcessStartInfo(exe) { UseShellExecute = false };
+        // never Notchy's own folder as the working directory: that would keep it in use, and the updater has to move it
+        var start = new ProcessStartInfo(exe) { UseShellExecute = false, WorkingDirectory = Path.GetTempPath() };
         void Option(string name, string value)
         {
             start.ArgumentList.Add(name);

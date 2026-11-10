@@ -22,6 +22,8 @@ namespace NotchyUpdateCard
         [STAThread]
         private static void Main(string[] args)
         {
+            // whoever started the card may have left it in Notchy's folder, which the updater has to be able to move
+            Environment.CurrentDirectory = System.IO.Path.GetTempPath();
             var options = new Dictionary<string, string>();
             for (int i = 0; i + 1 < args.Length; i += 2) options[args[i]] = args[i + 1];
             Process setup = Installer.HasSetup ? Installer.Start(options) : null;
