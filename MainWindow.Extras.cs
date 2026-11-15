@@ -644,7 +644,7 @@ public partial class MainWindow
         try
         {
             Directory.CreateDirectory(AppSettings.Folder);
-            File.WriteAllText(ShelfFile, JsonSerializer.Serialize(_shelf));
+            SafeFile.Write(ShelfFile, JsonSerializer.Serialize(_shelf));
         }
         catch
         {

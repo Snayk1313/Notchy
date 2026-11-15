@@ -70,7 +70,6 @@ public sealed class AppSettings
     public string WeatherCity { get; set; } = "";
     public double WeatherLat { get; set; }
     public double WeatherLon { get; set; }
-    public int HoverDelayMs { get; set; } = 180;
     public bool BlurEnabled { get; set; } = false;
     public int BlurIntensity { get; set; } = 60;     // 0..100
     public bool IslandShadow { get; set; } = true;
@@ -132,7 +131,7 @@ public sealed class AppSettings
         try
         {
             Directory.CreateDirectory(Folder);
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
+            SafeFile.Write(FilePath, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch
         {
@@ -178,5 +177,16 @@ public static class StartupManager
             key.SetValue(ValueName, $"\"{Environment.ProcessPath}\"");
         else
             key.DeleteValue(ValueName, false);
+    }
+}
+
+/// <summary>Writes a file all at once: a crash or power cut mid-write leaves the old file intact, never half of one.</summary>
+public static class SafeFile
+{
+    public static void Write(string path, string text)
+    {
+        string tmp = path + ".tmp";
+        File.WriteAllText(tmp, text);
+        File.Move(tmp, path, overwrite: true);
     }
 }

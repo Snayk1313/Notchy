@@ -155,6 +155,7 @@ public partial class MainWindow
         Tab.Focus when _focus.Running => (NavMotion.Ring, FocusColor),
         Tab.Clock when _ring != null => (NavMotion.Pulse, TimerColor),
         Tab.Clock when _clock.AnyRunning => (NavMotion.Ring, TimerColor),
+        Tab.Clock when _clock.Alarms.Exists(a => a.Enabled) => (NavMotion.Glow, TimerColor), // lit like the shelf with a file
         Tab.Chat when _runner?.Busy == true => (NavMotion.Bob, ChatColor),
         Tab.Shelf when _shelf.Count > 0 && S.ShelfEnabled => (NavMotion.Glow, ShelfColor),
         _ => (NavMotion.None, Colors.White)

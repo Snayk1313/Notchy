@@ -1148,20 +1148,7 @@ public partial class MainWindow
         System.IO.Directory.CreateDirectory(folder);
         while (_introActive) await System.Threading.Tasks.Task.Delay(200);
         await System.Threading.Tasks.Task.Delay(800);
-        async System.Threading.Tasks.Task Shot(string name, int wait = 900)
-        {
-            await System.Threading.Tasks.Task.Delay(wait);
-            var root = (FrameworkElement)Content;
-            var picture = new System.Windows.Media.Imaging.RenderTargetBitmap((int)root.ActualWidth * 2, (int)root.ActualHeight * 2, 192, 192, PixelFormats.Pbgra32);
-            var back = new DrawingVisual();
-            using (var dc = back.RenderOpen()) dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(0x5B, 0x2A, 0x86)), null, new Rect(0, 0, root.ActualWidth, root.ActualHeight));
-            picture.Render(back);
-            picture.Render(root);
-            var png = new System.Windows.Media.Imaging.PngBitmapEncoder();
-            png.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(picture));
-            using var file = System.IO.File.Create(System.IO.Path.Combine(folder, name + ".png"));
-            png.Save(file);
-        }
+        System.Threading.Tasks.Task Shot(string name, int wait = 900) => ShotAsync(folder, name, wait);
 
         var today = DateTime.Today;
         var results = new List<string>();

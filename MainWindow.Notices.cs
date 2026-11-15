@@ -93,20 +93,20 @@ public partial class MainWindow
         _notices.WatchTray = quiet;
     }
 
-    /// <summary>A full-screen game or video hides the island, except while a notification card is up (if that's turned on).</summary>
+    /// <summary>A full-screen game or video hides the island, except while the volume/brightness bar or a notification card (if that's turned on) is up.</summary>
     private void ApplyFullscreenHide()
     {
-        Island.Visibility = _hiddenForFullscreen && !(S.NotifyFullscreen && _noticeShown != null) ? Visibility.Hidden : Visibility.Visible;
+        Island.Visibility = _hiddenForFullscreen && !(S.NotifyFullscreen && _noticeShown != null || _state == IslandState.Volume) ? Visibility.Hidden : Visibility.Visible;
         // the game may have covered the glass under the island since it was last put in place
         if (_hiddenForFullscreen && Island.Visibility == Visibility.Visible && _backdrop != null && _backdrop.Hwnd != IntPtr.Zero) _backdrop.KeepBelow(_hwnd);
     }
 
-    /// <summary>Hides the island again once the card has finished closing.</summary>
+    /// <summary>Hides the island again once the card or bar has finished closing.</summary>
     private async void HideAfterCard()
     {
         if (!_hiddenForFullscreen) return;
         await System.Threading.Tasks.Task.Delay(350);
-        if (_noticeShown == null) ApplyFullscreenHide();
+        ApplyFullscreenHide();
     }
 
     /// <summary>The bell next to the clock, with how many arrived since you last looked.</summary>

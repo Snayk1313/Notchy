@@ -202,7 +202,7 @@ public sealed class FocusStats
         try
         {
             Directory.CreateDirectory(AppSettings.Folder);
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(this));
+            SafeFile.Write(FilePath, JsonSerializer.Serialize(this));
         }
         catch
         {

@@ -59,6 +59,41 @@ public partial class MainWindow
 
     }
 
+    /// <summary>Keeps the right side of the header clear of the time in the middle: when room is short the
+    ///     waveform shortcut goes first, then the update button drops its label (only the arrow stays).
+    ///     Returns whether the waveform fits.</summary>
+    private bool FitHeader()
+    {
+        var right = (FrameworkElement)BatteryText.Parent;
+        var center = (FrameworkElement)HeaderClaudeDot.Parent;
+        double room = (((FrameworkElement)right.Parent).ActualWidth - center.ActualWidth) / 2 - 6;
+        double label = _updateButton.Visibility == Visibility.Visible ? UpdateLabelWidth() : 0;
+        double others = right.ActualWidth
+                        - (_headerWave.Visibility == Visibility.Visible ? _headerWave.ActualWidth + _headerWave.Margin.Right : 0)
+                        - (_updateLabel.Visibility == Visibility.Visible ? label : 0);
+        bool showLabel = others + label <= room;
+        _updateLabel.Visibility = showLabel ? Visibility.Visible : Visibility.Collapsed;
+        _updateIcon.Margin = new Thickness(0, 1, showLabel ? 5 : 0, 0);
+        const double wave = 20 + 10 + 4; // visualizer + padding + margin
+        return others + (showLabel ? label : 0) + wave <= room;
+    }
+
+    private string _updateLabelFor = "";
+    private double _updateLabelW;
+
+    /// <summary>Width the "Update" label (plus the gap before it) takes when shown.</summary>
+    private double UpdateLabelWidth()
+    {
+        if (_updateLabelFor != _updateLabel.Text)
+        {
+            _updateLabelFor = _updateLabel.Text;
+            _updateLabelW = new FormattedText(_updateLabel.Text, System.Globalization.CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+                new Typeface(_updateLabel.FontFamily, FontStyles.Normal, _updateLabel.FontWeight, FontStretches.Normal),
+                _updateLabel.FontSize, Brushes.White, VisualTreeHelper.GetDpi(this).PixelsPerDip).Width + 5;
+        }
+        return _updateLabelW;
+    }
+
     // ---- one pair of eyes at a time: while a bubble next to the music island has eyes (Claude's, or the
     //      download's), the island shows the song's name where it would show its eyes. They come back only once
     //      the bubble is completely gone, and a bubble with eyes waits for them to be gone before it appears.
@@ -198,7 +233,8 @@ public partial class MainWindow
         _face.Visibility = fs.ScaleX < 0.01 ? Visibility.Collapsed : Visibility.Visible;
 
         // waveform shortcut
-        bool showWave = hasMusic && _tab != Tab.Music;
+        bool waveFits = FitHeader();
+        bool showWave = hasMusic && _tab != Tab.Music && waveFits;
         _headerWave.Visibility = showWave ? Visibility.Visible : Visibility.Collapsed;
         if (showWave)
         {

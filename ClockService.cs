@@ -79,6 +79,11 @@ public sealed class ClockService
     public event Action<ClockTimer>? TimerFinished;
     public event Action<Alarm>? AlarmFired;
 
+#if DEBUG
+    /// <summary>Tests work on made-up alarms and leave the real file alone.</summary>
+    [JsonIgnore] public bool DontSave { get; set; }
+#endif
+
     [JsonIgnore] public bool AnyRunning => Timers.Any(t => t.Running);
 
     /// <summary>The running timer that ends first.</summary>
@@ -166,9 +171,9 @@ public sealed class ClockService
         return best;
     }
 
-    public void Tick()
+    public void Tick(DateTime? at = null)
     {
-        var now = DateTime.Now;
+        var now = at ?? DateTime.Now;
         foreach (var t in Timers.ToList())
         {
             if (t.EndsAt is not DateTime end || now < end) continue;
@@ -191,6 +196,7 @@ public sealed class ClockService
             }
             // due a moment ago (up to 2 minutes late, e.g. the PC was busy): ring; older than that: let it go
             var due = now.Date.AddHours(a.Hour).AddMinutes(a.Minute);
+            if (due > now) due = due.AddDays(-1); // the last time it was due: 23:59 is still "a moment ago" at 00:01
             if (now < due || now - due > TimeSpan.FromMinutes(2) || a.LastFired >= due || !a.OnDay(due)) continue;
             if (a.Days == 0 && due <= a.ArmedAt) continue;
             Fire(a, now);
@@ -220,10 +226,13 @@ public sealed class ClockService
 
     public void Save()
     {
+#if DEBUG
+        if (DontSave) return;
+#endif
         try
         {
             Directory.CreateDirectory(AppSettings.Folder);
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(this));
+            SafeFile.Write(FilePath, JsonSerializer.Serialize(this));
         }
         catch (Exception ex)
         {

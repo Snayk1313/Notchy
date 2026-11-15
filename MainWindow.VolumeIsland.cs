@@ -28,6 +28,11 @@ public partial class MainWindow
     private double _levelTarget, _levelShown = -1;
     private bool _levelMuted, _levelDragging, _levelHover, _devListOpen;
     private double _devButtonShown;
+    private double _arriveAt = -100, _arriveFrom; // the empty island's eyes sliding over to pull the bar out
+    private Color _arriveColor;
+    private TranslateTransform _levelEyesSlide = null!;
+    private const double ArriveTime = 0.5, DepartTime = 0.34; // going home: the island's own shrink (340 ms, cubic out), so its edge never catches the eyes
+    private double _departAt = -100; // and back: the eyes slide home rolling the light up behind them
 
     private Grid _levelPill = null!;
     private Border _levelFill = null!;
@@ -69,7 +74,8 @@ public partial class MainWindow
         _levelPill.Children.Add(_levelFill);
 
         var eyes = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(16, 0, 0, 0), Effect = new DropShadowEffect { Color = Colors.White, BlurRadius = 8, ShadowDepth = 0, Opacity = 0.6 } };
+            Margin = new Thickness(16, 0, 0, 0), Effect = new DropShadowEffect { Color = Colors.White, BlurRadius = 8, ShadowDepth = 0, Opacity = 0.6 },
+            RenderTransform = _levelEyesSlide = new TranslateTransform() };
         Rectangle Eye(out ScaleTransform s, Thickness m)
         {
             s = new ScaleTransform();
@@ -180,6 +186,59 @@ public partial class MainWindow
             if (muted) _audio.ToggleMute();
             SetVolume(v);
         }
+    }
+
+    /// <summary>
+    /// From the empty island: no swap of screens. Its eyes become the bar's eyes where they are, slide to the
+    /// left and pull the light out behind them while the island stretches.
+    /// </summary>
+    private void ArriveFromIdle()
+    {
+        if (_departAt >= 0)
+        {
+            // called back while still going home: carry on from where the eyes are
+            _departAt = -100;
+            _arriveFrom = _levelEyesSlide.X;
+            _arriveColor = (_levelEyeL.Fill as SolidColorBrush)?.Color ?? Colors.White;
+        }
+        else
+        {
+            _arriveFrom = IdleEyesOffset();
+            _arriveColor = (EyeL.Fill as SolidColorBrush)?.Color ?? Colors.White; // the eyes keep their colour, then turn the bar's
+        }
+        _arriveAt = AnimNow;
+        IdlePanel.BeginAnimation(OpacityProperty, null);
+        IdlePanel.Opacity = 0; // one pair of eyes on screen: these ones carry on as the bar's
+        VolumePanel.BeginAnimation(OpacityProperty, null);
+        VolumePanel.Opacity = 1;
+    }
+
+    /// <summary>How far right of the bar's eyes the empty island's eyes sit.</summary>
+    private double IdleEyesOffset()
+    {
+        double idleCenter = IdleEyes.TranslatePoint(new Point(IdleEyes.ActualWidth / 2, 0), Island).X - Island.ActualWidth / 2;
+        return idleCenter - (-LevelWidth / 2 + 16 + (6 + 5 + 6) / 2.0);
+    }
+
+    /// <summary>Back to the empty island: the same move in reverse, then its own eyes take over where these stop.</summary>
+    private void DepartToIdle()
+    {
+        _arriveFrom = IdleEyesOffset();
+        _arriveColor = (EyeL.Fill as SolidColorBrush)?.Color ?? Colors.White;
+        _arriveAt = -100;
+        _departAt = AnimNow;
+        VolumePanel.BeginAnimation(OpacityProperty, null);
+        VolumePanel.Opacity = 1;
+        IdlePanel.BeginAnimation(OpacityProperty, null);
+        IdlePanel.Opacity = 0;
+    }
+
+    private void FinishDepart()
+    {
+        _departAt = -100;
+        _levelEyesSlide.X = 0;
+        VolumePanel.Opacity = 0;
+        IdlePanel.Opacity = 1;
     }
 
     // =====================================================================================
@@ -329,7 +388,11 @@ public partial class MainWindow
 
     private void UpdateVolumeIsland()
     {
-        if (_state != IslandState.Volume)
+        bool departing = _state != IslandState.Volume && _departAt >= 0;
+        double sf = Math.Max(0.3, S.SpeedFactor);
+        double depart = departing ? Math.Clamp((AnimNow - _departAt) / (DepartTime * sf), 0, 1) : 0;
+        if (departing && depart >= 1) FinishDepart();
+        if (_state != IslandState.Volume && (!departing || depart >= 1))
         {
             _levelShown = -1; // next time it appears it starts where the level is
             return;
@@ -350,7 +413,19 @@ public partial class MainWindow
             if (_levelEyeL.Parent is FrameworkElement ep && ep.Effect is DropShadowEffect eg) eg.Color = c;
         }
         double w = _levelPill.ActualWidth > 1 ? _levelPill.ActualWidth : LevelWidth;
-        _levelFill.Width = Math.Max(0, _levelShown * w);
+        // e: 0 = the empty island's eyes, 1 = the bar in place (both ease out, like the island's size)
+        double arrive = Math.Clamp((AnimNow - _arriveAt) / (ArriveTime * sf), 0, 1);
+        double e = departing ? Math.Pow(1 - depart, 3) : 1 - Math.Pow(1 - arrive, 3);
+        _levelEyesSlide.X = _arriveFrom * (1 - e);
+        double fillW = _levelShown * w;
+        if (e < 1) fillW += (16 + 17 + 4 + _levelEyesSlide.X - fillW) * (1 - e); // the light starts right behind the eyes
+        _levelFill.Width = Math.Max(0, fillW);
+        _levelFill.Opacity = Math.Min(1, e * 2);
+        if (e < 1 || _levelEyeL.Fill is not SolidColorBrush ef || ef.Color != c)
+        {
+            byte Mix(byte from, byte to) => (byte)(from + (to - from) * e);
+            _levelEyeL.Fill = _levelEyeR.Fill = new SolidColorBrush(Color.FromRgb(Mix(_arriveColor.R, c.R), Mix(_arriveColor.G, c.G), Mix(_arriveColor.B, c.B)));
+        }
         _levelFill.BorderThickness = new Thickness(0, 0, _levelShown > 0.005 ? 2 : 0, 0);
         _levelText.Text = _levelMuted ? "" : Math.Round(_levelTarget * 100).ToString();
 
@@ -361,6 +436,7 @@ public partial class MainWindow
             : _levelKind == LevelKind.Brightness ? 1.1 - 0.85 * Math.Max(0, (_levelShown - 0.4) / 0.6)
             : 0.55 + 0.6 * _levelShown;
         if (blink && !_levelMuted) open = 0.12;
+        open = 1 + (open - 1) * e; // the empty island's eyes are fully open
         _levelEyeLScale.ScaleY += (open - _levelEyeLScale.ScaleY) * Ease(0.35);
         _levelEyeRScale.ScaleY = _levelEyeLScale.ScaleY;
 
@@ -369,6 +445,6 @@ public partial class MainWindow
         _devButtonShown += ((showDev ? 1 : 0) - _devButtonShown) * Ease(0.25);
         _devButton.Opacity = _devButtonShown;
         _devButton.IsHitTestVisible = _devButtonShown > 0.5;
-        _levelText.Opacity = 1 - _devButtonShown;
+        _levelText.Opacity = (1 - _devButtonShown) * Math.Clamp((e - 0.4) / 0.6, 0, 1);
     }
 }

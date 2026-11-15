@@ -593,7 +593,7 @@ public sealed class ClaudeService
         try
         {
             Directory.CreateDirectory(AppSettings.Folder);
-            File.WriteAllText(StatsFile, JsonSerializer.Serialize(new Stats { Recent = Recent, ExtraToday = _extraToday, ExtraDay = _extraDay }));
+            SafeFile.Write(StatsFile, JsonSerializer.Serialize(new Stats { Recent = Recent, ExtraToday = _extraToday, ExtraDay = _extraDay }));
         }
         catch
         {
@@ -768,7 +768,7 @@ public static class ClaudeHooks
 
     private static void Save(JsonObject root)
     {
-        File.WriteAllText(SettingsPath, root.ToJsonString(new JsonSerializerOptions
+        SafeFile.Write(SettingsPath, root.ToJsonString(new JsonSerializerOptions
         {
             WriteIndented = true,
             Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping

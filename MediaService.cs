@@ -23,6 +23,7 @@ public sealed class MediaService
     private int _mediaVersion;
     private TimeSpan _basePos;
     private DateTime _baseStamp = DateTime.UtcNow;
+    private readonly System.Collections.Generic.List<GlobalSystemMediaTransportControlsSession> _watched = new();
 
     public event Action? MediaChanged;
     public event Action? PlaybackChanged;
@@ -79,6 +80,7 @@ public sealed class MediaService
         try
         {
             var sessions = _manager.GetSessions().ToList();
+            WatchAll(sessions);
             var current = _manager.GetCurrentSession();
 
             if (current != null && IsSessionPlaying(current)) best = current;
@@ -103,6 +105,26 @@ public sealed class MediaService
         }
         Attach(best);
     }
+
+    /// <summary>
+    /// Every app's play/pause, not only the one we follow: Spotify starting while a paused browser tab is followed
+    /// raises nothing else, so it was only noticed by the slow fallback check (seconds later).
+    /// </summary>
+    private void WatchAll(System.Collections.Generic.List<GlobalSystemMediaTransportControlsSession> sessions)
+    {
+        foreach (var gone in _watched.Where(w => !sessions.Contains(w)).ToList())
+        {
+            try { gone.PlaybackInfoChanged -= OnAnyPlayback; } catch { /* already gone */ }
+            _watched.Remove(gone);
+        }
+        foreach (var s in sessions.Where(s => !_watched.Contains(s)))
+        {
+            s.PlaybackInfoChanged += OnAnyPlayback;
+            _watched.Add(s);
+        }
+    }
+
+    private void OnAnyPlayback(GlobalSystemMediaTransportControlsSession s, PlaybackInfoChangedEventArgs e) => _ui.InvokeAsync(PickSession);
 
     private void Attach(GlobalSystemMediaTransportControlsSession? s)
     {

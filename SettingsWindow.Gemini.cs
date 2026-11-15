@@ -16,7 +16,7 @@ public partial class SettingsWindow
             {
                 S.ChatUseGemini = v;
                 AppSettings.Commit();
-                Dispatcher.InvokeAsync(Rebuild);
+                AfterSlide(Rebuild);
             }));
         if (!S.ChatUseGemini) return;
 

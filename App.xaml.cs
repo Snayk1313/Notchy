@@ -141,6 +141,7 @@ public partial class App : Application
             InstallCard.CleanLeftovers();
         }
 
+        Native.DisablePowerThrottling();
         base.OnStartup(e);
         Loc.Language = AppSettings.Current.Language;
 
@@ -222,6 +223,13 @@ public partial class App : Application
         if (cal >= 0 && cal + 1 < e.Args.Length)
         {
             _ = window.CalendarTestAsync(e.Args[cal + 1]);
+            return;
+        }
+        int eye = Array.IndexOf(e.Args, "--eyetest");
+        if (eye >= 0 && eye + 1 < e.Args.Length)
+        {
+            OpenSettings("look");
+            _ = _settingsWindow!.EyeTestAsync(e.Args[eye + 1]);
             return;
         }
         int upd = Array.IndexOf(e.Args, "--updtest");
@@ -309,11 +317,13 @@ public partial class App : Application
 
     internal static void Log(Exception? ex)
     {
-        if (ex == null) return;
+        if (ex == null || ex is System.Threading.Tasks.TaskCanceledException { InnerException: TimeoutException }) return; // a slow server, not a bug
         try
         {
             Directory.CreateDirectory(AppSettings.Folder);
-            File.AppendAllText(Path.Combine(AppSettings.Folder, "error.log"),
+            string file = Path.Combine(AppSettings.Folder, "error.log");
+            if (File.Exists(file) && new FileInfo(file).Length > 1_000_000) File.Move(file, Path.ChangeExtension(file, ".old.log"), overwrite: true);
+            File.AppendAllText(file,
                 $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {ex}\n\n");
         }
         catch

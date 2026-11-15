@@ -201,8 +201,18 @@ public sealed partial class SettingsWindow : Window
     {
         if (_lang == S.Language) return;
         _lang = S.Language;
-        BuildSidebar();
-        ShowPage(_page, animate: false);
+        AfterSlide(() =>
+        {
+            BuildSidebar();
+            ShowPage(_page, animate: false);
+        });
+    }
+
+    /// <summary>Redraws that follow a choice wait for the selector's highlight to finish sliding (or it never shows).</summary>
+    private async void AfterSlide(Action redraw)
+    {
+        await System.Threading.Tasks.Task.Delay(320);
+        redraw();
     }
 
     // =====================================================================================
@@ -624,7 +634,7 @@ public sealed partial class SettingsWindow : Window
         {
             S.BlurEnabled = v;
             AppSettings.Commit();
-            Dispatcher.InvokeAsync(() => Rebuild());
+            AfterSlide(Rebuild);
         }, _accent));
         if (S.BlurEnabled)
         {
@@ -702,22 +712,12 @@ public sealed partial class SettingsWindow : Window
         if (_setup) PrepareSwatches();
 
         bool custom = manual && Array.FindIndex(EyePresets, h => string.Equals(h, S.EyeColor, StringComparison.OrdinalIgnoreCase)) < 0;
-        var customButton = ActionButton("+", () =>
-        {
-            using var dlg = new System.Windows.Forms.ColorDialog { FullOpen = true, AnyColor = true };
-            try
-            {
-                var c = (Color)ColorConverter.ConvertFromString(S.EyeColor);
-                dlg.Color = System.Drawing.Color.FromArgb(c.R, c.G, c.B);
-            }
-            catch
-            {
-                // keep the default
-            }
-            if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK)
-                Pick($"#{dlg.Color.R:X2}{dlg.Color.G:X2}{dlg.Color.B:X2}");
-        });
+        Button? customButton = null;
+        customButton = ActionButton("+", () => OpenEyePicker(customButton!, Pick));
         customButton.ToolTip = Loc.T("eye.custom");
+#if DEBUG
+        _eyePlus = customButton;
+#endif
         customButton.Padding = new Thickness(9, 3, 9, 3);
         if (custom)
         {
@@ -833,7 +833,7 @@ public sealed partial class SettingsWindow : Window
             {
                 S.WeatherAuto = v;
                 _focusCityBox = !v;
-                Dispatcher.InvokeAsync(() => Rebuild());
+                AfterSlide(Rebuild);
             }));
         if (S.WeatherAuto) return; // the box is only for picking a city by hand
 
@@ -912,7 +912,7 @@ public sealed partial class SettingsWindow : Window
         {
             S.NotifyEnabled = v;
             AppSettings.Commit();
-            Dispatcher.InvokeAsync(() => Rebuild());
+            AfterSlide(Rebuild);
         }, _accent));
         if (S.NotifyEnabled)
         {
@@ -1318,45 +1318,8 @@ public sealed partial class SettingsWindow : Window
         return panel;
     }
 
-    private UIElement Segmented<T>(IEnumerable<(T value, string label)> options, T current, Action<T> set)
-    {
-        if (_setup) return SlidingSegmented(options, current, set);
-        var accent = _accent;
-        var host = new Border { Background = Dim(0x0E), CornerRadius = new CornerRadius(9), Padding = new Thickness(2) };
-        var panel = new StackPanel { Orientation = Orientation.Horizontal };
-        host.Child = panel;
-        var items = new List<(T value, Border b, TextBlock t)>();
-
-        void Paint(T selected)
-        {
-            foreach (var (v, b, t) in items)
-            {
-                bool sel = EqualityComparer<T>.Default.Equals(v, selected);
-                b.Background = sel ? new SolidColorBrush(accent) : Brushes.Transparent;
-                t.Foreground = sel ? new SolidColorBrush(Ink) : Dim(0xA8);
-                t.FontWeight = sel ? FontWeights.Bold : FontWeights.SemiBold;
-            }
-        }
-
-        foreach (var (value, label) in options)
-        {
-            var t = new TextBlock { Text = label, FontSize = 11.5 };
-            var b = new Border { CornerRadius = new CornerRadius(7), Padding = new Thickness(10, 4, 10, 4), Cursor = Cursors.Hand, Child = t, Background = Brushes.Transparent };
-            var v = value;
-            b.MouseLeftButtonUp += (_, _) =>
-            {
-                SoundService.Play(Sfx.Toggle);
-                set(v);
-                Paint(v);
-                AppSettings.Commit();
-                Cheer?.Invoke();
-            };
-            items.Add((value, b, t));
-            panel.Children.Add(b);
-        }
-        Paint(current);
-        return host;
-    }
+    // the same sliding highlight as in the first-run setup
+    private UIElement Segmented<T>(IEnumerable<(T value, string label)> options, T current, Action<T> set) => SlidingSegmented(options, current, set);
 
     private UIElement Slider(int value, int min, int max, Action<int> set, string suffix, Action? onCommit = null)
     {

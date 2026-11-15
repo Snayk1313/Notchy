@@ -250,7 +250,7 @@ public partial class MainWindow
         double left = Math.Max(PillMinSecondsOnCard, (_pillUntil - DateTime.UtcNow).TotalSeconds);
         var time = TimeSpan.FromMilliseconds(Dur(PillMorphMs));
         var ease = new CubicEase { EasingMode = EasingMode.EaseInOut };
-        Island.BeginAnimation(HeightProperty, new DoubleAnimation(_topHidden / S.SizeScale, time) { EasingFunction = ease });
+        Island.BeginAnimation(HeightProperty, new DoubleAnimation(_topHidden, time) { EasingFunction = ease });
         Island.BeginAnimation(WidthProperty, new DoubleAnimation(NoticeWidth, time) { EasingFunction = ease });
         var (y, height, contentTop) = PillShapeOfCard();
         _pillRow.BeginAnimation(MarginProperty, new ThicknessAnimation(new Thickness(0, contentTop, 0, 0), time) { EasingFunction = ease });
@@ -308,7 +308,7 @@ public partial class MainWindow
         _pillRow.Margin = new Thickness(0, contentTop, 0, 0);
         _pillMove.Y = y;
         _noticePill.Height = height;
-        SetIslandSizeNow(Island.ActualWidth, _topHidden / S.SizeScale);
+        SetIslandSizeNow(Island.ActualWidth, _topHidden);
         Island.UpdateLayout();
         PlaceNoticePill();
 

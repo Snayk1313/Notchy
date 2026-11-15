@@ -28,7 +28,6 @@ public partial class MainWindow : Window
     private readonly FocusTimer _focus = new();
     private readonly LyricsService _lyrics = new();
     private readonly AudioService _audio = new();
-    private readonly DispatcherTimer _frame;
     private readonly DispatcherTimer _hoverTimer;
     private readonly ScaleTransform _blink = new(1, 1);
     private readonly ContextMenu _menu;
@@ -148,10 +147,6 @@ public partial class MainWindow : Window
             UpdateState();
         };
 
-        // the real frame loop follows the screen (StartFrameLoop); this only covers when nothing renders
-        _frame = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
-        _frame.Tick += (_, _) => FrameFallback();
-
         AppSettings.Changed += ApplySettings;
 
         ApplySettings();
@@ -165,7 +160,6 @@ public partial class MainWindow : Window
             PositionWindow();
             if (S.IntroAnimation) PlayIntro();
             else UpdateState();
-            _frame.Start();
             StartFrameLoop();
             _claude.Start();
             if (AppSettings.WasFirstRun) _ = OpenSetupAfterIntroAsync();
@@ -222,7 +216,8 @@ public partial class MainWindow : Window
 
         bool floating = S.Style == IslandStyle.Floating;
         _topHidden = floating ? 0 : 30;
-        Island.Margin = new Thickness(0, floating ? 8 : -30, 0, 0);
+        // the scale grows the island from its hidden top: hide 30 px at that scale so the visible part still starts at the screen edge
+        Island.Margin = new Thickness(0, floating ? 8 : -_topHidden * S.SizeScale, 0, 0);
         PanelsHost.Margin = new Thickness(0, _topHidden, 0, 0);
 
         byte alpha = (byte)Math.Round(255 * (1 - Math.Clamp(S.SeeThrough, 0, 85) / 100.0));
@@ -434,6 +429,12 @@ public partial class MainWindow : Window
             new DoubleAnimation(expanding ? 1 : 0, TimeSpan.FromMilliseconds(Dur(expanding ? 420 : 160))));
         if (expanding) Dispatcher.InvokeAsync(() => MoveNavPill(false), DispatcherPriority.Loaded);
         if (prev == IslandState.Expanded && !expanding) TurnPillIntoCard();
+        if (prev == IslandState.Idle && state == IslandState.Volume) ArriveFromIdle();
+        else if (prev == IslandState.Volume && state == IslandState.Idle) DepartToIdle();
+        else if (_departAt >= 0) FinishDepart(); // somewhere else meanwhile: no eyes left behind
+        // in a full-screen game the island shows just for the volume/brightness bar, then hides again
+        if (_hiddenForFullscreen && state == IslandState.Volume) ApplyFullscreenHide();
+        else if (_hiddenForFullscreen && prev == IslandState.Volume) HideAfterCard();
     }
 
     private void AnimateIslandSize(Size size, bool bigMove)
@@ -625,6 +626,7 @@ public partial class MainWindow : Window
         }
 
         UpdateState();
+        PaceLoop();
     }
 
     private void UpdateClock()
@@ -1813,10 +1815,11 @@ public partial class MainWindow : Window
             return;
         }
         _hoverRequested = true;
+        PaceLoop(); // back to the screen's pace now: a timer waiting on an idle window can lag
         _keepOpenArea = null;
         _hoverTimer.Stop();
         if (S.Open == OpenMode.Click) return;
-        _hoverTimer.Interval = TimeSpan.FromMilliseconds(Math.Max(0, S.HoverDelayMs));
+        _hoverTimer.Interval = TimeSpan.FromMilliseconds(60); // just enough to ignore the mouse passing by the top of the screen
         _hoverTimer.Start();
     }
 
@@ -1986,6 +1989,22 @@ public partial class MainWindow : Window
     private IslandState? _forcedState;
 
 #if DEBUG
+    /// <summary>Test: after a short wait, saves a picture of the whole window (on a purple backdrop) as &lt;folder&gt;/&lt;name&gt;.png.</summary>
+    private async Task ShotAsync(string folder, string name, int wait)
+    {
+        await Task.Delay(wait);
+        var root = (FrameworkElement)Content;
+        var picture = new System.Windows.Media.Imaging.RenderTargetBitmap((int)root.ActualWidth * 2, (int)root.ActualHeight * 2, 192, 192, PixelFormats.Pbgra32);
+        var back = new DrawingVisual();
+        using (var dc = back.RenderOpen()) dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(0x5B, 0x2A, 0x86)), null, new Rect(0, 0, root.ActualWidth, root.ActualHeight));
+        picture.Render(back);
+        picture.Render(root);
+        var png = new System.Windows.Media.Imaging.PngBitmapEncoder();
+        png.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(picture));
+        using var file = System.IO.File.Create(System.IO.Path.Combine(folder, name + ".png"));
+        png.Save(file);
+    }
+
     public async Task SnapshotAsync(string folder)
     {
         System.IO.Directory.CreateDirectory(folder);
@@ -1998,22 +2017,7 @@ public partial class MainWindow : Window
         _claude.Inject("""{"hook_event_name":"PreToolUse","session_id":"demo","tool_name":"Edit","tool_input":{"file_path":"C:\\proj\\Notchy\\MainWindow.xaml","old_string":"x","new_string":"<Window x:Class=\"Notchy.MainWindow\"\n        xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"\n        Title=\"Notchy\">"}}""");
         await Task.Delay(300);
 
-        async Task Shot(string name)
-        {
-            await Task.Delay((int)Dur(900));
-            var root = (FrameworkElement)Content;
-            var rtb = new System.Windows.Media.Imaging.RenderTargetBitmap(
-                (int)root.ActualWidth * 2, (int)root.ActualHeight * 2, 192, 192, PixelFormats.Pbgra32);
-            var dv = new DrawingVisual();
-            using (var dc = dv.RenderOpen())
-                dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(0x5B, 0x2A, 0x86)), null, new Rect(0, 0, root.ActualWidth, root.ActualHeight));
-            rtb.Render(dv);
-            rtb.Render(root);
-            var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
-            enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(rtb));
-            using var fs = System.IO.File.Create(System.IO.Path.Combine(folder, name + ".png"));
-            enc.Save(fs);
-        }
+        Task Shot(string name) => ShotAsync(folder, name, (int)Dur(900));
 
         _forcedState = IslandState.Compact;
         UpdateState();
@@ -2027,6 +2031,103 @@ public partial class MainWindow : Window
             await Shot("2_tab_" + t);
             System.IO.File.AppendAllText(System.IO.Path.Combine(folder, "face.txt"),
                 $"{t}: tab={_tab} wave={_headerWave.Visibility} faceColor={_face.Color} state={_state}" + Environment.NewLine);
+        }
+
+        // alarm rules: writes alarm.txt with OK / FALHOU per case (made-up alarms, the real clock.json is left alone)
+        if (Environment.GetEnvironmentVariable("NOTCHY_ALARMTEST") == "1")
+        {
+            var log = new System.Text.StringBuilder();
+            var mon = new DateTime(2026, 11, 16); // a Monday
+            void Case(string name, Alarm a, DateTime[] ticks, int expected)
+            {
+                var c = new ClockService { DontSave = true };
+                c.Alarms.Add(a);
+                int fired = 0;
+                c.AlarmFired += _ => fired++;
+                foreach (var t in ticks) c.Tick(t);
+                log.AppendLine($"{(fired == expected ? "OK    " : "FALHOU")} {name}: tocou {fired}x (esperado {expected})");
+            }
+            Alarm Daily(int h, int m) => new() { Hour = h, Minute = m, Days = 0b1111111, ArmedAt = mon.AddDays(-7) };
+            Case("na hora", Daily(7, 30), new[] { mon.AddHours(7.5).AddSeconds(30) }, 1);
+            Case("3 min atrasado não toca", Daily(7, 30), new[] { mon.AddHours(7.5).AddMinutes(3) }, 0);
+            Case("toca uma vez só", Daily(7, 30), new[] { mon.AddHours(7.5).AddSeconds(5), mon.AddHours(7.5).AddSeconds(40) }, 1);
+            Case("23:59 visto à 00:00:30", Daily(23, 59), new[] { mon.AddDays(1).AddSeconds(30) }, 1);
+            Case("só segunda, numa terça", new Alarm { Hour = 7, Minute = 30, Days = Alarm.DayBit(DayOfWeek.Monday), ArmedAt = mon.AddDays(-7) }, new[] { mon.AddDays(1).AddHours(7.5) }, 0);
+            Case("uma vez, ligado depois da hora", new Alarm { Hour = 7, Minute = 30, Days = 0, ArmedAt = mon.AddHours(7.5).AddMinutes(1) }, new[] { mon.AddHours(7.5).AddMinutes(1.5) }, 0);
+            Case("uma vez, desliga depois de tocar", new Alarm { Hour = 7, Minute = 30, Days = 0, ArmedAt = mon }, new[] { mon.AddHours(7.5), mon.AddDays(1).AddHours(7.5) }, 1);
+            Case("soneca", new Alarm { Hour = 7, Minute = 30, Days = 0b1111111, ArmedAt = mon, SnoozeUntil = mon.AddHours(7.6) }, new[] { mon.AddHours(7.55), mon.AddHours(7.6).AddSeconds(1) }, 1);
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "alarm.txt"), log.ToString());
+        }
+
+        // 2.2.9 fixes: header with the update button + waveform, and a long Spotify device name
+        if (Environment.GetEnvironmentVariable("NOTCHY_FIXTEST") == "1")
+        {
+            _updateButton.Visibility = Visibility.Visible;
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            SelectTab(Tab.Claude, false);
+            await Shot("20_header_update");
+            _updateButton.Visibility = Visibility.Collapsed;
+            await Shot("20_header_noupdate");
+            System.IO.File.AppendAllText(System.IO.Path.Combine(folder, "face.txt"),
+                $"fix: music={_media.HasSession && !string.IsNullOrEmpty(_media.Title)} wave={_headerWave.Visibility}" + Environment.NewLine);
+            SelectTab(Tab.Music, false);
+            QueueButton.Visibility = Visibility.Visible;
+            SourceText.Text = "Alto-falante da sala de estar do Pedro (Echo Dot)";
+            await Shot("20_music_longdevice");
+        }
+
+        // melhorias: clock icon lit by an armed alarm; the volume bar showing over a full-screen game
+        if (Environment.GetEnvironmentVariable("NOTCHY_IMPROVETEST") == "1")
+        {
+            string log = System.IO.Path.Combine(folder, "improve.txt");
+            _clock.DontSave = true;
+            _clock.Alarms.Add(new Alarm { Hour = 7, Minute = 30, Days = 0b1111111, Name = "Teste" });
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            SelectTab(Tab.Home, false);
+            await Shot("21_clock_lit");
+            System.IO.File.AppendAllText(log, $"clock nav: {NavState(Tab.Clock).motion}" + Environment.NewLine);
+            _clock.Alarms.Clear();
+            await Shot("21_clock_off");
+            System.IO.File.AppendAllText(log, $"clock nav sem alarme: {NavState(Tab.Clock).motion}" + Environment.NewLine);
+
+            // the empty island's eyes pulling the volume bar out
+            _forcedState = IslandState.Idle;
+            UpdateState();
+            await Shot("22_arrive_0_idle");
+            _levelTarget = 0.38;
+            _forcedState = IslandState.Volume;
+            UpdateState();
+            await ShotAsync(folder, "22_arrive_1", 90);
+            await ShotAsync(folder, "22_arrive_2", 110);
+            await ShotAsync(folder, "22_arrive_3", 140);
+            await ShotAsync(folder, "22_arrive_4", 600);
+            _forcedState = IslandState.Idle;
+            UpdateState();
+            await ShotAsync(folder, "23_depart_1", 90);
+            await ShotAsync(folder, "23_depart_2", 110);
+            await ShotAsync(folder, "23_depart_3", 120);
+            await ShotAsync(folder, "23_depart_4", 500);
+            System.IO.File.AppendAllText(log, $"volta: idle={IdlePanel.Opacity:0.##} barra={VolumePanel.Opacity:0.##}" + Environment.NewLine);
+
+            _forcedState = null;
+            Collapse();
+            S.GameMode = false; // keep CheckFullscreen from undoing the fake full screen
+            _hiddenForFullscreen = true;
+            ApplyFullscreenHide();
+            await System.Threading.Tasks.Task.Delay(300);
+            System.IO.File.AppendAllText(log, $"tela cheia, parado: {Island.Visibility}" + Environment.NewLine);
+            _volumeOsdUntil = DateTime.UtcNow.AddSeconds(4);
+            UpdateState();
+            await Shot("21_fullscreen_volume");
+            System.IO.File.AppendAllText(log, $"tela cheia, volume: {_state} {Island.Visibility}" + Environment.NewLine);
+            _volumeOsdUntil = DateTime.MinValue;
+            UpdateState();
+            await System.Threading.Tasks.Task.Delay(700);
+            System.IO.File.AppendAllText(log, $"tela cheia, depois: {_state} {Island.Visibility}" + Environment.NewLine);
+            _hiddenForFullscreen = false;
+            ApplyFullscreenHide();
         }
 
         // Relógio: a timer in the ring with others running, the alarms, the editor, the small island and the ring

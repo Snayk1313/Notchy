@@ -1053,7 +1053,7 @@ public sealed class DownloadHistory
     {
         try
         {
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(_list));
+            SafeFile.Write(FilePath, JsonSerializer.Serialize(_list));
         }
         catch
         {

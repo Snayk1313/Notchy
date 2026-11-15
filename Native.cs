@@ -42,6 +42,24 @@ internal static class Native
     public static void PlaceBelow(IntPtr hwnd, IntPtr above) =>
         SetWindowPos(hwnd, above, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
+    // ---------------------------------------------------------------- power
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PowerThrottling { public uint Version, ControlMask, StateMask; }
+
+    [DllImport("kernel32.dll")]
+    private static extern bool SetProcessInformation(IntPtr process, int infoClass, ref PowerThrottling info, int size);
+
+    /// <summary>
+    /// When the island stops redrawing (empty, nothing moving) Windows 11 treats Notchy as a background app and
+    /// stretches its timers to seconds, so hover and alarms lag. Opt out of execution-speed and timer throttling.
+    /// </summary>
+    public static void DisablePowerThrottling()
+    {
+        var info = new PowerThrottling { Version = 1, ControlMask = 0x1 | 0x4 /* EXECUTION_SPEED | IGNORE_TIMER_RESOLUTION */, StateMask = 0 };
+        SetProcessInformation(System.Diagnostics.Process.GetCurrentProcess().Handle, 4 /* ProcessPowerThrottling */, ref info, Marshal.SizeOf<PowerThrottling>());
+    }
+
     // ---------------------------------------------------------------- cursor
 
     [StructLayout(LayoutKind.Sequential)]

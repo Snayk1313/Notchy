@@ -233,7 +233,7 @@ public sealed class CalendarService
         try
         {
             Directory.CreateDirectory(AppSettings.Folder);
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(this));
+            SafeFile.Write(FilePath, JsonSerializer.Serialize(this));
         }
         catch (Exception ex)
         {
