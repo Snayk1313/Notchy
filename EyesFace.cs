@@ -153,11 +153,13 @@ public sealed class EyesFace : Grid
         _swayAmount += (sway - _swayAmount) * Math.Min(1, dt * 3);
         double swing = Math.Sin(_t * 2.4) * 1.8 * _swayAmount;
 
-        bool happy = mood == Mood.Happy;
-        bool sad = mood == Mood.Sad;
-        _left.Apply(_lookX + _shake + swing, _lookY + hop, _scaleX, _scaleY, happy, sad, false);
-        _right.Apply(_lookX + _shake + swing, _lookY + hop, _scaleX, _scaleY, happy, sad, true);
+        // the smile and the sad arc come through a blink: shut, change, open with a little bounce
+        var (shape, squash) = _flip.Step(mood == Mood.Happy ? 1 : mood == Mood.Sad ? 2 : 0, dt / Math.Max(0.3, AppSettings.Current.SpeedFactor));
+        _left.Apply(_lookX + _shake + swing, _lookY + hop, _scaleX, _scaleY, shape == 1, shape == 2, false, squash);
+        _right.Apply(_lookX + _shake + swing, _lookY + hop, _scaleX, _scaleY, shape == 1, shape == 2, true, squash);
     }
+
+    private readonly EyeFlip _flip = new();
 
     /// <summary>One eye: a rounded pill, a "^" for happy and a drooping arc for sad.</summary>
     private sealed class Eye : Grid
@@ -166,7 +168,7 @@ public sealed class EyesFace : Grid
         private readonly Path _happy = new() { Data = Geometry.Parse("M0,5 Q3.5,-0.5 7,5"), StrokeThickness = 1.9, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed };
         private readonly Path _sad = new() { StrokeThickness = 1.8, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed };
         private readonly TranslateTransform _move = new();
-        private readonly ScaleTransform _scale = new();
+        private readonly ScaleTransform _scale = new(), _squash = new(1, 1);
         private bool? _wasRight;
 
         public Eye()
@@ -175,7 +177,8 @@ public sealed class EyesFace : Grid
             Height = 13;
             Margin = new Thickness(1, 0, 1, 0);
             _pill.RenderTransform = _scale;
-            RenderTransform = _move;
+            RenderTransformOrigin = new Point(0.5, 0.5);
+            RenderTransform = new TransformGroup { Children = { _squash, _move } };
             Children.Add(_pill);
             Children.Add(_happy);
             Children.Add(_sad);
@@ -188,8 +191,9 @@ public sealed class EyesFace : Grid
             _sad.Stroke = b;
         }
 
-        public void Apply(double x, double y, double sx, double sy, bool happy, bool sad, bool right)
+        public void Apply(double x, double y, double sx, double sy, bool happy, bool sad, bool right, double squash = 1)
         {
+            _squash.ScaleY = squash;
             if (_wasRight != right)
             {
                 _wasRight = right;
@@ -204,5 +208,36 @@ public sealed class EyesFace : Grid
             _happy.Visibility = happy ? Visibility.Visible : Visibility.Collapsed;
             _sad.Visibility = sad ? Visibility.Visible : Visibility.Collapsed;
         }
+    }
+}
+
+/// <summary>
+/// Eyes turning into another shape (a smile, a sad arc) and back, for the faces drawn frame by frame: they squash shut,
+/// change while shut, and open again with a little bounce.
+/// </summary>
+public sealed class EyeFlip
+{
+    private const double Seconds = 0.27, Shut = 0.34;
+    private int _wanted, _shown;
+    private double _at = 1; // 0..1 through the flip; 1 = at rest
+
+    /// <summary>What to draw now, and how squashed (1 = not at all).</summary>
+    public (int shape, double squash) Step(int wanted, double dt)
+    {
+        if (wanted != _wanted)
+        {
+            _wanted = wanted;
+            if (_at >= Shut) _at = 0; // (still closing: it just opens as the newest shape)
+        }
+        if (_at >= 1)
+        {
+            _shown = _wanted;
+            return (_shown, 1);
+        }
+        _at = Math.Min(1, _at + Math.Max(0, dt) / Seconds);
+        if (_at < Shut) return (_shown, 1 - 0.88 * (_at / Shut));
+        _shown = _wanted;
+        double u = (_at - Shut) / (1 - Shut), back = 1 + 2.4 * Math.Pow(u - 1, 3) + 1.4 * Math.Pow(u - 1, 2);
+        return (_shown, 0.12 + 0.88 * back);
     }
 }

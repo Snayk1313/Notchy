@@ -247,8 +247,7 @@ public partial class MainWindow
             if (happy != _transferHappyShown)
             {
                 _transferHappyShown = happy;
-                TransferEyeL.Visibility = TransferEyeR.Visibility = happy ? Visibility.Collapsed : Visibility.Visible;
-                TransferHappyL.Visibility = TransferHappyR.Visibility = happy ? Visibility.Visible : Visibility.Collapsed;
+                FlipEyes(happy, TransferEyeL, TransferEyeR, TransferHappyL, TransferHappyR);
             }
             double headDown = _transferOutline.Length > 0 ? _transferOutline.DownAt(_transferHead) : 0;
             var pose = happy ? EyePose.Rest : TransferPose(t, headDown, _compactMode == CompactMode.TransferFailed, time);
@@ -271,9 +270,10 @@ public partial class MainWindow
         bool solo = IsTransferMode(_compactMode) && _compactMode != CompactMode.TransferFailed;
         // with music/Claude/Focus a download lives in the bubble; a copy still lights their outline
         bool copyAround = t?.Kind == TransferKind.Copy || (t == null && done && _transferDoneKind == TransferKind.Copy);
-        bool show = (solo || copyAround) && (t != null || done) && _state == IslandState.Compact && !_introActive && !_islandMorphing;
+        bool show = (solo || copyAround) && (t != null || done) && _state == IslandState.Compact && !_introActive && !_islandMorphing && !IslandLightsOff;
         double k = Ease(Math.Clamp(0.14 / Math.Max(0.3, S.SpeedFactor), 0.05, 0.5));
         _transferOpacity += ((show ? 1 : 0) - _transferOpacity) * k;
+        if (IslandLightsOff) _transferOpacity = 0;
         if (_transferOpacity < 0.01 && !show)
         {
             if (TransferLight.Visibility == Visibility.Visible)
@@ -362,7 +362,11 @@ public partial class MainWindow
                 _dlPodShown = false;
                 _dlPodMorphing = true;
                 MorphPodIntoIsland(DownloadPod, DlPodX, DlPodSlide, TransferWidth, TransferPanel, () => _transferOpacity = 1,
-                    () => _dlPodMorphing = false);
+                    () => _dlPodMorphing = false, () => _state == IslandState.Compact && IsTransferMode(_compactMode), () =>
+                    {
+                        _dlPodShown = true;
+                        _dlPodMorphing = false;
+                    });
             }
             else HideDownloadPod();
         }
@@ -388,8 +392,7 @@ public partial class MainWindow
         if (happy != _dlPodHappyShown)
         {
             _dlPodHappyShown = happy;
-            DlEyeL.Visibility = DlEyeR.Visibility = happy ? Visibility.Collapsed : Visibility.Visible;
-            DlHappyL.Visibility = DlHappyR.Visibility = happy ? Visibility.Visible : Visibility.Collapsed;
+            FlipEyes(happy, DlEyeL, DlEyeR, DlHappyL, DlHappyR);
         }
         double prog = happy ? 1 : t?.Progress ?? -1;
         ApplyPose(_dlPodRig, happy ? EyePose.Rest : TransferPose(t, prog >= 0 ? prog : 0.5, sad, time), Ease(0.2));
@@ -550,7 +553,9 @@ public partial class MainWindow
         if (force || key != _dlTabKey)
         {
             _dlTabKey = key;
+            var before = _state == IslandState.Expanded && _tab == Tab.Downloads && DownloadsList.IsVisible ? ListGlide.Snap(DownloadsList) : null;
             BuildDownloadsTab(t, files, history);
+            if (before != null) ListGlide.Play(DownloadsList, before, Dur(300));
         }
 
         // live values
@@ -600,7 +605,7 @@ public partial class MainWindow
         _dlEmpty = files.Count == 0 && history.Count == 0;
         if (_dlCleared != null)
         {
-            DownloadsList.Children.Add(ClearedRow());
+            DownloadsList.Children.Add(ListGlide.Key(ClearedRow(), "undo"));
             h += DlUndoRowHeight;
         }
         else if (files.Count == 0 && history.Count == 0)
@@ -621,18 +626,19 @@ public partial class MainWindow
             h += 18;
             foreach (var f in files)
             {
-                DownloadsList.Children.Add(ActiveRow(f));
+                DownloadsList.Children.Add(ListGlide.Key(ActiveRow(f), "active:" + f.PartialPath));
                 h += 58;
             }
         }
         if (history.Count > 0)
         {
-            DownloadsList.Children.Add(RecentTitle(history.Count));
+            DownloadsList.Children.Add(ListGlide.Key(RecentTitle(history.Count), "recent"));
             h += 18;
             foreach (var e in history)
             {
                 var row = HistoryRow(e);
                 _dlHistoryRows.Add(row);
+                row.Tag = new GlideKey("done:" + e.Path);
                 DownloadsList.Children.Add(row);
                 h += 38;
             }

@@ -70,6 +70,7 @@ public partial class MainWindow
         if (_nav.TryGetValue(Tab.Shelf, out var n))
             n.button.Visibility = S.ShelfEnabled ? Visibility.Visible : Visibility.Collapsed;
         if (!S.ShelfEnabled && _tab == Tab.Shelf) SelectTab(Tab.Home, animate: false);
+        ApplyClipSettings();
 
         ApplyTransferSettings();
         ClaudePod.Height = 34 + _topHidden;
@@ -236,15 +237,7 @@ public partial class MainWindow
     {
         if (_happyShown == on) return;
         _happyShown = on;
-        EyeL.Visibility = EyeR.Visibility = on ? Visibility.Collapsed : Visibility.Visible;
-        HappyL.Visibility = HappyR.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
-        if (on)
-        {
-            var bounce = new DoubleAnimation(-3, 0, TimeSpan.FromMilliseconds(500)) { EasingFunction = new BounceEase { Bounces = 2, Bounciness = 3 } };
-            HappyL.RenderTransform = HappyR.RenderTransform = new TranslateTransform();
-            ((TranslateTransform)HappyL.RenderTransform).BeginAnimation(TranslateTransform.YProperty, bounce);
-            ((TranslateTransform)HappyR.RenderTransform).BeginAnimation(TranslateTransform.YProperty, bounce);
-        }
+        FlipEyes(on, EyeL, EyeR, HappyL, HappyR);
     }
 
     private void UpdateLivelyEyes()
@@ -375,8 +368,7 @@ public partial class MainWindow
         if (done != _podHappy)
         {
             _podHappy = done;
-            PodEyeL.Visibility = PodEyeR.Visibility = done ? Visibility.Collapsed : Visibility.Visible;
-            PodHappyL.Visibility = PodHappyR.Visibility = done ? Visibility.Visible : Visibility.Collapsed;
+            FlipEyes(done, PodEyeL, PodEyeR, PodHappyL, PodHappyR);
         }
 
         // attention: outline + eyes pulse orange
@@ -501,10 +493,65 @@ public partial class MainWindow
     // scroll on the island
     // =====================================================================================
 
+    // ---- Shift + wheel on the open island: it turns into the volume bar (only where nothing there uses the wheel)
+
+    private DateTime _wheelVolumeUntil = DateTime.MinValue;
+    private Tab? _returnTab;
+    private readonly HashSet<UIElement> _wheelUsers = new();
+    private const double WheelVolumeSeconds = 1.3, WheelVolumeGrace = 2.5;
+    private DateTime _wheelVolumeLast = DateTime.MinValue;
+
+    private bool WheelVolumeHolds => DateTime.UtcNow < _wheelVolumeUntil;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "GetAsyncKeyState")]
+    private static extern short GetAsyncKeyStateShift(int vk);
+
+    /// <summary>Under the mouse: a list that can scroll, or something that takes the wheel itself (calendar, clock, focus dial).</summary>
+    private bool WheelTaken(object source)
+    {
+        for (var d = source as DependencyObject; d != null && d != Island; d = VisualTreeHelper.GetParent(d) ?? LogicalTreeHelper.GetParent(d))
+        {
+            if (d is UIElement u && _wheelUsers.Contains(u)) return true;
+            if (d is ScrollViewer sv && (sv.ScrollableHeight > 1 || sv.ScrollableWidth > 1)) return true;
+        }
+        return false;
+    }
+
+    private void Island_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        // (the island never takes the keyboard, so it asks Windows whether Shift is down)
+        if (!S.ScrollVolume || _state != IslandState.Expanded || GetAsyncKeyStateShift(0x10) >= 0) return;
+        if (_subOpen || WheelTaken(e.OriginalSource)) return;
+        e.Handled = true;
+        _returnTab = _tab; // (it opens again on the same tab)
+        WheelVolume(e.Delta);
+    }
+
+    private void WheelVolume(int delta)
+    {
+        if (!_audio.TryGet(out float vol, out bool mute)) return;
+        double next = Math.Clamp((mute ? 0 : vol) + delta / 120.0 * 0.02, 0, 1);
+        SetVolume(next);
+        if (_levelKind != LevelKind.Volume) SetDeviceListOpen(false);
+        ShowVolumeLevel(next, false);
+        VolumeSlider.Value = next;
+        _wheelVolumeLast = DateTime.UtcNow;
+        _wheelVolumeUntil = DateTime.UtcNow.AddSeconds(WheelVolumeSeconds);
+        _volumeOsdUntil = _wheelVolumeUntil;
+        UpdateState();
+    }
+
     private void Island_MouseWheel(object sender, MouseWheelEventArgs e)
     {
         if (!S.ScrollVolume) return;
         e.Handled = true;
+        // still turning on the bar that came from the open island (with or without Shift, even if the island closed under
+        // the mouse meanwhile): it goes on changing the volume, and never starts skipping songs
+        if (WheelVolumeHolds || (DateTime.UtcNow - _wheelVolumeLast).TotalSeconds < WheelVolumeGrace)
+        {
+            WheelVolume(e.Delta);
+            return;
+        }
 
         if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
         {
@@ -652,8 +699,11 @@ public partial class MainWindow
         }
     }
 
+    private readonly HashSet<string> _shelfShown = new(StringComparer.OrdinalIgnoreCase);
+
     private void RenderShelf()
     {
+        _shelfShown.IntersectWith(_shelf); // (a file taken off pops in again if it comes back)
         ShelfItems.Children.Clear();
         _shelfSel.Items.Clear();
         bool empty = _shelf.Count == 0;
@@ -769,14 +819,16 @@ public partial class MainWindow
             Cursor = Cursors.Hand,
             ToolTip = path,
             RenderTransformOrigin = new Point(0.5, 0.5),
-            RenderTransform = new ScaleTransform(0.6, 0.6),
-            Opacity = 0
+            RenderTransform = new ScaleTransform(1, 1)
         };
-        // pop in
-        var pop = new DoubleAnimation(1, TimeSpan.FromMilliseconds(Dur(320))) { EasingFunction = new BackEase { Amplitude = 0.5, EasingMode = EasingMode.EaseOut } };
-        ((ScaleTransform)card.RenderTransform).BeginAnimation(ScaleTransform.ScaleXProperty, pop);
-        ((ScaleTransform)card.RenderTransform).BeginAnimation(ScaleTransform.ScaleYProperty, pop);
-        card.BeginAnimation(OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(Dur(200))));
+        // a file that just landed pops in (the ones already there stay still when the shelf is drawn again)
+        if (_shelfShown.Add(path))
+        {
+            var pop = new DoubleAnimation(0.6, 1, TimeSpan.FromMilliseconds(Dur(320))) { EasingFunction = new BackEase { Amplitude = 0.5, EasingMode = EasingMode.EaseOut } };
+            ((ScaleTransform)card.RenderTransform).BeginAnimation(ScaleTransform.ScaleXProperty, pop);
+            ((ScaleTransform)card.RenderTransform).BeginAnimation(ScaleTransform.ScaleYProperty, pop);
+            card.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(Dur(200))));
+        }
 
         card.MouseEnter += (_, _) =>
         {
@@ -788,12 +840,26 @@ public partial class MainWindow
             card.Background = Brushes.Transparent;
             remove.Visibility = Visibility.Hidden;
         };
-        remove.MouseLeftButtonUp += (_, e) =>
+        remove.MouseLeftButtonUp += async (_, e) =>
         {
             e.Handled = true;
             SoundService.Play(Sfx.Click);
             _shelf.Remove(path);
             SaveShelf();
+            if (S.SpeedFactor > 0 && card.IsVisible)
+            {
+                // it shrinks away, and its place closes
+                var time = TimeSpan.FromMilliseconds(Dur(200));
+                var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+                card.IsHitTestVisible = false;
+                card.ClipToBounds = true;
+                var small = new DoubleAnimation(0.5, time) { EasingFunction = ease };
+                ((ScaleTransform)card.RenderTransform).BeginAnimation(ScaleTransform.ScaleXProperty, small);
+                ((ScaleTransform)card.RenderTransform).BeginAnimation(ScaleTransform.ScaleYProperty, small);
+                card.BeginAnimation(OpacityProperty, new DoubleAnimation(0, time));
+                card.BeginAnimation(WidthProperty, new DoubleAnimation(card.ActualWidth, 0, time) { EasingFunction = ease });
+                await System.Threading.Tasks.Task.Delay(time);
+            }
             RenderShelf();
         };
         bool wasMarked = false;

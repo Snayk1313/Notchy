@@ -37,8 +37,10 @@ public sealed partial class SettingsWindow : Window
         new("sounds", "", false, Color.FromRgb(0xFF, 0xD3, 0x6B)),
         new("music", "", false, Color.FromRgb(0xFF, 0x7E, 0xB6)),
         new("calendar", "\uE787", false, Color.FromRgb(0x7C, 0xC8, 0xFF)),
+        new("clock", "\uE121", false, Color.FromRgb(0x6F, 0xD6, 0xE8)),
         new("focus", "", false, Color.FromRgb(0xB7, 0x9C, 0xFF)),
         new("files", "", false, Color.FromRgb(0x5E, 0xD6, 0x7D)),
+        new("clip", "\uE77F", false, Color.FromRgb(0x8F, 0xB8, 0xFF)),
         new("claude", "✻", true, Color.FromRgb(0xE8, 0x82, 0x5F)),
         new("chat", "", false, Color.FromRgb(0xFF, 0xAA, 0x4C)),
         new("about", "", false, Color.FromRgb(0x9A, 0xA3, 0xB5)),
@@ -52,6 +54,11 @@ public sealed partial class SettingsWindow : Window
     private readonly ScrollViewer _scroll;
     private readonly Dictionary<string, (Border item, Border tile, Border glow, TextBlock icon, TextBlock text)> _side = new();
     private string _page = "general";
+    // the selected category's highlight: one shape that slides from one to the other
+    private readonly TranslateTransform _sideMarkMove = new();
+    private readonly SolidColorBrush _sideMarkBrush = new(Colors.Transparent);
+    private readonly Border _sideMark = new() { CornerRadius = new CornerRadius(10), VerticalAlignment = VerticalAlignment.Top, Height = 0, IsHitTestVisible = false };
+    private bool _sideMarkPlaced;
     private Color _accent = Categories[0].Color;
     private TextBlock? _sideSub, _searchHint;
     private TextBox? _search;
@@ -59,7 +66,8 @@ public sealed partial class SettingsWindow : Window
 
     // the sidebar's eyes
     private readonly TranslateTransform _eyesLook = new();
-    private readonly ScaleTransform _eyesBlink = new(1, 1);
+    private readonly ScaleTransform _eyesBlink = new(1, 1), _eyesSquash = new(1, 1);
+    private readonly EyeFlip _eyesFlip = new();
     private readonly List<Rectangle> _eyes = new();
     private readonly List<Path> _smiles = new();
     private const double SideGlowRoom = 8, EyesFollowSeconds = 0.06, EyesMaxFrameSeconds = 0.05;
@@ -84,7 +92,7 @@ public sealed partial class SettingsWindow : Window
         Title = "Notchy";
         var area = SystemParameters.WorkArea;
         Width = Math.Min((setup ? 700 : 920) * Scale, area.Width - 40);
-        Height = Math.Min((setup ? 590 : 640) * Scale, area.Height - 40);
+        Height = Math.Min((setup ? 650 : 690) * Scale, area.Height - 40);
         MinWidth = 680;
         MinHeight = 440;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -123,7 +131,11 @@ public sealed partial class SettingsWindow : Window
         }
         // (the scroll area clips at its own edge: this extra room keeps the selected icon's glow whole, and nothing moves on screen)
         _sideItems.Margin = new Thickness(SideGlowRoom, SideGlowRoom, SideGlowRoom, 0);
-        var itemsScroll = new ScrollViewer { Content = _sideItems, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FocusVisualStyle = null,
+        var sideLayers = new Grid();
+        _sideMark.Margin = new Thickness(SideGlowRoom, SideGlowRoom, SideGlowRoom, 0);
+        sideLayers.Children.Add(_sideMark);
+        sideLayers.Children.Add(_sideItems);
+        var itemsScroll = new ScrollViewer { Content = sideLayers, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FocusVisualStyle = null,
             Margin = new Thickness(-SideGlowRoom, -SideGlowRoom, -SideGlowRoom, 0) };
         Grid.SetRow(itemsScroll, 2);
         sideGrid.Children.Add(itemsScroll);
@@ -145,12 +157,17 @@ public sealed partial class SettingsWindow : Window
         };
         // The scroll area clips at its own edge, so the margins go inside it: the glows have room and nothing moves on screen
         Grid.SetRowSpan(_scroll, 2);
-        _scroll.Margin = new Thickness(0, 16, 0, 0);
-        _pageHost.Margin = new Thickness(34, 24, 34, 30);
+        // The page scrolls only below the window buttons' band (they have no background: it showed through them),
+        // and fades out at that edge instead of being cut. The page itself starts where it always did.
+        const double ScrollTop = 24, FadeEdge = 10;
+        _scroll.Margin = new Thickness(0, ScrollTop, 0, 0);
+        _pageHost.Margin = new Thickness(34, 40 - ScrollTop, 34, 30);
+        _scroll.OpacityMask = new LinearGradientBrush(new GradientStopCollection { new(Colors.Transparent, 0), new(Colors.Black, 1) },
+            new Point(0, 0), new Point(0, FadeEdge)) { MappingMode = BrushMappingMode.Absolute };
         _scroll.Loaded += (_, _) =>
         {
-            // ...but the scroll bar stays clear of the window's buttons
-            if (_scroll.Template?.FindName("PART_VerticalScrollBar", _scroll) is FrameworkElement bar) bar.Margin = new Thickness(0, 24, 0, 0);
+            // ...and the scroll bar starts under the band too
+            if (_scroll.Template?.FindName("PART_VerticalScrollBar", _scroll) is FrameworkElement bar) bar.Margin = new Thickness(0, 40 - ScrollTop, 0, 0);
         };
         content.Children.Add(_scroll);
         if (setup)
@@ -177,6 +194,7 @@ public sealed partial class SettingsWindow : Window
         ShowPage("general", animate: false);
 
         AppSettings.Changed += OnSettingsChanged;
+        if (Island?.Calendar is { } calendar) calendar.ExternalsChanged += OnExternalsChanged;
         Cheer += OnCheer;
         Updater.Changed += OnUpdaterChanged;
         CompositionTarget.Rendering += OnEyesFrame;
@@ -184,6 +202,7 @@ public sealed partial class SettingsWindow : Window
         Closed += (_, _) =>
         {
             AppSettings.Changed -= OnSettingsChanged;
+            if (Island?.Calendar is { } calendar) calendar.ExternalsChanged -= OnExternalsChanged;
             Cheer -= OnCheer;
             Updater.Changed -= OnUpdaterChanged;
             CompositionTarget.Rendering -= OnEyesFrame;
@@ -227,7 +246,7 @@ public sealed partial class SettingsWindow : Window
         var look = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, RenderTransform = _eyesLook };
         for (int i = 0; i < 2; i++)
         {
-            var cell = new Grid { Width = 9, Height = 12, Margin = new Thickness(2, 0, 2, 0) };
+            var cell = new Grid { Width = 9, Height = 12, Margin = new Thickness(2, 0, 2, 0), RenderTransformOrigin = new Point(0.5, 0.5), RenderTransform = _eyesSquash };
             var eye = new Rectangle { Width = 6, Height = 10, RadiusX = 3, RadiusY = 3, RenderTransformOrigin = new Point(0.5, 0.5), RenderTransform = _eyesBlink, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
             var smile = new Path
             {
@@ -281,12 +300,15 @@ public sealed partial class SettingsWindow : Window
         double seconds = Math.Min((frame.RenderingTime - _eyesLastFrame).TotalSeconds, EyesMaxFrameSeconds);
         _eyesLastFrame = frame.RenderingTime;
         AnimateEyes(seconds);
+        if (_setup) SetupArtFrame(seconds);
     }
 
     private void AnimateEyes(double seconds)
     {
         if (_eyesPill == null || !IsVisible) return;
-        bool joy = DateTime.Now < _joyUntil;
+        var (shape, squash) = _eyesFlip.Step(DateTime.Now < _joyUntil ? 1 : 0, seconds);
+        bool joy = shape == 1;
+        _eyesSquash.ScaleY = squash;
         foreach (var e in _eyes) e.Visibility = joy ? Visibility.Collapsed : Visibility.Visible;
         foreach (var s in _smiles) s.Visibility = joy ? Visibility.Visible : Visibility.Collapsed;
         double tx = 0, ty = 0;
@@ -409,7 +431,9 @@ public sealed partial class SettingsWindow : Window
         row.Children.Add(tileHost);
         row.Children.Add(text);
 
-        var item = new Border { CornerRadius = new CornerRadius(10), Padding = new Thickness(8, 6, 8, 6), Margin = new Thickness(0, 1, 0, 1), Cursor = Cursors.Hand, Background = Brushes.Transparent, Child = row };
+        // (a breath before each group: alerts, features, assistants, about)
+        double gap = c.Key is "notif" or "music" or "claude" or "about" ? 10 : 1;
+        var item = new Border { CornerRadius = new CornerRadius(10), Padding = new Thickness(8, 5, 8, 5), Margin = new Thickness(0, gap, 0, 1), Cursor = Cursors.Hand, Background = Brushes.Transparent, Child = row };
         item.MouseEnter += (_, _) => { if (_page != c.Key || Searching) item.Background = new SolidColorBrush(Color.FromArgb(0x0C, 255, 255, 255)); };
         item.MouseLeave += (_, _) => HighlightSide();
         item.MouseLeftButtonUp += (_, _) =>
@@ -430,12 +454,31 @@ public sealed partial class SettingsWindow : Window
         {
             if (!_side.TryGetValue(c.Key, out var s)) continue;
             bool sel = c.Key == _page && !Searching;
-            s.item.Background = sel ? new SolidColorBrush(Color.FromArgb(0x26, c.Color.R, c.Color.G, c.Color.B)) : Brushes.Transparent;
+            s.item.Background = Brushes.Transparent; // (the selected one's colour is the mark behind it)
             s.tile.Background = new SolidColorBrush(sel ? c.Color : Color.FromArgb(0x2E, c.Color.R, c.Color.G, c.Color.B));
             s.icon.Foreground = new SolidColorBrush(sel ? Ink : c.Color);
             s.text.Foreground = sel ? Brushes.White : Dim(0xB0);
-            s.glow.Opacity = sel ? 1 : 0;
+            s.glow.BeginAnimation(OpacityProperty, new DoubleAnimation(sel ? 1 : 0, TimeSpan.FromMilliseconds(220)));
         }
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(MoveSideMark));
+    }
+
+    private void MoveSideMark()
+    {
+        _sideMark.Background = _sideMarkBrush;
+        _sideMark.RenderTransform = _sideMarkMove;
+        if (Searching || _setup || !_side.TryGetValue(_page, out var s) || s.item.ActualHeight < 1)
+        {
+            _sideMarkBrush.BeginAnimation(SolidColorBrush.ColorProperty, new ColorAnimation(Colors.Transparent, TimeSpan.FromMilliseconds(160)));
+            return;
+        }
+        var c = Categories.First(x => x.Key == _page).Color;
+        double y = s.item.TranslatePoint(new Point(0, 0), _sideItems).Y;
+        _sideMark.Height = s.item.ActualHeight;
+        var time = TimeSpan.FromMilliseconds(_sideMarkPlaced ? 300 * Math.Max(0.3, S.SpeedFactor) : 0);
+        _sideMarkPlaced = true;
+        _sideMarkMove.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(y, time) { EasingFunction = new BackEase { Amplitude = 0.25, EasingMode = EasingMode.EaseOut } });
+        _sideMarkBrush.BeginAnimation(SolidColorBrush.ColorProperty, new ColorAnimation(Color.FromArgb(0x26, c.R, c.G, c.B), time));
     }
 
     // =====================================================================================
@@ -472,6 +515,8 @@ public sealed partial class SettingsWindow : Window
         "claude" => ClaudePage(),
         "chat" => ChatPage(),
         "focus" => FocusPage(),
+        "clock" => ClockPage(),
+        "clip" => ClipPage(),
         "files" => FilesPage(),
         "sounds" => SoundsPage(),
         "about" => AboutPage(),
@@ -525,6 +570,7 @@ public sealed partial class SettingsWindow : Window
             p.Children.Add(new TextBlock { Text = Loc.T("s.nothing") + " 👀", FontSize = 13, Foreground = Dim(0x66), HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 50, 0, 0) });
         _pageHost.Content = p;
         _scroll.ScrollToTop();
+        p.BeginAnimation(OpacityProperty, new DoubleAnimation(0.35, 1, TimeSpan.FromMilliseconds(170)));
     }
 
     private StackPanel Page(string key)
@@ -563,7 +609,7 @@ public sealed partial class SettingsWindow : Window
     private StackPanel Section(StackPanel page, string? title = null)
     {
         if (title != null)
-            page.Children.Add(new TextBlock { Text = title.ToUpperInvariant(), FontSize = 10.5, FontWeight = FontWeights.Bold, Foreground = Dim(0x66), Margin = new Thickness(4, 20, 0, 8) });
+            page.Children.Add(new TextBlock { Text = title.ToUpperInvariant(), FontSize = 10.5, FontWeight = FontWeights.Bold, Foreground = Dim(0x66), Margin = new Thickness(4, 20, 0, 8), Tag = new GlideKey("sec:" + title) });
         else page.Children.Add(new Border { Height = 12 });
         var rows = new StackPanel();
         page.Children.Add(CardOf(rows));
@@ -590,7 +636,7 @@ public sealed partial class SettingsWindow : Window
         g.ColumnDefinitions.Add(new ColumnDefinition());
         g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 20, 0) };
-        texts.Children.Add(new TextBlock { Text = title, FontSize = 13, FontWeight = FontWeights.SemiBold });
+        texts.Children.Add(new TextBlock { Text = title, FontSize = 13, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
         var d = new TextBlock { Text = desc, FontSize = 11.5, Foreground = Dim(0x80), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 0), LineHeight = 16 };
         if (string.IsNullOrEmpty(desc)) d.Visibility = Visibility.Collapsed;
         texts.Children.Add(d);
@@ -598,6 +644,8 @@ public sealed partial class SettingsWindow : Window
         if (control is FrameworkElement fe) fe.VerticalAlignment = VerticalAlignment.Center;
         Grid.SetColumn(control, 1);
         g.Children.Add(control);
+        g.Tag = new GlideKey("row:" + title);
+        if (section.Children.Count == 0 && section.Parent is Border card) card.Tag = new GlideKey("card:" + title); // (a card is known by its first row)
         AddToCard(section, g);
         _collect?.Add((g, title + " " + desc));
         return d;
@@ -673,7 +721,13 @@ public sealed partial class SettingsWindow : Window
     {
         double offset = _scroll.VerticalOffset;
         if (Searching) ShowResults(_search!.Text.Trim());
-        else ShowPage(_page, animate: false);
+        else
+        {
+            // rows that appear or go (an option that shows others, the next step of a wizard): the rest glides to its place
+            var before = _pageHost.Content is FrameworkElement old && !_setup ? ListGlide.Snap(old) : null;
+            ShowPage(_page, animate: false);
+            if (before != null && _pageHost.Content is FrameworkElement now) ListGlide.Play(now, before, 280 * Math.Max(0, S.SpeedFactor));
+        }
         _scroll.ScrollToVerticalOffset(offset);
     }
 
@@ -742,8 +796,7 @@ public sealed partial class SettingsWindow : Window
         var p = Page("calendar");
         var calendar = Section(p, Loc.T("s.sec.calendar"));
         Row(calendar, Loc.T("s.calholidays"), Loc.T("s.calholidays.d"), Toggle(S.CalendarHolidays, v => S.CalendarHolidays = v));
-        Row(calendar, Loc.T("s.clock"), Loc.T("s.clock.d"),
-            Segmented(new[] { (ClockMode.Auto, Loc.T("isl.clock.auto")), (ClockMode.H12, "12h"), (ClockMode.H24, "24h") }, S.Clock, v => S.Clock = v));
+        if (Island?.Calendar is { } connected) ExternalCalendarRowsInto(calendar, connected);
         WeatherRows(Section(p, Loc.T("s.sec.weather")));
         return p;
     }
@@ -787,6 +840,14 @@ public sealed partial class SettingsWindow : Window
             });
         }
 
+        if (connected)
+            Row(sp, Loc.T("s.sp.setup"), Loc.T("s.sp.setup.d"), ActionButton(Loc.T(_spSetupOpen ? "s.sp.setup.close" : "s.sp.setup.open"), () =>
+            {
+                _spSetupOpen = !_spSetupOpen;
+                Rebuild(); // (the rows glide open)
+            }));
+        if (connected && !_spSetupOpen && _collect == null) return p; // (the search still finds them)
+
         var idBox = new TextBox
         {
             Width = 250, Text = S.SpotifyClientId, Background = new SolidColorBrush(Color.FromArgb(0x30, 0, 0, 0)), Foreground = Brushes.White, CaretBrush = Brushes.White,
@@ -811,10 +872,27 @@ public sealed partial class SettingsWindow : Window
         // the steps open right under their row
         var steps = new TextBlock { Text = Loc.T("sp.steps"), FontSize = 12, Foreground = Dim(0xAA), TextWrapping = TextWrapping.Wrap, LineHeight = 20, Margin = new Thickness(16, 0, 16, 14), Visibility = Visibility.Collapsed };
         Button? toggle = null;
+        bool stepsClosing = false;
         toggle = ActionButton(Loc.T("s.sp.show"), () =>
         {
-            bool open = steps.Visibility != Visibility.Visible;
-            steps.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+            bool open = steps.Visibility != Visibility.Visible || stepsClosing;
+            stepsClosing = !open;
+            // the steps open and fold with their height
+            steps.Visibility = Visibility.Visible;
+            steps.ClipToBounds = true;
+            steps.BeginAnimation(HeightProperty, null);
+            double from = open ? 0 : steps.ActualHeight;
+            steps.Measure(new Size(Math.Max(100, sp.ActualWidth - 32), double.PositiveInfinity));
+            var time = TimeSpan.FromMilliseconds(300 * Math.Max(0.3, S.SpeedFactor));
+            var fold = new DoubleAnimation(from, open ? steps.DesiredSize.Height : 0, time) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
+            fold.Completed += (_, _) =>
+            {
+                if (stepsClosing) steps.Visibility = Visibility.Collapsed;
+                steps.BeginAnimation(HeightProperty, null);
+                stepsClosing = false;
+            };
+            steps.BeginAnimation(HeightProperty, fold);
+            steps.BeginAnimation(OpacityProperty, new DoubleAnimation(open ? 1 : 0, time));
             if (toggle?.Content is TextBlock t) t.Text = Loc.T(open ? "s.sp.hide" : "s.sp.show");
         });
         Row(sp, Loc.T("s.sp.howto"), Loc.T("s.sp.howto.d"), toggle);
@@ -839,7 +917,7 @@ public sealed partial class SettingsWindow : Window
 
         var cityBox = new TextBox
         {
-            Width = 250, Text = S.WeatherCity, Background = new SolidColorBrush(Color.FromArgb(0x30, 0, 0, 0)), Foreground = Brushes.White, CaretBrush = Brushes.White,
+            Width = _setup ? 170 : 250, Text = S.WeatherCity, // (the assistant is narrower: the title keeps its room) Background = new SolidColorBrush(Color.FromArgb(0x30, 0, 0, 0)), Foreground = Brushes.White, CaretBrush = Brushes.White,
             BorderBrush = new SolidColorBrush(Color.FromArgb(0x24, 255, 255, 255)), BorderThickness = new Thickness(1), Padding = new Thickness(8, 5, 8, 5), FontSize = 12
         };
         var results = new StackPanel { Margin = new Thickness(16, 0, 16, 10) };
@@ -899,7 +977,7 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
-    private bool _focusCityBox;
+    private bool _focusCityBox, _spSetupOpen;
 
     private void RevealWhenLaidOut(FrameworkElement element) =>
         Dispatcher.BeginInvoke(() => element.BringIntoView(), DispatcherPriority.Loaded);
@@ -1015,6 +1093,19 @@ public sealed partial class SettingsWindow : Window
         return p;
     }
 
+    // ------------------------------------------------------------------ Relógio
+
+    private StackPanel ClockPage()
+    {
+        var p = Page("clock");
+        var main = Section(p);
+        Row(main, Loc.T("s.ck.format"), Loc.T("s.clock.d"),
+            Segmented(new[] { (ClockMode.Auto, Loc.T("isl.clock.auto")), (ClockMode.H12, "12h"), (ClockMode.H24, "24h") }, S.Clock, v => S.Clock = v));
+        Row(main, Loc.T("s.so.alarm"), Loc.T("s.so.alarm.d"), Slider(S.AlarmVolume, 10, 100, v => S.AlarmVolume = v, "%", () => SoundService.Preview(Sfx.Alarm)));
+        Row(main, Loc.T("s.ck.full"), Loc.T("s.game.ring.d"), Toggle(S.RingFullscreen, v => S.RingFullscreen = v));
+        return p;
+    }
+
     // ------------------------------------------------------------------ Foco, Arquivos, Sons
 
     private StackPanel FocusPage()
@@ -1042,11 +1133,10 @@ public sealed partial class SettingsWindow : Window
     private StackPanel SoundsPage()
     {
         var p = Page("sounds");
-        var main = Section(p);
+        var main = Section(p, Loc.T("s.sec.notchysounds"));
         Row(main, Loc.T("s.so.enabled"), Loc.T("s.so.enabled.d"), Toggle(S.SoundsEnabled, v => S.SoundsEnabled = v));
         Row(main, Loc.T("s.so.volume"), Loc.T("s.so.volume.d"), Slider(S.SoundVolume, 0, 100, v => S.SoundVolume = v, "%", () => SoundService.Preview(Sfx.Toggle)));
-        Row(main, Loc.T("s.so.alarm"), Loc.T("s.so.alarm.d"), Slider(S.AlarmVolume, 10, 100, v => S.AlarmVolume = v, "%", () => SoundService.Preview(Sfx.Alarm)));
-        var when = Section(p, Loc.T("s.sec.when"));
+        var when = main;
         Row(when, Loc.T("s.so.openclose"), Loc.T("s.so.openclose.d"), WithListen(Sfx.Expand, Toggle(S.SoundOpenClose, v => S.SoundOpenClose = v)));
         Row(when, Loc.T("s.so.clicks"), Loc.T("s.so.clicks.d"), WithListen(Sfx.Click, Toggle(S.SoundClicks, v => S.SoundClicks = v)));
 
@@ -1104,6 +1194,32 @@ public sealed partial class SettingsWindow : Window
 
 #if DEBUG
     /// <summary>Acts out every update state on the "Sobre" page, saves a picture of each and quits.</summary>
+    /// <summary>Snapshot tests: "Conectar agenda" open on a service.</summary>
+    public void TestExtWizard(string provider)
+    {
+        _extWizard = true;
+        _extProvider = provider;
+        Rebuild();
+    }
+
+    /// <summary>Snapshot tests: something on the page is moving.</summary>
+    public bool TestAnyMoving()
+    {
+        static bool Moving(DependencyObject o)
+        {
+            if (o is UIElement u && u.RenderTransform is TranslateTransform t && Math.Abs(t.Y) > 0.3) return true;
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(o); i++) if (Moving(VisualTreeHelper.GetChild(o, i))) return true;
+            return false;
+        }
+        return _pageHost.Content is DependencyObject page && Moving(page);
+    }
+
+    /// <summary>Snapshot tests: where the sidebar's highlight is right now.</summary>
+    public double TestSideMarkY() => _sideMarkMove.Y;
+
+    /// <summary>Snapshot tests: scrolls the page.</summary>
+    public void ScrollPageTo(double y) => _scroll.ScrollToVerticalOffset(y);
+
     public async System.Threading.Tasks.Task UpdateTestAsync(string dir)
     {
         System.IO.Directory.CreateDirectory(dir);

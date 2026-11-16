@@ -128,6 +128,7 @@ public partial class MainWindow
         _ringStopText.Text = Loc.T("clock.stop");
         FaceReact(Mood.Wide, 2);
         UpdateState();
+        ApplyFullscreenHide(); // over a full-screen game too, if that's turned on
     }
 
     private void StopRing()
@@ -135,6 +136,7 @@ public partial class MainWindow
         _ring = null;
         if (_ringQueue.Count > 0) StartRing(_ringQueue.Dequeue());
         UpdateClockUi();
+        if (_ring == null) HideAfterCard(); // full screen: the mouse that clicked "Parar" doesn't open the island
         UpdateState();
     }
 

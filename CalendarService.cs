@@ -4,6 +4,8 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Net.Http;
+using System.Threading.Tasks;
 using System.Windows.Media;
 
 namespace Notchy;
@@ -33,6 +35,11 @@ public sealed class CalEvent
     public DateTime? PartyOn { get; set; }
     public DateTime? SnoozeUntil { get; set; }
     public DateTime? SnoozeFor { get; set; }
+
+    /// <summary>From a connected calendar: its id there and the occurrence (keeps the notice state across refreshes).</summary>
+    public string? Uid { get; set; }
+    /// <summary>The connected calendar it comes from (read-only in Notchy); null for Notchy's own.</summary>
+    [JsonIgnore] public ExternalCalendar? Source { get; set; }
 
     public bool OccursOn(DateTime day)
     {
@@ -68,6 +75,25 @@ public sealed class CalEvent
 
 public sealed record CalFired(CalEvent Event, DateTime Day, bool Party);
 
+/// <summary>A calendar from elsewhere (Google, Outlook, iCloud…), read through its iCal link. Its events are kept so they show offline.</summary>
+public sealed class ExternalCalendar
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public string Name { get; set; } = "";
+    public string Url { get; set; } = "";
+    /// <summary>google, outlook, icloud, samsung or other (for the label).</summary>
+    public string Provider { get; set; } = "other";
+    public string Color { get; set; } = "#4F8FF7";
+    public bool Notify { get; set; } = true;
+    public DateTime? LastSync { get; set; }
+    /// <summary>Why the last refresh failed ("" when it worked).</summary>
+    public string Error { get; set; } = "";
+    public List<CalEvent> Events { get; set; } = new();
+
+    [JsonIgnore]
+    public Color Tint => (Color)ColorConverter.ConvertFromString(Color);
+}
+
 /// <summary>
 /// The calendar's events, kept in %LOCALAPPDATA%\Notchy\calendar.json, and Brazil's national holidays (worked out here,
 /// no internet needed). Call <see cref="Tick"/> regularly; it raises <see cref="Fired"/> when a notice is due.
@@ -84,6 +110,9 @@ public sealed class CalendarService
     [JsonIgnore] public bool DontSave { get; set; }
 #endif
 
+    /// <summary>An event's colour: its connected calendar's, or its type's.</summary>
+    public static Color ColorOf(CalEvent e) => e.Source?.Tint ?? ColorOf(e.Type);
+
     public static Color ColorOf(CalType t) => t switch
     {
         CalType.Birthday => Color.FromRgb(0xFF, 0x7E, 0xB6),
@@ -98,6 +127,7 @@ public sealed class CalendarService
     public List<CalEvent> On(DateTime day)
     {
         var list = Events.Where(e => e.OccursOn(day)).ToList();
+        list.AddRange(Externals.SelectMany(x => x.Events).Where(e => e.OccursOn(day)));
         if (AppSettings.Current.CalendarHolidays) list.AddRange(HolidaysOn(day));
         return list.OrderBy(e => e.SortMinutes).ToList();
     }
@@ -116,7 +146,7 @@ public sealed class CalendarService
 
     /// <summary>The event of today still to come that the minimized island hints at (holidays don't count).</summary>
     public CalEvent? PendingToday(DateTime now) =>
-        Events.Where(e => e.OccursOn(now) && now < e.End(now)).OrderBy(e => e.SortMinutes).FirstOrDefault();
+        Events.Concat(Externals.SelectMany(x => x.Events)).Where(e => e.OccursOn(now) && now < e.End(now)).OrderBy(e => e.SortMinutes).FirstOrDefault();
 
     // ---- holidays
 
@@ -175,7 +205,7 @@ public sealed class CalendarService
     public void Tick(DateTime now)
     {
         var today = now.Date;
-        foreach (var e in Events.ToList())
+        foreach (var e in Events.Concat(Externals.Where(x => x.Notify).SelectMany(x => x.Events)).ToList())
         {
             if (e.SnoozeUntil is DateTime s)
             {
@@ -210,13 +240,123 @@ public sealed class CalendarService
         }
     }
 
+    // ---- connected calendars (read through their iCal link)
+
+    public List<ExternalCalendar> Externals { get; set; } = new();
+
+    /// <summary>A connected calendar was refreshed, added or removed.</summary>
+    public event Action? ExternalsChanged;
+
+    public static readonly string[] ExternalColors = { "#4F8FF7", "#F2A541", "#34C7A0", "#F06292", "#9CCC65", "#B39DDB" };
+    private static readonly TimeSpan RefreshEvery = TimeSpan.FromMinutes(15);
+    private bool _refreshing;
+
+    /// <summary>Connects a calendar by its link; null when it worked, else what went wrong (to show).</summary>
+    public async Task<string?> AddExternalAsync(string url, string provider)
+    {
+        url = url.Trim();
+        if (!Uri.TryCreate(url.Replace("webcal://", "https://", StringComparison.OrdinalIgnoreCase), UriKind.Absolute, out var uri) || uri.Scheme is not ("https" or "http"))
+            return Loc.T("ext.err.link");
+        if (Externals.Any(x => x.Url.Equals(url, StringComparison.OrdinalIgnoreCase))) return Loc.T("ext.err.dup");
+        var x = new ExternalCalendar
+        {
+            Url = url, Provider = provider,
+            Color = ExternalColors.FirstOrDefault(c => Externals.All(e => e.Color != c)) ?? ExternalColors[Externals.Count % ExternalColors.Length]
+        };
+        string? error = await RefreshOneAsync(x, DateTime.Now);
+        if (error != null) return error;
+        Externals.Add(x);
+        Save();
+        ExternalsChanged?.Invoke();
+        return null;
+    }
+
+    public void RemoveExternal(ExternalCalendar x)
+    {
+        Externals.Remove(x);
+        Save();
+        ExternalsChanged?.Invoke();
+    }
+
+    public void ChangedExternal(ExternalCalendar x)
+    {
+        Save();
+        ExternalsChanged?.Invoke();
+    }
+
+    /// <summary>Reads again the connected calendars not read for a while (all of them with <paramref name="force"/>).</summary>
+    public async Task RefreshExternalsAsync(bool force = false)
+    {
+        if (_refreshing) return;
+        _refreshing = true;
+        try
+        {
+            var now = DateTime.Now;
+            bool any = false;
+            foreach (var x in Externals.ToList())
+            {
+                if (!force && x.LastSync is DateTime last && now - last < RefreshEvery) continue;
+                await RefreshOneAsync(x, now);
+                any = true;
+            }
+            if (any)
+            {
+                Save();
+                ExternalsChanged?.Invoke();
+            }
+        }
+        finally
+        {
+            _refreshing = false;
+        }
+    }
+
+    /// <summary>Reads one calendar; keeps what's known about each occurrence (its notice) across refreshes.</summary>
+    private static async Task<string?> RefreshOneAsync(ExternalCalendar x, DateTime now)
+    {
+        try
+        {
+            var (name, events) = await IcsCalendar.FetchAsync(x.Url, now.Date.AddDays(-31), now.Date.AddDays(400));
+            var old = x.Events.Where(e => e.Uid != null).GroupBy(e => e.Uid!).ToDictionary(g => g.Key, g => g.First());
+            foreach (var e in events)
+            {
+                e.Source = x;
+                if (e.Uid != null && old.TryGetValue(e.Uid, out var was))
+                {
+                    e.NotifiedFor = was.NotifiedFor;
+                    e.SnoozeUntil = was.SnoozeUntil;
+                    e.SnoozeFor = was.SnoozeFor;
+                }
+                // seen for the first time after its notice time: no late notice for something already under way
+                else if (now >= e.NoticeAt(e.Date)) e.NotifiedFor = e.Date;
+            }
+            x.Events = events;
+            if (x.Name.Length == 0) x.Name = string.IsNullOrWhiteSpace(name) ? Loc.T("ext.p." + x.Provider) : name.Trim();
+            x.LastSync = now;
+            x.Error = "";
+            return null;
+        }
+        catch (Exception ex)
+        {
+            App.Log(ex);
+            x.Error = ex is HttpRequestException { StatusCode: System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden }
+                ? Loc.T("ext.err.gone") : ex is FormatException ? Loc.T("ext.err.notcal") : Loc.T("ext.err.net");
+            return x.Error;
+        }
+    }
+
     // ---- file
 
     public static CalendarService Load()
     {
         try
         {
-            if (File.Exists(FilePath)) return JsonSerializer.Deserialize<CalendarService>(File.ReadAllText(FilePath)) ?? new CalendarService();
+            if (File.Exists(FilePath))
+            {
+                var c = JsonSerializer.Deserialize<CalendarService>(File.ReadAllText(FilePath)) ?? new CalendarService();
+                foreach (var x in c.Externals) foreach (var e in x.Events) e.Source = x;
+                return c;
+            }
         }
         catch (Exception ex)
         {

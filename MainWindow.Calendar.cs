@@ -83,7 +83,25 @@ public partial class MainWindow
 
         _calendar.Fired += OnCalFired;
         UpdateCalSign();
+
+        // connected calendars: read now and every so often (the service skips the ones read in the last 15 min)
+        _calendar.ExternalsChanged += () =>
+        {
+            if (_subOpen && _subTitle.Text == Loc.T("cal.title")) RefreshCalendar();
+            else
+            {
+                UpdateDateDot();
+                UpdateCalSign();
+            }
+        };
+        _ = _calendar.RefreshExternalsAsync();
+        var refresh = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMinutes(5) };
+        refresh.Tick += (_, _) => _ = _calendar.RefreshExternalsAsync();
+        refresh.Start();
     }
+
+    /// <summary>The settings window connects and removes calendars through the same service.</summary>
+    internal CalendarService Calendar => _calendar;
 
     private static Ellipse MakeCalDot()
     {
@@ -187,7 +205,7 @@ public partial class MainWindow
     {
         var first = _calendar.On(DateTime.Today).FirstOrDefault();
         DateDot.Visibility = first == null ? Visibility.Collapsed : Visibility.Visible;
-        if (first != null) DateDot.Fill = Br(CalendarService.ColorOf(first.Type));
+        if (first != null) DateDot.Fill = Br(CalendarService.ColorOf(first));
     }
 
     // =====================================================================================
@@ -263,7 +281,7 @@ public partial class MainWindow
         _calQueue.RemoveAt(0);
         _calShown = f;
         var (title, sub) = CalNoticeTexts(f);
-        _calColor = CalendarService.ColorOf(f.Event.Type);
+        _calColor = CalendarService.ColorOf(f.Event);
         _calFace.Color = _calColor;
         _calFace.BaseMood = f.Party ? Mood.Happy : Mood.Normal;
         if (f.Party) _calFace.React(Mood.Happy, CalPartySeconds);
@@ -358,7 +376,7 @@ public partial class MainWindow
     private void UpdateCalSign()
     {
         var pending = _calendar.PendingToday(DateTime.Now);
-        Color? color = pending == null ? null : CalendarService.ColorOf(pending.Type);
+        Color? color = pending == null ? null : CalendarService.ColorOf(pending);
         if (color == _calSign) return;
         _calSign = color;
         foreach (var dot in new[] { _idleCalDot, _musicCalDot })
@@ -380,6 +398,7 @@ public partial class MainWindow
 
     private void OpenCalendar(DateTime day)
     {
+        _ = _calendar.RefreshExternalsAsync();
         _calDay = day.Date;
         _calMonth = new DateTime(day.Year, day.Month, 1);
         _calLevel = CalLevel.Day;
@@ -424,6 +443,7 @@ public partial class MainWindow
     private FrameworkElement CalendarPage()
     {
         var left = new StackPanel { Background = Brushes.Transparent };
+        _wheelUsers.Add(left); // (the wheel turns the months)
         _calTop = new Decorator { Height = 26, Child = CalBar() };
         _calBody = new Grid { Height = CalBodyHeight, ClipToBounds = true };
         _calBody.Children.Add(CalPane());
@@ -445,6 +465,10 @@ public partial class MainWindow
         Grid.SetColumn(right, 2);
         grid.Children.Add(left);
         grid.Children.Add(right);
+        _calDragLayer = new Canvas { IsHitTestVisible = false };
+        _calRing = null;
+        Grid.SetColumnSpan(_calDragLayer, 3);
+        grid.Children.Add(_calDragLayer);
 #if DEBUG
         var page = new StackPanel();
         page.Children.Add(grid);
@@ -464,7 +488,9 @@ public partial class MainWindow
 #endif
     }
 
-    private Border CalArrow(string glyph, int direction)
+    private Border CalArrow(string glyph, int direction) => CalArrow(glyph, () => CalStep(direction));
+
+    private Border CalArrow(string glyph, Action step)
     {
         var arrow = new Border { Width = 24, Height = 22, CornerRadius = new CornerRadius(8), Background = White(0x10), Cursor = Cursors.Hand, VerticalAlignment = VerticalAlignment.Center,
             Child = new TextBlock { Text = glyph, FontSize = 13, Foreground = Brushes.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, -2, 0, 0) } };
@@ -474,7 +500,7 @@ public partial class MainWindow
         {
             e.Handled = true;
             SoundService.Play(Sfx.Click);
-            CalStep(direction);
+            step();
         };
         return arrow;
     }
@@ -848,35 +874,111 @@ public partial class MainWindow
         var dots = new StackPanel { Orientation = Orientation.Horizontal, Height = 4, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 1, 0, 0), Opacity = outside ? 0.35 : 1 };
         foreach (var e in events.Take(3))
         {
-            var c = CalendarService.ColorOf(e.Type);
+            var c = CalendarService.ColorOf(e);
             dots.Children.Add(new Ellipse { Width = 4, Height = 4, Fill = Br(c), Margin = new Thickness(1, 0, 1, 0) });
         }
         var stack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         number.HorizontalAlignment = HorizontalAlignment.Center;
         stack.Children.Add(number);
         stack.Children.Add(dots);
-        var cell = new Border { Height = 30, CornerRadius = new CornerRadius(9), Background = Brushes.Transparent, Cursor = Cursors.Hand, Child = stack,
+        var cell = new Border { Height = 30, CornerRadius = new CornerRadius(9), Background = Brushes.Transparent, Cursor = Cursors.Hand, Child = stack, Tag = day,
             BorderThickness = new Thickness(1.2), BorderBrush = selected ? White(0x90) : Brushes.Transparent };
-        cell.MouseEnter += (_, _) => cell.Background = White(0x10);
-        cell.MouseLeave += (_, _) => cell.Background = Brushes.Transparent;
+        SoftHover(cell, 0x10);
         cell.MouseLeftButtonUp += (_, e) =>
         {
             e.Handled = true;
             SoundService.Play(Sfx.Click);
+            var before = _calDay;
             _calDay = day;
-            if (outside) _calMonth = new DateTime(day.Year, day.Month, 1);
-            RefreshCalendar();
+            if (outside)
+            {
+                _calMonth = new DateTime(day.Year, day.Month, 1);
+                RefreshCalendar();
+                return;
+            }
+            GlideCalDay(before);
         };
         return cell;
     }
 
+    private Border? _calRing;
+
+    /// <summary>Another day of the same month: the selection ring glides to it and the day's list comes in, without drawing the page again.</summary>
+    private void GlideCalDay(DateTime before)
+    {
+        var cells = new List<Border>();
+        void Find(DependencyObject o)
+        {
+            if (o is Border { Tag: DateTime } b) cells.Add(b);
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(o); i++) Find(VisualTreeHelper.GetChild(o, i));
+        }
+        if (_calBody.Children.Count > 0) Find(_calBody.Children[^1]);
+        var from = cells.Find(c => (DateTime)c.Tag == before);
+        var to = cells.Find(c => (DateTime)c.Tag == _calDay);
+        if (to == null || S.SpeedFactor <= 0)
+        {
+            RefreshCalendar();
+            return;
+        }
+        foreach (var c in cells) c.BorderBrush = Brushes.Transparent;
+        var target = to.TranslatePoint(new Point(0, 0), _calDragLayer);
+        // (a ring still on its way goes on from where it is)
+        Point start = _calRing != null ? new Point(Canvas.GetLeft(_calRing), Canvas.GetTop(_calRing))
+            : from != null ? from.TranslatePoint(new Point(0, 0), _calDragLayer) : target;
+        if (_calRing != null) _calDragLayer.Children.Remove(_calRing);
+        var ring = _calRing = new Border { Width = to.ActualWidth, Height = to.ActualHeight, CornerRadius = new CornerRadius(9), BorderThickness = new Thickness(1.2), BorderBrush = White(0x90), IsHitTestVisible = false };
+        Canvas.SetLeft(ring, start.X);
+        Canvas.SetTop(ring, start.Y);
+        _calDragLayer.Children.Add(ring);
+        var time = TimeSpan.FromMilliseconds(Dur(280));
+        var ease = new BackEase { Amplitude = 0.25, EasingMode = EasingMode.EaseOut };
+        var land = new DoubleAnimation(start.X, target.X, time) { EasingFunction = ease, FillBehavior = FillBehavior.Stop };
+        land.Completed += (_, _) =>
+        {
+            if (!ReferenceEquals(_calRing, ring)) return;
+            _calRing = null;
+            _calDragLayer.Children.Remove(ring);
+            to.BorderBrush = White(0x90);
+        };
+        Canvas.SetLeft(ring, target.X);
+        Canvas.SetTop(ring, target.Y);
+        ring.BeginAnimation(Canvas.LeftProperty, land);
+        ring.BeginAnimation(Canvas.TopProperty, new DoubleAnimation(start.Y, target.Y, time) { EasingFunction = ease, FillBehavior = FillBehavior.Stop });
+
+        _calTop.Child = CalBar();
+        var column = CalRightColumn();
+        _calRight.Child = column;
+        SlideIn(column);
+        ResizeSubPage();
+        UpdateDateDot();
+        UpdateCalSign();
+    }
+
     private Border CalRow(CalEvent e, DateTime day, bool showDate)
     {
-        var color = CalendarService.ColorOf(e.Type);
+        var color = CalendarService.ColorOf(e);
         var bar = new Border { Width = 3, Height = 26, CornerRadius = new CornerRadius(1.5), Background = Br(color), Effect = new DropShadowEffect { Color = color, BlurRadius = 7, ShadowDepth = 0, Opacity = 0.7 }, VerticalAlignment = VerticalAlignment.Center };
         var texts = new StackPanel { Margin = new Thickness(8, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
-        texts.Children.Add(new TextBlock { Text = e.Name, FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, TextTrimming = TextTrimming.CharacterEllipsis });
-        texts.Children.Add(new TextBlock { Text = CalLine(e, day), FontSize = 10.5, Foreground = White(0x80), TextTrimming = TextTrimming.CharacterEllipsis });
+        var name = new TextBlock { Text = e.Name, FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, TextTrimming = TextTrimming.CharacterEllipsis };
+        if (e.Source is { } source && !showDate)
+        {
+            // from a connected calendar: its name in a little tag after the event's (with a date on the right there's
+            // no room for both: then it goes on the second line)
+            var tag = new Border { CornerRadius = new CornerRadius(7), Background = White(0x12), Padding = new Thickness(5, 0, 6, 1), Margin = new Thickness(5, 1, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+            var tagRow = new StackPanel { Orientation = Orientation.Horizontal };
+            tagRow.Children.Add(new Ellipse { Width = 5, Height = 5, Fill = Br(color), Margin = new Thickness(0, 1, 4, 0), VerticalAlignment = VerticalAlignment.Center });
+            tagRow.Children.Add(new TextBlock { Text = source.Name, FontSize = 9, Foreground = White(0xAA), MaxWidth = 70, TextTrimming = TextTrimming.CharacterEllipsis });
+            tag.Child = tagRow;
+            var line = new DockPanel { LastChildFill = true };
+            DockPanel.SetDock(tag, Dock.Right);
+            line.Children.Add(tag);
+            line.Children.Add(name);
+            line.HorizontalAlignment = HorizontalAlignment.Left;
+            texts.Children.Add(line);
+        }
+        else texts.Children.Add(name);
+        string line2 = CalLine(e, day) + (e.Source != null && showDate ? " · " + e.Source.Name : "");
+        texts.Children.Add(new TextBlock { Text = line2, FontSize = 10.5, Foreground = White(0x80), TextTrimming = TextTrimming.CharacterEllipsis });
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition());
@@ -891,19 +993,191 @@ public partial class MainWindow
             grid.Children.Add(when);
         }
         var row = new Border { Child = grid, Padding = new Thickness(6, 5, 6, 5), CornerRadius = new CornerRadius(10), Background = Brushes.Transparent };
-        if (e.Type != CalType.Holiday)
+        if (e.Source != null) row.ToolTip = Loc.F("ext.readonly", e.Source.Name); // read-only: no editor, no dragging
+        else if (e.Type != CalType.Holiday)
         {
             row.Cursor = Cursors.Hand;
-            row.MouseEnter += (_, _) => row.Background = White(0x10);
-            row.MouseLeave += (_, _) => row.Background = Brushes.Transparent;
+            SoftHover(row, 0x10);
+            var endDrag = CalDraggable(row, e, day);
             row.MouseLeftButtonUp += (_, ev) =>
             {
                 ev.Handled = true;
+                if (endDrag()) return;
                 SoundService.Play(Sfx.Click);
                 OpenCalEditor(e);
             };
         }
         return row;
+    }
+
+    // ---- moving an event to another day
+
+    private Canvas _calDragLayer = null!;
+
+    /// <summary>
+    /// Moves an event by as many days as there are from one of its days to another. A repeating one moves whole,
+    /// keeping its rhythm from the new day; the notice already given is forgotten so it comes again on the new day.
+    /// </summary>
+    private void MoveCalEvent(CalEvent e, DateTime from, DateTime to)
+    {
+        e.Date = e.Date.AddDays((to.Date - from.Date).Days);
+        e.NotifiedFor = null;
+        e.SnoozeUntil = null;
+        e.SnoozeFor = null;
+        _calendar.Put(e);
+    }
+
+    /// <summary>The day cell of the month grid under a point of <see cref="_calBody"/>, if any.</summary>
+    private Border? CalCellAt(Point p)
+    {
+        Border? found = null;
+        VisualTreeHelper.HitTest(_calBody, null, r =>
+        {
+            for (DependencyObject? d = r.VisualHit; d != null && d != _calBody; d = VisualTreeHelper.GetParent(d))
+                if (d is Border { Tag: DateTime } b)
+                {
+                    found = b;
+                    return HitTestResultBehavior.Stop;
+                }
+            return HitTestResultBehavior.Continue;
+        }, new PointHitTestParameters(p));
+        return found;
+    }
+
+    /// <summary>
+    /// Hold an event of the list and drag it: a copy follows the mouse and the day under it lights up; let go on a day and
+    /// the event moves there. Returns what the click handler calls first: true when the press was a drag (handled here).
+    /// </summary>
+    private Func<bool> CalDraggable(Border row, CalEvent e, DateTime day)
+    {
+        Point? start = null;
+        Vector grab = default;
+        Border? ghost = null, over = null;
+
+        void Light(Border? cell)
+        {
+            if (cell == over) return;
+            if (over != null) over.Background = Brushes.Transparent;
+            over = cell;
+            if (over != null) over.Background = White(0x2A);
+        }
+        void Clear()
+        {
+            start = null;
+            Light(null);
+            if (ghost != null) _calDragLayer.Children.Remove(ghost);
+            ghost = null;
+            row.Opacity = 1;
+            if (row.IsMouseCaptured) row.ReleaseMouseCapture();
+        }
+
+        row.MouseLeftButtonDown += (_, ev) => start = ev.GetPosition(_calDragLayer);
+        row.MouseMove += (_, ev) =>
+        {
+            if (start is not Point s || ev.LeftButton != MouseButtonState.Pressed)
+            {
+                if (ghost != null) Clear();
+                start = null;
+                return;
+            }
+            var p = ev.GetPosition(_calDragLayer);
+            if (ghost == null)
+            {
+                if ((p - s).Length < 6) return; // a click, not a drag
+                grab = s - row.TranslatePoint(new Point(0, 0), _calDragLayer);
+                ghost = new Border
+                {
+                    Width = row.ActualWidth, Height = row.ActualHeight, CornerRadius = new CornerRadius(10), Background = new SolidColorBrush(Color.FromRgb(0x1C, 0x1C, 0x22)),
+                    Padding = row.Padding, Child = new Rectangle { Fill = new VisualBrush(row.Child) { Stretch = Stretch.None, AlignmentX = AlignmentX.Left } },
+                    RenderTransform = new RotateTransform(-3, grab.X, grab.Y), Opacity = 0.95,
+                    Effect = new DropShadowEffect { BlurRadius = 18, ShadowDepth = 4, Opacity = 0.6 }
+                };
+                _calDragLayer.Children.Add(ghost);
+                row.Opacity = 0.35;
+                row.CaptureMouse();
+            }
+            Canvas.SetLeft(ghost, p.X - grab.X);
+            Canvas.SetTop(ghost, p.Y - grab.Y);
+            Light(CalCellAt(ev.GetPosition(_calBody)));
+        };
+        row.LostMouseCapture += (_, _) => { if (ghost != null) Clear(); };
+
+        return () =>
+        {
+            if (ghost == null)
+            {
+                start = null;
+                return false;
+            }
+            var target = over?.Tag as DateTime?;
+            Clear();
+            if (target is DateTime to && to != day.Date)
+            {
+                MoveCalEvent(e, day, to);
+                SoundService.Play(Sfx.Click);
+                _calDay = to;
+                _calMonth = new DateTime(to.Year, to.Month, 1);
+                RefreshCalendar();
+            }
+            return true;
+        };
+    }
+
+    /// <summary>A small month to pick a day from (the editor's day): the picked day filled in white, today ringed.</summary>
+    private FrameworkElement CalMiniMonth(DateTime month, DateTime picked, Action<DateTime> pick, Action<int> step)
+    {
+        var today = DateTime.Today;
+        var pane = new StackPanel { Background = Brushes.Transparent };
+        var bar = new DockPanel { Height = 24 };
+        var next = CalArrow("›", () => step(1));
+        DockPanel.SetDock(next, Dock.Right);
+        bar.Children.Add(next);
+        var prev = CalArrow("‹", () => step(-1));
+        prev.Margin = new Thickness(0, 0, 4, 0);
+        DockPanel.SetDock(prev, Dock.Right);
+        bar.Children.Add(prev);
+        bar.Children.Add(new TextBlock { Text = Cap(month.ToString("MMMM yyyy", Loc.Culture)), FontSize = 12, FontWeight = FontWeights.Bold, Foreground = Brushes.White,
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(5, 0, 0, 0) });
+        pane.Children.Add(bar);
+
+        var week = new UniformGrid { Rows = 1, Columns = 7, Height = 18 };
+        foreach (string name in Loc.Culture.DateTimeFormat.AbbreviatedDayNames)
+            week.Children.Add(new TextBlock { Text = Cap(name.TrimEnd('.')), FontSize = 9.5, FontWeight = FontWeights.SemiBold, Foreground = White(0x66), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
+        pane.Children.Add(week);
+
+        int rows = (int)Math.Ceiling(((int)month.DayOfWeek + DateTime.DaysInMonth(month.Year, month.Month)) / 7.0);
+        var days = new UniformGrid { Rows = rows, Columns = 7 };
+        var cursor = month.AddDays(-(int)month.DayOfWeek);
+        for (int i = 0; i < rows * 7; i++, cursor = cursor.AddDays(1))
+        {
+            var d = cursor;
+            bool on = d == picked.Date, outside = d.Month != month.Month;
+            var number = new Border
+            {
+                Width = 20, Height = 20, CornerRadius = new CornerRadius(10), Background = on ? Brushes.White : Brushes.Transparent,
+                BorderThickness = new Thickness(d == today && !on ? 1.2 : 0), BorderBrush = White(0x90),
+                Child = new TextBlock { Text = d.Day.ToString(), FontSize = 11, FontWeight = on ? FontWeights.ExtraBold : FontWeights.SemiBold,
+                    Foreground = on ? new SolidColorBrush(Color.FromRgb(0x11, 0x11, 0x14)) : outside ? White(0x3A) : Brushes.White,
+                    HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }
+            };
+            var cell = new Border { Height = 24, CornerRadius = new CornerRadius(8), Background = Brushes.Transparent, Cursor = Cursors.Hand, Child = number };
+            cell.MouseEnter += (_, _) => cell.Background = White(0x10);
+            cell.MouseLeave += (_, _) => cell.Background = Brushes.Transparent;
+            cell.MouseLeftButtonUp += (_, ev) =>
+            {
+                ev.Handled = true;
+                SoundService.Play(Sfx.Click);
+                pick(d);
+            };
+            days.Children.Add(cell);
+        }
+        pane.Children.Add(days);
+        pane.PreviewMouseWheel += (_, ev) =>
+        {
+            ev.Handled = true;
+            step(ev.Delta < 0 ? 1 : -1);
+        };
+        return pane;
     }
 
     // =====================================================================================
@@ -999,8 +1273,117 @@ public partial class MainWindow
         var timeLabel = new TextBlock { Text = Loc.T("cal.time"), FontSize = 11, Foreground = White(0x80), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
         DockPanel.SetDock(timeLabel, Dock.Right);
         dayLine.Children.Add(timeLabel);
-        dayLine.Children.Add(new TextBlock { Text = DayLine(day), FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center });
+        var dayText = new TextBlock { Text = DayLine(day), FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center };
+        var dayArrow = new TextBlock { Text = "▾", FontSize = 9, Foreground = Brushes.White, Opacity = 0.55, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(5, 1, 0, 0) };
+        var dayRow = new StackPanel { Orientation = Orientation.Horizontal };
+        dayRow.Children.Add(dayText);
+        dayRow.Children.Add(dayArrow);
+        var dayChip = new Border { Child = dayRow, Padding = new Thickness(7, 3, 7, 3), Margin = new Thickness(-7, 0, 0, 0), CornerRadius = new CornerRadius(8), Background = Brushes.Transparent,
+            Cursor = Cursors.Hand, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center };
+        dayLine.Children.Add(dayChip);
         page.Children.Add(CalLineOf(Loc.T("cal.day"), dayLine));
+
+        // the small month under it, to pick another day
+        var mini = new Border { Width = 238, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(62, 4, 0, 2), Visibility = Visibility.Collapsed };
+        var miniMonth = new DateTime(day.Year, day.Month, 1);
+        bool miniOpen = false;
+        Action? afterMini = null; // Paint, once it exists
+        void BuildMini() => mini.Child = CalMiniMonth(miniMonth, day, d =>
+        {
+            day = d;
+            dayText.Text = DayLine(d);
+            BuildMini(); // the picked day lit while the month goes away
+            SetMini(false);
+        }, k =>
+        {
+            var m = miniMonth.AddMonths(k);
+            if (m.Year is < CalMinYear or > CalMaxYear) return;
+            miniMonth = m;
+            BuildMini();
+        });
+        // Opening: the lines under the day fade out sliding down a little, then the month comes in sliding down into place
+        // while the island fits it. Closing is the same played backwards. (No delayed start: a delayed animation shows the
+        // element at full opacity until it begins, which made it blink.)
+        const double RowsMs = 140, MonthMs = 240, RowsDrop = 8, MonthRise = 10;
+        var rows = new List<UIElement>(); // the lines hidden while the month is open
+        int miniRun = 0; // a newer open/close makes the older one's next step stale
+        var arrowTurn = new RotateTransform();
+        dayArrow.RenderTransformOrigin = new Point(0.5, 0.5);
+        dayArrow.RenderTransform = arrowTurn;
+        void Glide(UIElement el, double opacity, double y, double ms, EasingMode mode, Action? done = null)
+        {
+            if (el.RenderTransform is not TranslateTransform shift) el.RenderTransform = shift = new TranslateTransform();
+            var time = TimeSpan.FromMilliseconds(Dur(ms));
+            var fade = new DoubleAnimation(opacity, time) { EasingFunction = new CubicEase { EasingMode = mode } };
+            if (done != null) fade.Completed += (_, _) => done();
+            shift.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(y, time) { EasingFunction = new CubicEase { EasingMode = mode } });
+            el.BeginAnimation(OpacityProperty, fade);
+        }
+        void Place(UIElement el, double opacity, double y)
+        {
+            if (el.RenderTransform is not TranslateTransform shift) el.RenderTransform = shift = new TranslateTransform();
+            shift.BeginAnimation(TranslateTransform.YProperty, null);
+            el.BeginAnimation(OpacityProperty, null);
+            shift.Y = y;
+            el.Opacity = opacity;
+        }
+        void SetMini(bool open)
+        {
+            miniOpen = open;
+            int run = ++miniRun;
+            dayChip.Background = open ? White(0x1C) : Brushes.Transparent;
+            dayArrow.Opacity = open ? 1 : 0.55;
+            arrowTurn.BeginAnimation(RotateTransform.AngleProperty, new DoubleAnimation(open ? 180 : 0, TimeSpan.FromMilliseconds(Dur(RowsMs + MonthMs)))
+                { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseInOut } });
+            if (open)
+            {
+                if (rows.Count == 0) rows.AddRange(page.Children.Cast<UIElement>().SkipWhile(c => c != mini).Skip(1).Where(c => c.Visibility == Visibility.Visible));
+                miniMonth = new DateTime(day.Year, day.Month, 1);
+                BuildMini();
+                if (mini.Visibility != Visibility.Visible) Place(mini, 0, -MonthRise);
+                // 1) the lines go
+                bool first = true;
+                foreach (var r in rows)
+                {
+                    Glide(r, 0, RowsDrop, RowsMs, EasingMode.EaseIn, !first ? null : () =>
+                    {
+                        if (run != miniRun) return;
+                        // 2) the month comes, in their place
+                        foreach (var x in rows) x.Visibility = Visibility.Collapsed;
+                        mini.Visibility = Visibility.Visible;
+                        Glide(mini, 1, 0, MonthMs, EasingMode.EaseOut);
+                        ResizeSubPage();
+                    });
+                    first = false;
+                }
+            }
+            else
+            {
+                // 1) the month goes
+                Glide(mini, 0, -MonthRise, MonthMs, EasingMode.EaseIn, () =>
+                {
+                    if (run != miniRun) return;
+                    // 2) the lines come back
+                    mini.Visibility = Visibility.Collapsed;
+                    foreach (var r in rows)
+                    {
+                        r.Visibility = Visibility.Visible;
+                        Glide(r, 1, 0, RowsMs, EasingMode.EaseOut);
+                    }
+                    rows.Clear();
+                    afterMini?.Invoke(); // Paint: puts the birthday line back only on a birthday, and resizes
+                });
+            }
+        }
+        dayChip.MouseEnter += (_, _) => { if (!miniOpen) { dayChip.Background = White(0x12); dayArrow.Opacity = 1; } };
+        dayChip.MouseLeave += (_, _) => { if (!miniOpen) { dayChip.Background = Brushes.Transparent; dayArrow.Opacity = 0.55; } };
+        dayChip.MouseLeftButtonUp += (_, ev) =>
+        {
+            ev.Handled = true;
+            SoundService.Play(Sfx.Click);
+            SetMini(!miniOpen);
+        };
+        page.Children.Add(mini);
 
         var repeatCells = new List<(Border cell, CalRepeat value)>();
         var noticeCells = new List<(Border cell, int value)>();
@@ -1020,6 +1403,7 @@ public partial class MainWindow
             ResizeSubPage();
         }
         time.TextChanged += (_, _) => Paint();
+        afterMini = Paint;
 
         var repeatRow = new UniformGrid { Rows = 1, Columns = 4 };
         foreach (var (key, value) in new[] { ("cal.rep.once", CalRepeat.Once), ("cal.rep.week", CalRepeat.Weekly), ("cal.rep.month", CalRepeat.Monthly), ("cal.rep.year", CalRepeat.Yearly) })
@@ -1086,8 +1470,9 @@ public partial class MainWindow
             }
             int.TryParse(born.Text.Trim(), out int year);
             var e = editing ?? new CalEvent { Date = day };
-            bool moved = editing == null || e.HasTime != timed || e.Hour != hour || e.Minute != minute || e.NoticeMinutes != notice || e.Repeat != repeat || e.Type != type;
+            bool moved = editing == null || e.Date.Date != day || e.HasTime != timed || e.Hour != hour || e.Minute != minute || e.NoticeMinutes != notice || e.Repeat != repeat || e.Type != type;
             e.Name = title;
+            e.Date = day;
             e.HasTime = timed;
             e.Hour = hour;
             e.Minute = minute;

@@ -164,6 +164,11 @@ public partial class MainWindow
         {
             _podMorphing = false;
             UpdatePodPosition();
+        }, () => _state == IslandState.Compact && _compactMode is CompactMode.Focus or CompactMode.Timer, () =>
+        {
+            _podShown = true;
+            _podMorphing = false;
+            UpdatePodPosition();
         });
     }
 

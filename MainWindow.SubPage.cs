@@ -152,10 +152,18 @@ public partial class MainWindow
     // =====================================================================================
 
     /// <summary>The tab slides away and <paramref name="build"/>'s list comes in its place.</summary>
-    private void OpenSubPage(string title, Func<FrameworkElement> build, Action? refresh = null)
+    /// <param name="slide">From one page to another: 1 slides forward, -1 back (‹), 0 swaps in place (a refresh).</param>
+    private void OpenSubPage(string title, Func<FrameworkElement> build, Action? refresh = null, int slide = 1)
     {
         var content = build();
+        // a page opened from another one slides in over it, like the first page did over the tab
+        var old = _subOpen && slide != 0 && _state == IslandState.Expanded && _subPage.Children.Count > 0 ? _subPage.Children[^1] as FrameworkElement : null;
         _subPage.Children.Clear();
+        if (old != null)
+        {
+            old.IsHitTestVisible = false;
+            _subPage.Children.Add(old);
+        }
         _subPage.Children.Add(content);
         content.Measure(new Size(440, double.PositiveInfinity));
         _subHeight = Math.Min(Math.Ceiling(content.DesiredSize.Height), MaxSubHeight);
@@ -170,6 +178,10 @@ public partial class MainWindow
         _subHeader.Visibility = Visibility.Visible;
 
         if (!wasOpen) SlidePages(TabElement(_tab), _subPage, forward: true);
+        else if (old != null)
+        {
+            SlideInPage(old, content, slide);
+        }
         if (_state == IslandState.Expanded)
         {
             RememberKeepOpenArea();
@@ -204,17 +216,52 @@ public partial class MainWindow
             p.leaving?.Invoke();
             Keyboard.ClearFocus();
             if (_hwnd != IntPtr.Zero) Native.SetActivatable(_hwnd, false);
-            OpenSubPage(p.title, p.build);
+            OpenSubPage(p.title, p.build, slide: -1);
             return;
         }
         CloseSubPage(animate: true);
     }
 
-    /// <summary>Rebuilds the open sub-page in place (after picking a device…).</summary>
+    /// <summary>Rebuilds the open sub-page in place (after picking a device…); rows marked with <see cref="GlideKey"/> glide to their new place.</summary>
     private void RefreshSubPage(Func<FrameworkElement> build)
     {
         if (!_subOpen) return;
-        OpenSubPage(_subTitle.Text, build, _subRefresh);
+        var before = _subPage.Children.Count > 0 && _state == IslandState.Expanded ? ListGlide.Snap(_subPage) : null;
+        OpenSubPage(_subTitle.Text, build, _subRefresh, slide: 0);
+        if (before != null) ListGlide.Play(_subPage, before, Dur(300));
+    }
+
+    /// <summary>The page before goes out to one side while the new one comes in from the other.</summary>
+    private void SlideInPage(FrameworkElement from, FrameworkElement to, int dir)
+    {
+        var d = TimeSpan.FromMilliseconds(Dur(300));
+        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+        from.VerticalAlignment = to.VerticalAlignment = VerticalAlignment.Top;
+        var ft = new TranslateTransform();
+        from.RenderTransform = ft;
+        ft.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(0, -40 * dir, d) { EasingFunction = ease });
+        var fade = new DoubleAnimation(0, TimeSpan.FromMilliseconds(Dur(180)));
+        fade.Completed += (_, _) => _subPage.Children.Remove(from);
+        from.BeginAnimation(OpacityProperty, fade);
+        var tt = new TranslateTransform();
+        to.RenderTransform = tt;
+        tt.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(40 * dir, 0, d) { EasingFunction = ease });
+        to.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, d) { EasingFunction = ease });
+    }
+
+    // ---- closing the island with a page open: it stays (no jump back to the tab) and fades like a tab does
+
+    private const double SubReturnSeconds = 3;
+    private DateTime _subLeftAt = DateTime.MinValue;
+
+    private void StowPage()
+    {
+        // a box being typed in (the event editor…) lets go: the page stays, hidden, and must not take the keys
+        if (ExpandedPanel.IsKeyboardFocusWithin)
+        {
+            Keyboard.ClearFocus();
+            if (_hwnd != IntPtr.Zero) Native.SetActivatable(_hwnd, false);
+        }
     }
 
     private void CloseSubPage(bool animate)
@@ -313,8 +360,7 @@ public partial class MainWindow
             Child = grid, Height = DevRowHeight - 3, Margin = new Thickness(0, 0, 0, 3), Padding = new Thickness(8, 0, 8, 0), CornerRadius = new CornerRadius(12),
             Background = on ? White(0x17) : Brushes.Transparent, Cursor = Cursors.Hand
         };
-        row.MouseEnter += (_, _) => { if (!on) row.Background = White(0x0E); };
-        row.MouseLeave += (_, _) => { if (!on) row.Background = Brushes.Transparent; };
+        SoftHover(row, 0x0E, () => !on);
         row.MouseLeftButtonUp += (_, e) =>
         {
             e.Handled = true;
@@ -332,8 +378,9 @@ public partial class MainWindow
         row.Children.Add(new TextBlock { Text = text, FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = ink, Margin = new Thickness(5, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
         var pill = new Border { Child = row, CornerRadius = new CornerRadius(11), Padding = new Thickness(9, 4, 10, 4), Cursor = Cursors.Hand, VerticalAlignment = VerticalAlignment.Center,
             Background = on ? Brushes.White : White(0x14) };
-        pill.MouseEnter += (_, _) => pill.Opacity = 0.8;
-        pill.MouseLeave += (_, _) => pill.Opacity = 1;
+        pill.MouseEnter += (_, _) => pill.BeginAnimation(OpacityProperty, new DoubleAnimation(0.8, TimeSpan.FromMilliseconds(Dur(110))));
+        pill.MouseLeave += (_, _) => pill.BeginAnimation(OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(Dur(180))));
+        Pressable(pill);
         pill.MouseLeftButtonUp += (_, e) =>
         {
             e.Handled = true;

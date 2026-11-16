@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Microsoft.Win32;
@@ -23,6 +24,48 @@ internal static class DesktopAppIcon
         FromShell(@"shell:AppsFolder\" + appId) ?? FromRunningApp(appName) ?? FromRegistry(appId); // (sharpest first: the registered image is small)
 
     /// <summary>The icon's main colour, bright enough to glow on a dark island; null for a greyish icon.</summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<BitmapSource, object> DrawnAreas = new();
+
+    /// <summary>
+    /// The part of the icon that has a drawing, as a fraction of it (Store logos such as WhatsApp's come with a wide
+    /// see-through margin, which makes them look tiny). The whole icon when it has none, or can't be read.
+    /// </summary>
+    public static Rect DrawnArea(BitmapSource icon)
+    {
+        if (DrawnAreas.TryGetValue(icon, out var known)) return (Rect)known;
+        var area = new Rect(0, 0, 1, 1);
+        try
+        {
+            var bgra = new FormatConvertedBitmap(icon, PixelFormats.Bgra32, null, 0);
+            int w = bgra.PixelWidth, h = bgra.PixelHeight, stride = w * 4;
+            var px = new byte[stride * h];
+            bgra.CopyPixels(px, stride, 0);
+            int left = w, top = h, right = -1, bottom = -1;
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++)
+                    if (px[y * stride + x * 4 + 3] > 24)
+                    {
+                        if (x < left) left = x;
+                        if (x > right) right = x;
+                        if (y < top) top = y;
+                        if (y > bottom) bottom = y;
+                    }
+            if (right >= left && bottom >= top)
+            {
+                // square, around the drawing's centre (a wide logo isn't stretched)
+                double side = Math.Max(right - left + 1, bottom - top + 1);
+                double cx = (left + right + 1) / 2.0, cy = (top + bottom + 1) / 2.0;
+                area = new Rect((cx - side / 2) / w, (cy - side / 2) / h, side / w, side / h);
+            }
+        }
+        catch
+        {
+            // the whole icon will do
+        }
+        DrawnAreas.AddOrUpdate(icon, area);
+        return area;
+    }
+
     public static Color? Accent(BitmapSource? icon)
     {
         if (icon == null) return null;

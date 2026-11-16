@@ -77,6 +77,10 @@ public sealed class TransferWatcher
     private readonly ConcurrentQueue<(string path, DateTime when)> _recent = new();
 
     public TransferInfo? Current { get; private set; }
+#if DEBUG
+    /// <summary>Snapshot tests: a made-up transfer reported as if it were running.</summary>
+    public TransferInfo? Fake { get; set; }
+#endif
 
     /// <summary>Every download in progress (usually one).</summary>
     public IReadOnlyList<DownloadFile> Files { get; private set; } = Array.Empty<DownloadFile>();
@@ -96,6 +100,9 @@ public sealed class TransferWatcher
         var copy = ExplorerCopy(now);
         var download = Downloads(now, dt);
         var next = copy ?? download; // a copy has a real percentage, it wins
+#if DEBUG
+        next = Fake ?? next;
+#endif
 
         var prev = Current;
         Current = next;

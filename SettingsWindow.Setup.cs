@@ -15,7 +15,8 @@ namespace Notchy;
 
 /// <summary>
 /// The assistant of the first opening: this same window, smaller, with a trail of steps on the left instead of the categories.
-/// It has no eyes of its own; the real island above it looks around and smiles while the choices are made.
+/// The eyes on top (the same as in the settings) take each step's colour, and under each title a little picture shows the
+/// island doing what the step is about (SettingsWindow.SetupArt.cs); the real island above reacts too.
 /// </summary>
 public sealed partial class SettingsWindow
 {
@@ -24,13 +25,17 @@ public sealed partial class SettingsWindow
     {
         ("hello", Color.FromRgb(0xE6, 0xE6, 0xEE), "M12,3 A9,9 0 1 0 12,21 A9,9 0 1 0 12,3 M8,14 C9,15.4 10.4,16 12,16 S15,15.4 16,14 M9,9 L9,10 M15,9 L15,10"),
         ("look", Color.FromRgb(0xA7, 0x8B, 0xFA), "M12,3 A9,9 0 1 0 12,21 C13.6,21 14,19.8 13.4,18.8 C12.7,17.6 13.5,16 15,16 L18,16 A3,3 0 0 0 21,13 C21,7.5 17,3 12,3 Z M8,11 L8.01,11 M12,7.5 L12.01,7.5 M16.3,10 L16.31,10"),
-        ("notif", Color.FromRgb(0x7C, 0xC8, 0xFF), "M6,16 L6,11 A6,6 0 1 1 18,11 L18,16 L20,18 L4,18 Z M10,21 L14,21"),
+        ("notif", Color.FromRgb(0xFF, 0x7E, 0xB6), "M6,16 L6,11 A6,6 0 1 1 18,11 L18,16 L20,18 L4,18 Z M10,21 L14,21"),
+        ("clip", Color.FromRgb(0x8F, 0xB8, 0xFF), "M9,4 L15,4 L15,7 L9,7 Z M9,5.5 L7,5.5 A2,2 0 0 0 5,7.5 L5,19 A2,2 0 0 0 7,21 L17,21 A2,2 0 0 0 19,19 L19,7.5 A2,2 0 0 0 17,5.5 L15,5.5 M9,12 L15,12 M9,16 L13,16"),
         ("extras", Color.FromRgb(0x5E, 0xD6, 0x7D), "M7,5 L17,5 A3,3 0 0 1 20,8 L20,18 A3,3 0 0 1 17,21 L7,21 A3,3 0 0 1 4,18 L4,8 A3,3 0 0 1 7,5 Z M4,10 L20,10 M9,3 L9,7 M15,3 L15,7"),
         ("claude", Color.FromRgb(0xE8, 0x82, 0x5F), "M12,3 L12,21 M4.2,7.5 L19.8,16.5 M4.2,16.5 L19.8,7.5"),
         ("tour", Color.FromRgb(0xFF, 0xD3, 0x6B), "M12,3 L14.6,8.8 L21,9.5 L16.2,13.8 L17.5,20 L12,16.8 L6.5,20 L7.8,13.8 L3,9.5 L9.4,8.8 Z"),
     };
 
-    private const int TourStep = 5;
+    private static readonly int TourStep = SetupSteps.Length - 1;
+    /// <summary>The tour's tips, in order; the ones about something switched off in the steps before are left out.</summary>
+    private static readonly string[] TourTips = { "open", "date", "bell", "clip", "volume", "shelf" };
+    private readonly List<string> _tourKeys = new();
     private const double TrailRowHeight = 46, TrailTop = 23;
     private const double EnterOffset = 26, LeaveOffset = 34, StaggerMs = 55;
     private static readonly Color DoneStep = Color.FromRgb(0x5E, 0xD6, 0x7D);
@@ -100,6 +105,35 @@ public sealed partial class SettingsWindow
             using var file = System.IO.File.Create(System.IO.Path.Combine(folder, $"step{i}.png"));
             png.Save(file);
         }
+        void Save(string name)
+        {
+            var content = (FrameworkElement)Content;
+            var picture = new System.Windows.Media.Imaging.RenderTargetBitmap((int)content.ActualWidth, (int)content.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+            picture.Render(content);
+            var png = new System.Windows.Media.Imaging.PngBitmapEncoder();
+            png.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(picture));
+            using var file = System.IO.File.Create(System.IO.Path.Combine(folder, name + ".png"));
+            png.Save(file);
+        }
+        _tourTimer.Stop();
+        for (int i = 0; i < _tourKeys.Count; i++)
+        {
+            ShowTip(i);
+            await Task.Delay(1250);
+            Save("tour_" + _tourKeys[i]);
+        }
+        // the pictures of two steps at another moment of their little story
+        GoSetup(2);
+        await Task.Delay(400);
+        Save("art_notif_idle");
+        GoSetup(3);
+        await Task.Delay(1050);
+        Save("art_clip_glow");
+        GoSetup(4);
+        await Task.Delay(900);
+        _scroll.ScrollToEnd();
+        await Task.Delay(300);
+        Save("step4_bottom");
         Close();
     }
 
@@ -139,8 +173,13 @@ public sealed partial class SettingsWindow
     }
 #endif
 
-    private static UIElement SetupBrand() =>
-        new TextBlock { Text = "Notchy", FontSize = 15, FontWeight = FontWeights.Bold, Margin = new Thickness(8, 0, 0, 16) };
+    /// <summary>The same little island with eyes as in the settings (they follow the mouse and smile), just without the line under the name.</summary>
+    private UIElement SetupBrand()
+    {
+        var brand = Brand();
+        if (_sideSub != null) _sideSub.Visibility = Visibility.Collapsed;
+        return brand;
+    }
 
     // =====================================================================================
     // around the pages
@@ -322,6 +361,7 @@ public sealed partial class SettingsWindow
     {
         var (key, color, icon) = SetupSteps[_step];
         _accent = color;
+        PaintEyes();
         _pageHost.Content = _setupStage;
         bool changedStep = animate && _shownStep != _step;
         _shownStep = _step;
@@ -335,17 +375,19 @@ public sealed partial class SettingsWindow
             case "hello": HelloRows(built); break;
             case "look": LookRows(built); break;
             case "notif": NoticeRows(built); break;
+            case "clip": ClipSetupRows(built); break;
             case "extras": ExtrasRows(built); break;
             case "claude": ClaudeRows(built); break;
             default: TourRows(built); break;
         }
 
-        var parts = new List<FrameworkElement> { header };
+        var parts = new List<FrameworkElement> { header, SetupArt(key) };
         var cards = WrapRows(built);
-        if (key == "notif")
+        if (key is "notif" or "clip")
         {
+            // the rest only matters while the first switch is on: it folds away with it
             parts.Add(cards[0]);
-            parts.Add(Fold(cards.Skip(1), S.NotifyEnabled));
+            parts.Add(Fold(cards.Skip(1), key == "notif" ? S.NotifyEnabled : S.ClipEnabled));
         }
         else parts.AddRange(cards);
         foreach (var part in parts)
@@ -369,7 +411,7 @@ public sealed partial class SettingsWindow
         else
         {
             _tourTimer.Stop();
-            Island?.SetupTour(-1);
+            Island?.SetupTour(null);
         }
     }
 
@@ -428,7 +470,17 @@ public sealed partial class SettingsWindow
         }
 
         var texts = new StackPanel { Margin = new Thickness(13, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
-        texts.Children.Add(new TextBlock { Text = Loc.T("setup.t." + key), FontSize = 21, FontWeight = FontWeights.Bold });
+        string title = Loc.T("setup.t." + key);
+        int cut = title.IndexOf('|'); // (what comes after the bar is the coloured part)
+        var line = new StackPanel { Orientation = Orientation.Horizontal };
+        line.Children.Add(new TextBlock { Text = cut < 0 ? title : title[..cut].TrimEnd(), FontSize = 21, FontWeight = FontWeights.Bold });
+        if (cut >= 0)
+            line.Children.Add(new TextBlock
+            {
+                Text = " " + title[(cut + 1)..].Trim(), FontSize = 21, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(Math.Max(color.R, Math.Max(color.G, color.B)) - Math.Min(color.R, Math.Min(color.G, color.B)) < 30 ? Colors.White : Lighter(color)),
+                Effect = new DropShadowEffect { Color = color, ShadowDepth = 0, BlurRadius = 14, Opacity = 0.7 }
+            });
+        texts.Children.Add(line);
         texts.Children.Add(new TextBlock { Text = Loc.T("setup.s." + key), FontSize = 12.5, Foreground = Dim(0x80), Margin = new Thickness(0, 1, 0, 0) });
         var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 12) };
         row.Children.Add(host);
@@ -476,7 +528,8 @@ public sealed partial class SettingsWindow
     {
         var panel = new StackPanel();
         foreach (var card in cards) panel.Children.Add(card);
-        _fold = new Border { Child = panel, ClipToBounds = true, Opacity = open ? 1 : 0, Height = open ? double.NaN : 0 };
+        // (it clips only while it opens or folds: at rest the cards' hover lift and glow must not be cut at its edge)
+        _fold = new Border { Child = panel, ClipToBounds = !open, Opacity = open ? 1 : 0, Height = open ? double.NaN : 0 };
         return _fold;
     }
 
@@ -486,11 +539,13 @@ public sealed partial class SettingsWindow
         double from = fold.ActualHeight;
         fold.Child.Measure(new Size(fold.ActualWidth, double.PositiveInfinity));
         double to = open ? fold.Child.DesiredSize.Height : 0;
+        fold.ClipToBounds = true;
         var grow = new DoubleAnimation(from, to, Ms(360)) { EasingFunction = Smooth };
         grow.Completed += (_, _) =>
         {
             fold.BeginAnimation(HeightProperty, null);
             fold.Height = open ? double.NaN : 0;
+            fold.ClipToBounds = !open;
         };
         fold.BeginAnimation(HeightProperty, grow);
         fold.BeginAnimation(OpacityProperty, new DoubleAnimation(open ? 1 : 0, Ms(260)));
@@ -515,6 +570,7 @@ public sealed partial class SettingsWindow
         Row(card, Loc.T("s.style"), Loc.T("s.style.d"),
             Segmented(new[] { (IslandStyle.Attached, Loc.T("isl.style.attached")), (IslandStyle.Floating, Loc.T("isl.style.floating")) }, S.Style, v => S.Style = v));
         Row(card, Loc.T("setup.eyes"), "", EyeSwatches());
+        Row(card, Loc.T("s.so.enabled"), Loc.T("s.so.enabled.d"), Toggle(S.SoundsEnabled, v => S.SoundsEnabled = v));
     }
 
     private void NoticeRows(StackPanel card)
@@ -562,10 +618,38 @@ public sealed partial class SettingsWindow
         }
     }
 
+    /// <summary>Copiados: on or off, where it's kept, and how to open it.</summary>
+    private void ClipSetupRows(StackPanel card)
+    {
+        Row(card, Loc.T("s.cl.on"), Loc.T("setup.clip.on.d"), new Switch(S.ClipEnabled, v =>
+        {
+            S.ClipEnabled = v;
+            AppSettings.Commit();
+            AnimateFold(v);
+            if (v) Island?.SetupClipDemo();
+        }, _accent));
+        Row(card, Loc.T("setup.clip.where"), Loc.T("setup.clip.where.d"),
+            Segmented(new[] { (true, Loc.T("setup.clip.disk")), (false, Loc.T("setup.clip.memory")) }, S.ClipSaveToDisk, v => S.ClipSaveToDisk = v), sub: true);
+
+        // the shortcut's keys, and beside them what they do
+        string[] keys = ClipHotkeyKeys();
+        var caps = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) };
+        foreach (var key in keys) caps.Children.Add(KeyCap(key));
+        var words = new TextBlock { Text = Loc.T(keys.Length > 0 ? "setup.clip.note" : "setup.clip.note.nokey").Trim(), FontSize = 11.5, Foreground = Dim(0x99), TextWrapping = TextWrapping.Wrap, LineHeight = 16, VerticalAlignment = VerticalAlignment.Center };
+        var note = new DockPanel { Margin = new Thickness(8, 7, 8, 0) };
+        DockPanel.SetDock(caps, Dock.Left);
+        note.Children.Add(caps);
+        note.Children.Add(words);
+        card.Children.Add(note);
+    }
+
+    /// <summary>The keys of the shortcut that opens Copiados (none when it's switched off).</summary>
+    private static string[] ClipHotkeyKeys() => KeyboardHook.Labels(S.ClipHotkey);
+
     private void ExtrasRows(StackPanel card)
     {
         Row(card, Loc.T("s.calholidays"), Loc.T("s.calholidays.d"), Toggle(S.CalendarHolidays, v => S.CalendarHolidays = v));
-        Row(card, Loc.T("s.so.enabled"), Loc.T("s.so.enabled.d"), Toggle(S.SoundsEnabled, v => S.SoundsEnabled = v));
+        if (Island?.Calendar is { } calendar) ExternalCalendarRowsInto(card, calendar);
         WeatherRows(card);
     }
 
@@ -599,16 +683,30 @@ public sealed partial class SettingsWindow
     private void TourRows(StackPanel card)
     {
         _tourTips.Clear();
-        for (int i = 0; i < 3; i++)
+        _tourKeys.Clear();
+        foreach (var tip in TourTips)
+        {
+            bool has = tip switch
+            {
+                "bell" => S.NotifyEnabled,
+                "clip" => S.ClipEnabled,
+                "volume" => S.ScrollVolume && S.VolumeOsd,
+                "shelf" => S.ShelfEnabled,
+                _ => true
+            };
+            if (has) _tourKeys.Add(tip);
+        }
+        for (int i = 0; i < _tourKeys.Count; i++)
         {
             var background = new SolidColorBrush(Colors.Transparent);
             var text = new SolidColorBrush(Color.FromArgb(0x88, 255, 255, 255));
             var dot = new SolidColorBrush(Color.FromArgb(0x26, 255, 255, 255));
             var line = new StackPanel { Orientation = Orientation.Horizontal };
             line.Children.Add(new Ellipse { Width = 8, Height = 8, Fill = dot, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) });
-            line.Children.Add(new TextBlock { Text = Loc.T("setup.tip." + i), FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = text });
+            string words = _tourKeys[i] == "clip" && ClipHotkeyKeys() is { Length: > 0 } keys ? Loc.F("setup.tip.clip", string.Join(" + ", keys)) : Loc.T("setup.tip." + (_tourKeys[i] == "clip" ? "clip.nokey" : _tourKeys[i]));
+            line.Children.Add(new TextBlock { Text = words, FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = text });
             var move = new TranslateTransform();
-            card.Children.Add(new Border { CornerRadius = new CornerRadius(12), Padding = new Thickness(14, 12, 14, 12), Margin = new Thickness(0, 0, 8, 5), Background = background, Child = line, RenderTransform = move });
+            card.Children.Add(new Border { CornerRadius = new CornerRadius(12), Padding = new Thickness(14, 10, 14, 10), Margin = new Thickness(0, 0, 8, 4), Background = background, Child = line, RenderTransform = move });
             _tourTips.Add(new TourTip(background, text, dot, move));
         }
     }
@@ -616,6 +714,7 @@ public sealed partial class SettingsWindow
     private void ShowTip(int tip)
     {
         _tip = tip;
+        _tipAt = _artClock.Elapsed.TotalSeconds;
         var accent = SetupSteps[TourStep].Color;
         for (int i = 0; i < _tourTips.Count; i++)
         {
@@ -626,7 +725,7 @@ public sealed partial class SettingsWindow
             Tint(t.Dot, on ? accent : Color.FromArgb(0x26, 255, 255, 255), true);
             t.Move.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(on ? 5 : 0, Ms(300)) { EasingFunction = Spring });
         }
-        Island?.SetupTour(tip);
+        Island?.SetupTour(tip >= 0 && tip < _tourKeys.Count ? _tourKeys[tip] : null);
     }
 
     // =====================================================================================

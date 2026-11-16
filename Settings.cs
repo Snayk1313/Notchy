@@ -31,6 +31,8 @@ public sealed class AppSettings
     public string Language { get; set; } = "pt";
     public AnimSpeed Speed { get; set; } = AnimSpeed.Normal;
     public bool GameMode { get; set; } = true;
+    /// <summary>A timer or alarm ringing shows on the island even over a full-screen game or video.</summary>
+    public bool RingFullscreen { get; set; } = true;
     public bool AutoUpdate { get; set; } = true;
     public int FocusMinutes { get; set; } = 30;
     public int BreakMinutes { get; set; } = 5;
@@ -83,6 +85,17 @@ public sealed class AppSettings
     public bool IntroAnimation { get; set; } = true;
     public bool ScrollVolume { get; set; } = true;
     public bool ShelfEnabled { get; set; } = true;
+    /// <summary>Copiados: what you copy is kept (aba própria na ilha).</summary>
+    public bool ClipEnabled { get; set; } = true;
+    public bool ClipPaused { get; set; }
+    public int ClipMaxItems { get; set; } = 200;
+    public int ClipMaxDays { get; set; } = 30;
+    /// <summary>false: kept only while Notchy is open.</summary>
+    public bool ClipSaveToDisk { get; set; } = true;
+    /// <summary>The shortcut that opens Copiados from anywhere: WinAltV, CtrlAltV, CtrlShiftSpace or "" (none).</summary>
+    public string ClipHotkey { get; set; } = "Win+Alt+V";
+    /// <summary>Process names whose copies are never kept (password managers by default).</summary>
+    public List<string> ClipIgnoredApps { get; set; } = new() { "1Password", "Bitwarden", "KeePass", "KeePassXC", "LastPass", "Dashlane", "Enpass", "NordPass", "ProtonPass", "RoboForm" };
     public bool TransferProgress { get; set; } = true;
     public bool BatteryAlerts { get; set; } = true;
     public int BatteryLowPercent { get; set; } = 20;

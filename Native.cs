@@ -215,6 +215,11 @@ internal static class Native
 
     public static bool IsForeground(IntPtr hwnd) => GetForegroundWindow() == hwnd;
 
+    [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
+
+    /// <summary>Asks a window to close (as its X would).</summary>
+    public static void CloseWindow(IntPtr hwnd) => PostMessage(hwnd, 0x0010 /* WM_CLOSE */, IntPtr.Zero, IntPtr.Zero);
+
     public static void FocusWindow(IntPtr hwnd)
     {
         if (IsIconic(hwnd)) ShowWindow(hwnd, 9 /* SW_RESTORE */);

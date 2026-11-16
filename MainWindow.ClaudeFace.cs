@@ -77,13 +77,56 @@ public partial class MainWindow
     /// centre and grows to the new island's size, its light stretching into the island's edge on the way.
     /// The island comes back right under it, looking the same (eyes, outline, light), and the bubble melts away.
     /// </summary>
+    /// <param name="wanted">Still true while the island is the activity's (checked every frame). It may stop being so
+    /// half-way (music paused and played again quickly): then the move is undone (the bubble goes back to its place,
+    /// the island stays the music's) and <paramref name="undone"/> runs instead of <paramref name="finished"/>.</param>
     private void MorphPodIntoIsland(Border pod, TranslateTransform x, TranslateTransform slide, double width,
-        UIElement islandPanel, Action handOver, Action finished)
+        UIElement islandPanel, Action handOver, Action finished, Func<bool> wanted, Action undone)
     {
         var up = TimeSpan.FromMilliseconds(Dur(280));
         var d = TimeSpan.FromMilliseconds(Dur(460));
         var ease = new CubicEase { EasingMode = EasingMode.EaseInOut };
         _islandMorphing = true;
+        double homeX = x.X, homeSlide = slide.X, homeWidth = pod.ActualWidth > 1 ? pod.ActualWidth : 70;
+        bool over = false; // undone, or the island has taken the bubble's place: nothing to undo anymore
+
+        void Watch(object? sender, EventArgs e)
+        {
+            if (over || wanted()) return;
+            over = true;
+            CompositionTarget.Rendering -= Watch;
+            // back the way it came, from where everything is now
+            var back = TimeSpan.FromMilliseconds(Dur(300));
+            var outEase = new CubicEase { EasingMode = EasingMode.EaseOut };
+            void To(Animatable t, DependencyProperty p, double v) => t.BeginAnimation(p, new DoubleAnimation(v, back) { EasingFunction = outEase });
+            var shrink = new DoubleAnimation(homeWidth, back) { EasingFunction = outEase };
+            shrink.Completed += (_, _) =>
+            {
+                pod.BeginAnimation(WidthProperty, null);
+                pod.Width = homeWidth;
+                x.BeginAnimation(TranslateTransform.XProperty, null);
+                slide.BeginAnimation(TranslateTransform.XProperty, null);
+                x.X = homeX;
+                slide.X = homeSlide;
+                pod.IsHitTestVisible = true;
+                Panel.SetZIndex(pod, 0);
+                undone();
+            };
+            pod.BeginAnimation(WidthProperty, shrink);
+            To(x, TranslateTransform.XProperty, homeX);
+            To(slide, TranslateTransform.XProperty, homeSlide);
+            pod.BeginAnimation(OpacityProperty, null);
+            pod.Opacity = 1;
+            // the island comes back down as what it is now, from where it went
+            double w = Island.ActualWidth, h = Island.ActualHeight;
+            Island.BeginAnimation(WidthProperty, null);
+            Island.BeginAnimation(HeightProperty, null);
+            Island.Width = w;
+            Island.Height = h;
+            _islandMorphing = false;
+            AnimateIslandSize(TargetSize(_state), bigMove: false);
+        }
+        CompositionTarget.Rendering += Watch;
 
         // 1) the island goes up and away (keeps its width, its content fades)
         islandPanel.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.Zero));
@@ -101,6 +144,9 @@ public partial class MainWindow
         var grow = new DoubleAnimation(width, d) { EasingFunction = ease, BeginTime = up };
         grow.Completed += (_, _) =>
         {
+            if (over) return;
+            over = true;
+            CompositionTarget.Rendering -= Watch;
             // 3) the island comes back right underneath, the same size, and the bubble melts into it
             var size = TargetSize(_state);
             Island.BeginAnimation(WidthProperty, null);
@@ -108,9 +154,19 @@ public partial class MainWindow
             Island.Width = size.Width;
             Island.Height = size.Height + _topHidden;
             AnimateIslandSize(size, bigMove: false); // (nothing to move: sets the panels' width)
-            islandPanel.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(Dur(180))));
             _islandMorphing = false;
-            handOver(); // the island's light is already exactly where the bubble's is: show it at once
+            // The island may have moved on meanwhile (music paused and played again quickly: it's the music's again, and
+            // the bubble comes back). Fade marks the panel that should show (hit-testable): only that one comes in.
+            if (islandPanel.IsHitTestVisible)
+            {
+                islandPanel.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(Dur(180))));
+                handOver(); // the island's light is already exactly where the bubble's is: show it at once
+            }
+            else
+            {
+                islandPanel.BeginAnimation(OpacityProperty, null);
+                islandPanel.Opacity = 0;
+            }
 
             var fade = new DoubleAnimation(0, TimeSpan.FromMilliseconds(Dur(200)));
             fade.Completed += (_, _) =>
@@ -326,6 +382,11 @@ public partial class MainWindow
         {
             _podMorphing = false;
             UpdatePodPosition();
+        }, () => _state == IslandState.Compact && IsClaudeMode(_compactMode), () =>
+        {
+            _podShown = true; // still the bubble, back at the music island's side
+            _podMorphing = false;
+            UpdatePodPosition();
         });
     }
 
@@ -456,8 +517,7 @@ public partial class MainWindow
             if (happy != _claudeHappyShown)
             {
                 _claudeHappyShown = happy;
-                ClaudeEyeL.Visibility = ClaudeEyeR.Visibility = happy ? Visibility.Collapsed : Visibility.Visible;
-                ClaudeHappyL.Visibility = ClaudeHappyR.Visibility = happy ? Visibility.Visible : Visibility.Collapsed;
+                FlipEyes(happy, ClaudeEyeL, ClaudeEyeR, ClaudeHappyL, ClaudeHappyR);
             }
             var eyeColor = attention ? ClaudeColor : ClaudeEyeColor;
             if (ClaudeEyesGlow.Color != eyeColor) ClaudeEyesGlow.Color = eyeColor;
@@ -482,9 +542,10 @@ public partial class MainWindow
         bool flash = DateTime.UtcNow < _claudeFlashUntil;
         // a running download / copy draws its own (green) outline: don't stack two lights
         bool copyLight = ActiveTransfer?.Kind == TransferKind.Copy || (DateTime.UtcNow < _transferDoneUntil && _transferDoneKind == TransferKind.Copy);
-        bool show = onIsland && !_introActive && !copyLight && !_islandMorphing;
+        bool show = onIsland && !_introActive && !copyLight && !_islandMorphing && !IslandLightsOff;
         double k = Ease(Math.Clamp(0.14 / Math.Max(0.3, S.SpeedFactor), 0.05, 0.5));
         _claudeLightOpacity += ((show ? 1 : 0) - _claudeLightOpacity) * k;
+        if (IslandLightsOff) _claudeLightOpacity = 0;
         if (_claudeLightOpacity < 0.01 && !show)
         {
             if (ClaudeLight.Visibility == Visibility.Visible)

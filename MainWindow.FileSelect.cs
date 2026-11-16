@@ -74,8 +74,12 @@ public partial class MainWindow
             ((TextBlock)((Panel)_selPill.Child).Children[1]).Foreground = new SolidColorBrush(c);
             _selPill.Background = new SolidColorBrush(Color.FromArgb(0x24, c.R, c.G, c.B));
         }
-        _selPill.Visibility = n > 0 ? Visibility.Visible : Visibility.Collapsed;
-        DatePill.Visibility = HeaderTime.Visibility = n > 0 ? Visibility.Collapsed : Visibility.Visible;
+        // (the count comes in where the date and the time were, and they come back the same way)
+        if (n > 0) DatePill.Visibility = HeaderTime.Visibility = Visibility.Collapsed;
+        else _selPill.Visibility = Visibility.Collapsed;
+        FadeVisible(_selPill, n > 0, rise: 0);
+        FadeVisible(DatePill, n == 0, rise: 0);
+        FadeVisible(HeaderTime, n == 0, rise: 0);
 
         bool shelfMode = _shelfSel.Mode;
         ShelfSelect.Visibility = _shelf.Count >= 2 ? Visibility.Visible : Visibility.Collapsed;

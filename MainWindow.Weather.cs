@@ -360,7 +360,9 @@ public partial class MainWindow
         _refreshArrowPath.Stroke = ink;
         _refreshArrowPath.Visibility = _weatherJustDone ? Visibility.Collapsed : Visibility.Visible;
         _refreshCheck.Stroke = ink;
+        bool checkWas = _refreshCheck.Visibility == Visibility.Visible;
         _refreshCheck.Visibility = _weatherJustDone ? Visibility.Visible : Visibility.Collapsed;
+        if (_weatherJustDone && !checkWas) PopIn(_refreshCheck, 0.3);
         if (_weatherJustDone)
             _refreshCheck.BeginAnimation(Shape.StrokeDashOffsetProperty, new DoubleAnimation(10, 0, TimeSpan.FromMilliseconds(Dur(350))) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
         ((RotateTransform)_refreshArrow.RenderTransform).BeginAnimation(RotateTransform.AngleProperty,

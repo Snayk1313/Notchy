@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
 using System.Windows.Shapes;
 
@@ -93,20 +95,32 @@ public partial class MainWindow
         _notices.WatchTray = quiet;
     }
 
-    /// <summary>A full-screen game or video hides the island, except while the volume/brightness bar or a notification card (if that's turned on) is up.</summary>
+    /// <summary>A notification card or a ringing timer/alarm that may show over a full-screen game (each has its own option).</summary>
+    private bool FullscreenCardUp => S.NotifyFullscreen && _noticeShown != null && !_noticeInPill || S.RingFullscreen && _ring != null;
+
+    /// <summary>Full screen with nothing allowed to show: the mouse can't open the island.</summary>
+    private bool FullscreenHidesIsland => _hiddenForFullscreen && Island.Visibility != Visibility.Visible;
+
+    /// <summary>A full-screen game or video hides the island, except while the volume/brightness bar or a notification card / ringing timer (if that's turned on) is up.</summary>
     private void ApplyFullscreenHide()
     {
-        Island.Visibility = _hiddenForFullscreen && !(S.NotifyFullscreen && _noticeShown != null || _state == IslandState.Volume) ? Visibility.Hidden : Visibility.Visible;
+        Island.Visibility = _hiddenForFullscreen && !(FullscreenCardUp || _state == IslandState.Volume) ? Visibility.Hidden : Visibility.Visible;
         // the game may have covered the glass under the island since it was last put in place
         if (_hiddenForFullscreen && Island.Visibility == Visibility.Visible && _backdrop != null && _backdrop.Hwnd != IntPtr.Zero) _backdrop.KeepBelow(_hwnd);
     }
 
-    /// <summary>Hides the island again once the card or bar has finished closing.</summary>
-    private async void HideAfterCard()
+    /// <summary>
+    /// Full screen: once the card (notification, ringing timer) or bar is done the island goes at once, with no closing
+    /// animation over the game, and the mouse that was on it doesn't open it. Call it before the state changes.
+    /// </summary>
+    private void HideAfterCard()
     {
         if (!_hiddenForFullscreen) return;
-        await System.Threading.Tasks.Task.Delay(350);
         ApplyFullscreenHide();
+        if (Island.Visibility == Visibility.Visible) return;
+        _hoverTimer.Stop();
+        _hoverRequested = _hoverActive = _clickOpened = false;
+        _ignoreHoverUntil = DateTime.UtcNow.AddSeconds(1);
     }
 
     /// <summary>The bell next to the clock, with how many arrived since you last looked.</summary>
@@ -138,8 +152,13 @@ public partial class MainWindow
 
     private void UpdateBell()
     {
-        _bellBadge.Text = _noticeUnseen > 9 ? "9+" : _noticeUnseen.ToString();
-        ((FrameworkElement)_bellBadge.Parent).Visibility = _noticeUnseen > 0 ? Visibility.Visible : Visibility.Collapsed;
+        var badge = (FrameworkElement)_bellBadge.Parent;
+        string count = _noticeUnseen > 9 ? "9+" : _noticeUnseen.ToString();
+        bool was = badge.Visibility == Visibility.Visible, changed = _bellBadge.Text != count;
+        _bellBadge.Text = count;
+        badge.Visibility = _noticeUnseen > 0 ? Visibility.Visible : Visibility.Collapsed;
+        // it grows in when it shows up, and hops when another one arrives
+        if (_noticeUnseen > 0 && (changed || !was)) PopIn(badge, was ? 1.5 : 0.2);
         _bell.Visibility = _notices.Available && S.NotifyEnabled ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -204,8 +223,8 @@ public partial class MainWindow
     {
         if (_transient == CompactMode.Notice) _transient = CompactMode.None;
         _noticeShown = null;
-        UpdateState();
         HideAfterCard();
+        UpdateState();
     }
 
     /// <summary>Every frame: when a card's time is up, the next one (if any) comes down.</summary>
@@ -244,20 +263,368 @@ public partial class MainWindow
     {
         var list = new StackPanel { Margin = new Thickness(0, 0, 0, 6) };
         var all = _notices.History.Where(n => !S.NotifyMuted.Contains(n.App)).ToList();
-        list.Children.Add(ListTop(all.Count == 0 ? Loc.T("notif.empty") : (all.Count == 1 ? Loc.T("notif.count1") : Loc.F("notif.count", all.Count)),
-            all.Count == 0 ? null : ListPill("", Loc.T("notif.clear"), false, () =>
-            {
-                _notices.Clear();
-                RefreshSubPage(NoticesPage);
-            })));
+        if (_noticeCleared != null) list.Children.Add(ListGlide.Key(NoticeUndoRow(), "undo"));
+        var groups = all.GroupBy(n => n.App).ToList();
+        var everyRow = new List<FrameworkElement>();
+        list.Children.Add(ListGlide.Key(ListTop(all.Count == 0 ? Loc.T("notif.empty") : (all.Count == 1 ? Loc.T("notif.count1") : Loc.F("notif.count", all.Count)),
+            all.Count == 0 ? null : ListPill("", Loc.T("notif.clear"), false, () => ClearNotices(all, Loc.T("notif.cleared.all"), everyRow))), "top"));
         // grouped by app, the app with the newest one first
-        foreach (var group in all.GroupBy(n => n.App))
+        foreach (var group in groups)
         {
-            list.Children.Add(new TextBlock { Text = group.Key.ToUpperInvariant(), FontSize = 10, FontWeight = FontWeights.SemiBold, Foreground = White(0x70),
-                Margin = new Thickness(6, 6, 0, 4) });
-            foreach (var n in group.Take(6)) list.Children.Add(NoticeRow(n));
+            var items = group.ToList();
+            var rows = new StackPanel();
+            // the same person / conversation more than once: one stack (iOS-like), opened with a click
+            foreach (var chat in items.GroupBy(n => n.Title).Take(6))
+            {
+                var msgs = chat.ToList();
+                if (msgs.Count > 1)
+                {
+                    rows.Children.Add(ListGlide.Key(NoticeStack(msgs.Take(5).ToList(), msgs), "stack:" + group.Key + "|" + chat.Key));
+                    continue;
+                }
+                var n = msgs[0];
+                var row = NoticeRow(n);
+                row.Tag = new GlideKey(n);
+                SwipeToClear(row, () => new[] { row }, () => ClearNotices(new List<Notice> { n }, Loc.T("notif.cleared.one"), null));
+                rows.Children.Add(row);
+            }
+            var body = new Border { Child = rows, ClipToBounds = true };
+            if (_noticeFolded.Contains(group.Key)) body.Height = 0;
+            Border head = null!;
+            head = NoticeGroupHead(items, body,
+                () => ClearNotices(items, Loc.F("notif.cleared.app", group.Key), new List<FrameworkElement> { head }.Concat(rows.Children.OfType<FrameworkElement>()).ToList()));
+            SwipeToClear(head, () => new FrameworkElement[] { head, body }, () => ClearNotices(items, Loc.F("notif.cleared.app", group.Key), null));
+            head.Tag = new GlideKey("head:" + group.Key);
+            body.Tag = new GlideKey("body:" + group.Key);
+            list.Children.Add(head);
+            list.Children.Add(body);
+            everyRow.Add(head);
+            everyRow.AddRange(rows.Children.OfType<FrameworkElement>());
         }
-        return Capped(list, MaxSubHeight - 10);
+        // always in a scroller: an opened stack or group can make it taller than the island after it's built
+        return Scroller(list, maxHeight: MaxSubHeight - 10);
+    }
+
+    // ---- the same conversation: a stack
+
+    private const double StackPeek = 7, StackGap = 4;
+    private readonly HashSet<string> _noticeOpenStacks = new();
+
+    /// <summary>
+    /// Several notifications from one person or conversation. Closed: the newest in front, the next two peeking out under
+    /// it, smaller and dimmer; a click fans them out one under the other, with "Mostrar menos" above to gather them again.
+    /// Swiping it clears the whole conversation.
+    /// </summary>
+    private FrameworkElement NoticeStack(List<Notice> shown, List<Notice> all)
+    {
+        string key = shown[0].App + "\n" + shown[0].Title;
+        var cards = new List<(Border card, FrameworkElement row, ScaleTransform scale, TranslateTransform move, object? tip)>();
+        var deck = new Grid { Background = Brushes.Transparent };
+        bool IsOpen() => _noticeOpenStacks.Contains(key);
+        // "+3": how many more are under the front one (only while it's closed)
+        var more = new Border { CornerRadius = new CornerRadius(8), Background = White(0x22), Padding = new Thickness(6, 0, 6, 1),
+            Child = new TextBlock { Text = "+" + (all.Count - 1), FontSize = 9.5, FontWeight = FontWeights.Bold, Foreground = Brushes.White } };
+        foreach (var n in shown)
+        {
+            var row = NoticeRow(n, n == shown[0] ? more : null);
+            row.Margin = new Thickness(0);
+            var card = new Border { Child = row, CornerRadius = new CornerRadius(13), Background = White(0x10) };
+            // the holder keeps the card's place in the stack; the card inside is what a swipe moves
+            var scale = new ScaleTransform(1, 1);
+            var move = new TranslateTransform();
+            var holder = new Border { Child = card, VerticalAlignment = VerticalAlignment.Top, RenderTransformOrigin = new Point(0.5, 1), RenderTransform = new TransformGroup { Children = { scale, move } } };
+            var one = n;
+            SwipeToClear(card, () => new[] { card }, () => ClearNotices(new List<Notice> { one }, Loc.T("notif.cleared.one"), null), active: IsOpen);
+            cards.Add((holder, row, scale, move, row.ToolTip));
+        }
+        for (int i = cards.Count - 1; i >= 0; i--) deck.Children.Add(cards[i].card); // the newest drawn last: in front
+        cards[0].card.Measure(new Size(440, double.PositiveInfinity));
+        double h = cards[0].card.DesiredSize.Height;
+
+        var less = new DockPanel { Height = 0, Opacity = 0, ClipToBounds = true, Margin = new Thickness(6, 0, 0, 0) };
+        var gather = ListPill("", Loc.T("notif.less"), false, () => Lay(false));
+        gather.Padding = new Thickness(9, 1, 10, 2);
+        DockPanel.SetDock(gather, Dock.Right);
+        less.Children.Add(gather);
+        less.Children.Add(new TextBlock { Text = $"{shown[0].Title} · {all.Count}", FontSize = 10.5, FontWeight = FontWeights.SemiBold, Foreground = White(0x99),
+            VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis });
+        var wrap = new StackPanel { Margin = new Thickness(0, 1, 0, 3) };
+        wrap.Children.Add(less);
+        wrap.Children.Add(deck);
+
+        void Lay(bool open, bool animate = true)
+        {
+            if (open) _noticeOpenStacks.Add(key);
+            else _noticeOpenStacks.Remove(key);
+            var time = TimeSpan.FromMilliseconds(Dur(animate ? 380 : 0));
+            IEasingFunction ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+            void To(Animatable target, DependencyProperty prop, double value) =>
+                target.BeginAnimation(prop, new DoubleAnimation(value, time) { EasingFunction = ease });
+            for (int i = 0; i < cards.Count; i++)
+            {
+                var (card, row, scale, move, tip) = cards[i];
+                int back = Math.Min(i, 2);
+                To(move, TranslateTransform.YProperty, open ? i * (h + StackGap) : back * StackPeek);
+                To(scale, ScaleTransform.ScaleXProperty, open ? 1 : 1 - back * 0.06);
+                To(scale, ScaleTransform.ScaleYProperty, open ? 1 : 1 - back * 0.06);
+                card.BeginAnimation(OpacityProperty, new DoubleAnimation(open || i == 0 ? 1 : i <= 2 ? (i == 1 ? 0.55 : 0.3) : 0, time) { EasingFunction = ease });
+                // closing, the text behind goes first: the cards are see-through, it would show through the front one
+                var textTime = open || !animate ? time : TimeSpan.FromMilliseconds(Dur(130));
+                row.BeginAnimation(OpacityProperty, new DoubleAnimation(open || i == 0 ? 1 : 0, textTime) { EasingFunction = ease });
+                card.IsHitTestVisible = open || i == 0;
+                row.ToolTip = open ? tip : null; // closed, a click opens the stack, not the app
+            }
+            // the island measures the final sizes first, then everything moves from where it is
+            double fromDeck = deck.ActualHeight, fromLess = less.ActualHeight;
+            double toDeck = open ? cards.Count * (h + StackGap) - StackGap : h + Math.Min(cards.Count - 1, 2) * StackPeek;
+            double toLess = open ? 24 : 0;
+            deck.BeginAnimation(HeightProperty, null);
+            less.BeginAnimation(HeightProperty, null);
+            deck.Height = toDeck;
+            less.Height = toLess;
+            if (animate) ResizeSubPage();
+            if (animate && fromDeck > 0)
+            {
+                deck.BeginAnimation(HeightProperty, new DoubleAnimation(fromDeck, toDeck, time) { EasingFunction = ease });
+                less.BeginAnimation(HeightProperty, new DoubleAnimation(fromLess, toLess, time) { EasingFunction = ease });
+            }
+            less.BeginAnimation(OpacityProperty, new DoubleAnimation(open ? 1 : 0, time) { EasingFunction = ease });
+            // (gone from the layout once faded, so the open card's line is like the others)
+            if (!open) more.Visibility = Visibility.Visible;
+            var fadeMore = new DoubleAnimation(open ? 0 : 1, time) { EasingFunction = ease };
+            if (open) fadeMore.Completed += (_, _) => { if (IsOpen()) more.Visibility = Visibility.Collapsed; };
+            more.BeginAnimation(OpacityProperty, fadeMore);
+        }
+        Lay(_noticeOpenStacks.Contains(key), animate: false);
+
+        SwipeToClear(deck, () => new FrameworkElement[] { wrap }, () => ClearNotices(all, Loc.F("notif.cleared.chat", shown[0].Title), null), active: () => !IsOpen());
+        // closed: a click opens it (before the row's own click, which would open the app)
+        deck.PreviewMouseLeftButtonUp += (_, e) =>
+        {
+            if (e.Handled || _noticeOpenStacks.Contains(key)) return;
+            e.Handled = true;
+            SoundService.Play(Sfx.Click);
+            Lay(true);
+        };
+        return wrap;
+    }
+
+    // ---- by app: fold a group, clear it with its X or by swiping, and the way back
+
+    private const double NoticeUndoSeconds = 5, NoticeSwipeAway = 90;
+    private readonly HashSet<string> _noticeFolded = new();
+    private List<Notice>? _noticeCleared;
+    private string _noticeClearedText = "";
+    private DateTime _noticeUndoUntil;
+    private System.Windows.Threading.DispatcherTimer? _noticeUndoTimer;
+
+    private bool NoticesPageOpen => _subOpen && _subTitle.Text == Loc.T("notif.title");
+
+    /// <summary>The app's line over its notifications: icon, name, how many, the fold arrow and the X that clears them.</summary>
+    private Border NoticeGroupHead(List<Notice> items, Border body, Action clear)
+    {
+        string app = items[0].App;
+        bool folded = _noticeFolded.Contains(app);
+        // the app's icon (a photo on a notification is the sender's, not the app's); its colour only while none is known
+        var logo = _notices.IconOf(items[0].AppId) ?? items.FirstOrDefault(n => !n.IsPhoto && n.Avatar != null)?.Avatar;
+        var icon = new Border { Width = 18, Height = 18, CornerRadius = new CornerRadius(logo != null ? 3 : 5), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 7, 0),
+            Background = logo != null ? new ImageBrush(logo) { Stretch = Stretch.Uniform, Viewbox = DesktopAppIcon.DrawnArea(logo) } : items[0].Accent is Color c ? Br(c) : White(0x30) };
+        var name = new TextBlock { Text = app.ToUpperInvariant(), FontSize = 10, FontWeight = FontWeights.SemiBold, Foreground = White(0x80), VerticalAlignment = VerticalAlignment.Center };
+        var count = new Border { CornerRadius = new CornerRadius(7), Background = White(0x14), Padding = new Thickness(5, 0, 5, 1), Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
+            Child = new TextBlock { Text = items.Count.ToString(), FontSize = 9, FontWeight = FontWeights.SemiBold, Foreground = White(0xAA) } };
+        var turn = new RotateTransform(folded ? -90 : 0);
+        var chevron = new TextBlock { Text = "▾", FontSize = 11, Foreground = White(0xAA), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0),
+            RenderTransformOrigin = new Point(0.5, 0.5), RenderTransform = turn };
+        var x = new Border { Width = 20, Height = 20, CornerRadius = new CornerRadius(10), Background = White(0x0E), Cursor = Cursors.Hand, VerticalAlignment = VerticalAlignment.Center,
+            ToolTip = Loc.F("notif.clear.app", app),
+            Child = new TextBlock { Text = Glyph(0xE711), FontFamily = (FontFamily)FindResource("IconFont"), FontSize = 8, Foreground = Brushes.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center } };
+        x.MouseEnter += (_, _) => x.Background = White(0x2A);
+        x.MouseLeave += (_, _) => x.Background = White(0x0E);
+        x.MouseLeftButtonUp += (_, e) =>
+        {
+            e.Handled = true;
+            SoundService.Play(Sfx.Click);
+            clear();
+        };
+        var line = new DockPanel();
+        DockPanel.SetDock(x, Dock.Right);
+        line.Children.Add(x);
+        var left = new StackPanel { Orientation = Orientation.Horizontal };
+        left.Children.Add(icon);
+        left.Children.Add(name);
+        left.Children.Add(count);
+        left.Children.Add(chevron);
+        line.Children.Add(left);
+        var head = new Border { Child = line, Padding = new Thickness(6, 3, 4, 3), Margin = new Thickness(0, 6, 0, 2), CornerRadius = new CornerRadius(9), Background = Brushes.Transparent, Cursor = Cursors.Hand };
+        head.MouseEnter += (_, _) => head.Background = White(0x0A);
+        head.MouseLeave += (_, _) => head.Background = Brushes.Transparent;
+        head.MouseLeftButtonUp += (_, e) =>
+        {
+            e.Handled = true;
+            SoundService.Play(Sfx.Click);
+            FoldNoticeGroup(app, body, turn);
+        };
+        return head;
+    }
+
+    /// <summary>Folds an app's notifications away under its line, or opens them again; the island follows.</summary>
+    private void FoldNoticeGroup(string app, Border body, RotateTransform turn)
+    {
+        bool fold = !_noticeFolded.Remove(app);
+        if (fold) _noticeFolded.Add(app);
+        var time = TimeSpan.FromMilliseconds(Dur(280));
+        var ease = new CubicEase { EasingMode = EasingMode.EaseInOut };
+        turn.BeginAnimation(RotateTransform.AngleProperty, new DoubleAnimation(fold ? -90 : 0, time) { EasingFunction = ease });
+        double from = body.ActualHeight;
+        body.Child.Measure(new Size(440, double.PositiveInfinity));
+        double full = body.Child.DesiredSize.Height;
+        // the island measures the final height first (the animation then starts from where it is), so both move together
+        body.BeginAnimation(HeightProperty, null);
+        body.Height = fold ? 0 : full;
+        ResizeSubPage();
+        var grow = new DoubleAnimation(from, fold ? 0 : full, time) { EasingFunction = ease };
+        if (!fold) grow.Completed += (_, _) => { if (!_noticeFolded.Contains(app)) { body.BeginAnimation(HeightProperty, null); body.Height = double.NaN; } };
+        body.BeginAnimation(HeightProperty, grow);
+    }
+
+    /// <summary>
+    /// Clears these notifications: their lines slide away one after the other (unless a swipe already took them), then
+    /// "Desfazer" stays for a few seconds at the top. A new clear makes the one before final.
+    /// </summary>
+    private async void ClearNotices(List<Notice> gone, string text, List<FrameworkElement>? slide)
+    {
+        if (slide is { Count: > 0 })
+        {
+            double stagger = Dur(40), fade = Dur(200);
+            for (int i = 0; i < slide.Count; i++) SlideRowAway(slide[i], TimeSpan.FromMilliseconds(i * stagger), TimeSpan.FromMilliseconds(fade));
+            await Task.Delay((int)((slide.Count - 1) * stagger + fade));
+        }
+        _noticeCleared = gone;
+        _noticeClearedText = text;
+        _noticeUndoUntil = DateTime.UtcNow.AddSeconds(NoticeUndoSeconds);
+        _noticeUndoTimer?.Stop();
+        _noticeUndoTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(NoticeUndoSeconds) };
+        _noticeUndoTimer.Tick += (_, _) => EndNoticeUndo();
+        _noticeUndoTimer.Start();
+        _notices.Remove(gone); // (the page is drawn again, with the undo line on top)
+    }
+
+    private void EndNoticeUndo()
+    {
+        _noticeUndoTimer?.Stop();
+        if (_noticeCleared == null) return;
+        _noticeCleared = null;
+        if (NoticesPageOpen) RefreshSubPage(NoticesPage);
+    }
+
+    /// <summary>"Notificações do WhatsApp limpas", a bar running out, and the way back (like the downloads').</summary>
+    private FrameworkElement NoticeUndoRow()
+    {
+        var grid = new Grid { Height = 40, Margin = new Thickness(4, 0, 2, 2) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition());
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var left = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        left.Children.Add(new TextBlock { Text = _noticeClearedText, FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, TextTrimming = TextTrimming.CharacterEllipsis });
+        var scale = new ScaleTransform(1, 1);
+        left.Children.Add(new Border { Height = 3, CornerRadius = new CornerRadius(1.5), Margin = new Thickness(0, 6, 14, 0), Background = White(0xCC), RenderTransform = scale });
+        // from where it really is: the page is drawn again whenever something arrives
+        double secondsLeft = Math.Clamp((_noticeUndoUntil - DateTime.UtcNow).TotalSeconds, 0, NoticeUndoSeconds);
+        scale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(secondsLeft / NoticeUndoSeconds, 0, TimeSpan.FromSeconds(secondsLeft)));
+        grid.Children.Add(left);
+        var undo = ListPill("", Loc.T("dl.undo"), false, () =>
+        {
+            var back = _noticeCleared;
+            _noticeCleared = null;
+            _noticeUndoTimer?.Stop();
+            if (back != null) _notices.Restore(back); // (draws the page again)
+        });
+        Grid.SetColumn(undo, 1);
+        grid.Children.Add(undo);
+        return grid;
+    }
+
+    /// <summary>
+    /// Drag <paramref name="handle"/> sideways: <paramref name="parts"/> follow it, fading; let go far enough and they fly
+    /// out and <paramref name="clear"/> runs, otherwise they spring back. A press that didn't move stays a click.
+    /// </summary>
+    private void SwipeToClear(FrameworkElement handle, Func<IEnumerable<FrameworkElement>> parts, Action clear, Func<bool>? active = null)
+    {
+        Point? start = null;
+        bool swiping = false;
+        double dx = 0;
+
+        TranslateTransform Shift(FrameworkElement p)
+        {
+            if (p.RenderTransform is not TranslateTransform t) p.RenderTransform = t = new TranslateTransform();
+            return t;
+        }
+        void Show(double x)
+        {
+            foreach (var p in parts())
+            {
+                var t = Shift(p);
+                t.BeginAnimation(TranslateTransform.XProperty, null);
+                t.X = x;
+                p.BeginAnimation(OpacityProperty, null);
+                p.Opacity = 1 - Math.Min(0.75, Math.Abs(x) / 180);
+            }
+        }
+        void Settle(bool away)
+        {
+            var time = TimeSpan.FromMilliseconds(Dur(away ? 170 : 240));
+            double to = away ? Math.Sign(dx) * 460 : 0;
+            bool first = true;
+            foreach (var p in parts())
+            {
+                var move = new DoubleAnimation(to, time) { EasingFunction = away ? new CubicEase { EasingMode = EasingMode.EaseIn } : new BackEase { Amplitude = 0.3, EasingMode = EasingMode.EaseOut } };
+                if (away && first) move.Completed += (_, _) => clear();
+                first = false;
+                Shift(p).BeginAnimation(TranslateTransform.XProperty, move);
+                p.BeginAnimation(OpacityProperty, new DoubleAnimation(away ? 0 : 1, time));
+            }
+        }
+
+        handle.PreviewMouseLeftButtonDown += (_, e) =>
+        {
+            if (active?.Invoke() == false)
+            {
+                start = null; // (a stack: open, each card swipes alone; closed, the whole stack)
+                return;
+            }
+            start = e.GetPosition(this);
+            swiping = false;
+            dx = 0;
+        };
+        handle.MouseMove += (_, e) =>
+        {
+            if (start is not Point s || e.LeftButton != MouseButtonState.Pressed) return;
+            dx = e.GetPosition(this).X - s.X;
+            if (!swiping)
+            {
+                if (Math.Abs(dx) < 8) return; // a click, not a swipe
+                swiping = true;
+                handle.CaptureMouse();
+            }
+            Show(dx);
+        };
+        handle.PreviewMouseLeftButtonUp += (_, e) =>
+        {
+            start = null;
+            if (!swiping) return;
+            e.Handled = true; // not a click: nothing opens
+            swiping = false;
+            handle.ReleaseMouseCapture();
+            bool away = Math.Abs(dx) > NoticeSwipeAway;
+            if (away) SoundService.Play(Sfx.Click);
+            Settle(away);
+        };
+        handle.LostMouseCapture += (_, _) =>
+        {
+            if (!swiping) return;
+            swiping = false;
+            start = null;
+            Settle(false);
+        };
     }
 
     /// <summary>
@@ -302,7 +669,7 @@ public partial class MainWindow
         t.Start();
     }
 
-    private Border NoticeRow(Notice n)
+    private Border NoticeRow(Notice n, FrameworkElement? badge = null)
     {
         var avatar = n.CalendarType is CalType calType ? CalNoticeIcon(calType)
             : new Border { Width = 30, Height = 30, CornerRadius = new CornerRadius(n.IsPhoto ? 15 : 8), VerticalAlignment = VerticalAlignment.Center,
@@ -317,14 +684,24 @@ public partial class MainWindow
         grid.ColumnDefinitions.Add(new ColumnDefinition());
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         Grid.SetColumn(texts, 1);
-        Grid.SetColumn(when, 2);
+        FrameworkElement right = when;
+        if (badge != null)
+        {
+            // on the time's line, before it: the time stays where the other rows have theirs
+            var line = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            badge.VerticalAlignment = VerticalAlignment.Center;
+            badge.Margin = new Thickness(0, 0, 6, 0);
+            line.Children.Add(badge);
+            line.Children.Add(when);
+            right = line;
+        }
+        Grid.SetColumn(right, 2);
         grid.Children.Add(avatar);
         grid.Children.Add(texts);
-        grid.Children.Add(when);
+        grid.Children.Add(right);
         var row = new Border { Child = grid, Padding = new Thickness(8, 6, 8, 6), Margin = new Thickness(0, 0, 0, 2), CornerRadius = new CornerRadius(12),
             Background = Brushes.Transparent, Cursor = Cursors.Hand, ToolTip = Loc.F("notif.open", n.App) };
-        row.MouseEnter += (_, _) => row.Background = White(0x0E);
-        row.MouseLeave += (_, _) => row.Background = Brushes.Transparent;
+        SoftHover(row);
         row.MouseLeftButtonUp += (_, e) =>
         {
             e.Handled = true;
@@ -333,4 +710,5 @@ public partial class MainWindow
         };
         return row;
     }
+
 }

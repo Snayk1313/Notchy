@@ -28,7 +28,29 @@ public sealed class MediaService
     public event Action? MediaChanged;
     public event Action? PlaybackChanged;
 
-    public bool HasSession => _session != null;
+    public bool HasSession => _session != null || Faked;
+
+#if DEBUG
+    private bool _fake;
+    private bool Faked => _fake;
+
+    /// <summary>Snapshot tests: a made-up song, playing or paused (the real players are ignored from then on).</summary>
+    public void Fake(string title, string artist, bool playing)
+    {
+        bool newSong = !_fake || title != Title || artist != Artist;
+        _fake = true;
+        _basePos = Position;
+        _baseStamp = DateTime.UtcNow;
+        Title = title;
+        Artist = artist;
+        IsPlaying = playing;
+        Duration = TimeSpan.FromMinutes(4);
+        if (newSong) MediaChanged?.Invoke(); // (a pause alone is only a playback change, like a real player's)
+        PlaybackChanged?.Invoke();
+    }
+#else
+    private const bool Faked = false;
+#endif
     public string Title { get; private set; } = "";
     public string Artist { get; private set; } = "";
     public string Album { get; private set; } = "";
@@ -75,7 +97,7 @@ public sealed class MediaService
     /// <summary>Chooses which session to follow: something playing wins, otherwise the current one.</summary>
     public void PickSession()
     {
-        if (_manager == null) return;
+        if (_manager == null || Faked) return;
         GlobalSystemMediaTransportControlsSession? best;
         try
         {
@@ -180,7 +202,7 @@ public sealed class MediaService
     private async Task RefreshMediaAsync()
     {
         var s = _session;
-        if (s == null) return;
+        if (s == null || Faked) return;
         int version = ++_mediaVersion;
 
         GlobalSystemMediaTransportControlsSessionMediaProperties? p;
@@ -244,7 +266,7 @@ public sealed class MediaService
     private void RefreshPlayback()
     {
         var s = _session;
-        if (s == null) return;
+        if (s == null || Faked) return;
         try
         {
             bool playing = IsSessionPlaying(s);
@@ -265,7 +287,7 @@ public sealed class MediaService
     private void RefreshTimeline()
     {
         var s = _session;
-        if (s == null) return;
+        if (s == null || Faked) return;
         try
         {
             var t = s.GetTimelineProperties();

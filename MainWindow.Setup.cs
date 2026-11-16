@@ -41,19 +41,45 @@ public partial class MainWindow
         _face.React(Mood.Happy, SetupSmileSeconds);
     }
 
-    /// <summary>The tour: the island opens and lights what each tip is about (-1 puts it back).</summary>
-    internal void SetupTour(int tip)
+    /// <summary>The weather now, for the assistant's picture.</summary>
+    internal WeatherNow? WeatherForSetup => _weather.Current;
+
+    /// <summary>"Guardar o que eu copiar" was switched on in the assistant: the island shows what a copy looks like.</summary>
+    internal void SetupClipDemo()
     {
-        _forcedState = tip >= 0 ? IslandState.Expanded : null;
-        UpdateState();
-        LightDate(tip == 1);
-        LightBell(tip == 2);
+        if (_state is not (IslandState.Idle or IslandState.Compact)) return;
+        GlowOutline(ClipColor);
+        BlinkOnce();
+    }
+
+    /// <summary>
+    /// The tour: the real island shows what each tip is about (null puts it back). It opens for most of them: on the home tab,
+    /// lighting the date or the bell, or on Copiados or the Prateleira; for the volume it closes and shows the bar.
+    /// </summary>
+    internal void SetupTour(string? tip)
+    {
+        bool open = tip is "open" or "date" or "bell" or "clip" or "shelf";
+        _forcedState = open ? IslandState.Expanded : null;
+        UpdateState(); // (opening picks a tab by itself: the tip's one comes right after)
+        if (open)
+        {
+            var tab = tip == "clip" ? Tab.Clip : tip == "shelf" ? Tab.Shelf : Tab.Home;
+            if (_tab != tab || _subOpen) SelectTab(tab, animate: true);
+        }
+        else if (tip == "volume" && _audio.TryGet(out float volume, out bool muted))
+        {
+            ShowVolumeLevel(volume, muted);
+            _volumeOsdUntil = DateTime.UtcNow.AddSeconds(2.3);
+            UpdateState();
+        }
+        LightDate(tip == "date");
+        LightBell(tip == "bell");
     }
 
     internal async void SetupEnded(bool celebrate)
     {
         _setupOpen = false;
-        SetupTour(-1);
+        SetupTour(null);
         if (!celebrate) return;
         SoundService.Play(Sfx.Done);
         await Task.Delay(ConfettiDelayMs); // the island has closed by then

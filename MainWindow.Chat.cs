@@ -858,11 +858,10 @@ public partial class MainWindow
         else
             RenderAnswer(text, streaming: false, error: isError);
         _hasConversation = !isError;
-        _copyButton.Visibility = isError ? Visibility.Collapsed : Visibility.Visible;
+        FadeVisible(_copyButton, !isError);
         // spelling and translation answer with just the new text, so it can go back where it came from
-        _replaceButton.Visibility = !isError && _lastAction is "spelling" or "translate" && _ctxText != null && _ctxImage == null &&
-                                    (_ctxText.FromSelection || _ctxText.Editable) && _ctxText.Window != IntPtr.Zero
-            ? Visibility.Visible : Visibility.Collapsed;
+        FadeVisible(_replaceButton, !isError && _lastAction is "spelling" or "translate" && _ctxText != null && _ctxImage == null &&
+                                    (_ctxText.FromSelection || _ctxText.Editable) && _ctxText.Window != IntPtr.Zero);
         if (_lastAction is "spelling" or "translate")
             ChatLog($"   finished: error={isError} replace={_replaceButton.Visibility} (fromSelection={_ctxText?.FromSelection}, editable={_ctxText?.Editable}, sourceWindow={(_ctxText?.Window ?? IntPtr.Zero) != IntPtr.Zero})");
 

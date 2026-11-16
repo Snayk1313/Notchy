@@ -199,10 +199,13 @@
                 Margin="0,-30,0,0" Width="120" Height="60" Background="Black" CornerRadius="15"
                 RenderTransformOrigin="0.5,0"
                 MouseEnter="Island_MouseEnter" MouseLeave="Island_MouseLeave"
-                MouseLeftButtonUp="Island_MouseLeftButtonUp" MouseWheel="Island_MouseWheel"
+                MouseLeftButtonUp="Island_MouseLeftButtonUp" MouseWheel="Island_MouseWheel" PreviewMouseWheel="Island_PreviewMouseWheel"
                 AllowDrop="True" DragEnter="Island_DragOver" DragOver="Island_DragOver" Drop="Island_Drop">
             <Border.RenderTransform>
-                <ScaleTransform x:Name="IslandScale" />
+                <TransformGroup>
+                    <ScaleTransform x:Name="IslandScale" />
+                    <TranslateTransform x:Name="IslandDrop" />
+                </TransformGroup>
             </Border.RenderTransform>
             <Grid x:Name="IslandContent">
                 <Border x:Name="AccentGlow" Opacity="0" />
@@ -899,6 +902,8 @@
                                     <StackPanel x:Name="DownloadsList" />
                                 </ScrollViewer>
                             </Grid>
+
+                            <Grid x:Name="ClipTab" Height="240" VerticalAlignment="Top" Visibility="Collapsed" />
 
                             <Grid x:Name="ShelfTab" Height="118" VerticalAlignment="Top" Visibility="Collapsed">
                                 <Grid.RowDefinitions>

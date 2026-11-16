@@ -50,10 +50,7 @@ public partial class MainWindow
         if (happy != _shelfHappyShown)
         {
             _shelfHappyShown = happy;
-            var eyes = happy ? Visibility.Collapsed : Visibility.Visible;
-            var smile = happy ? Visibility.Visible : Visibility.Collapsed;
-            ShelfEyeL.Visibility = ShelfEyeR.Visibility = eyes;
-            ShelfHappyL.Visibility = ShelfHappyR.Visibility = smile;
+            FlipEyes(happy, ShelfEyeL, ShelfEyeR, ShelfHappyL, ShelfHappyR);
         }
 
         var pose = EyePose.Rest;

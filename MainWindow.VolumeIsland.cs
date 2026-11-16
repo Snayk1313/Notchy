@@ -168,7 +168,7 @@ public partial class MainWindow
         _levelKind = LevelKind.Brightness;
         _levelTarget = value;
         _levelMuted = false;
-        if (!_levelDragging) _volumeOsdUntil = DateTime.UtcNow.AddSeconds(1.6);
+        if (!_levelDragging) _volumeOsdUntil = DateTime.UtcNow.AddSeconds(_hiddenForFullscreen ? 1.2 : 1.6);
         OsdHider.HideWindowsOsd();
         UpdateState();
     }
@@ -239,6 +239,65 @@ public partial class MainWindow
         _levelEyesSlide.X = 0;
         VolumePanel.Opacity = 0;
         IdlePanel.Opacity = 1;
+    }
+
+    // =====================================================================================
+    // full screen: only the bar, coming down from the top edge and going back up
+    // =====================================================================================
+
+    private bool _fsRising;
+
+    /// <summary>The outline lights (Claude, download, focus) go out at once: no island on screen, or only the bar over a full-screen game.</summary>
+    private bool IslandLightsOff => Island.Visibility != Visibility.Visible || _hiddenForFullscreen && (_state == IslandState.Volume || _fsRising);
+
+    private double FsHiddenY => -(Island.Margin.Top + Island.Height * IslandScale.ScaleY + 12); // + the shadow
+
+    /// <summary>The bar alone, already its own size, slides down; called back while going up it turns around where it is.</summary>
+    private void DropVolumeBar()
+    {
+        bool fromHidden = Island.Visibility != Visibility.Visible;
+        _fsRising = false;
+        var size = LevelSize();
+        SetIslandSizeNow(size.Width, size.Height + _topHidden);
+        VolumePanel.Width = size.Width;
+        VolumePanel.Height = size.Height;
+        foreach (var p in new UIElement[] { IdlePanel, CompactPanel, _budsPanel, _noticePanel, _calPanel, _ringPanel, WhatsNewPanel, ClaudePanel, TransferPanel, ExpandedPanel, AccentGlow })
+        {
+            p.BeginAnimation(OpacityProperty, null);
+            p.Opacity = 0;
+        }
+        VolumePanel.BeginAnimation(OpacityProperty, null);
+        VolumePanel.Opacity = 1;
+        _arriveAt = _departAt = -100; // no eyes sliding in from the empty island: there's none on screen
+        _levelEyesSlide.X = 0;
+        if (fromHidden)
+        {
+            IslandDrop.BeginAnimation(TranslateTransform.YProperty, null);
+            IslandDrop.Y = FsHiddenY;
+        }
+        ApplyFullscreenHide();
+        IslandDrop.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(Dur(320)))
+            { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+    }
+
+    /// <summary>The same move played backwards; then the island hides and takes <paramref name="next"/> out of sight.</summary>
+    private void RiseVolumeBar(IslandState next)
+    {
+        _state = next;
+        _fsRising = true;
+        var up = new DoubleAnimation(FsHiddenY, TimeSpan.FromMilliseconds(Dur(260))) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn } };
+        up.Completed += (_, _) =>
+        {
+            if (!_fsRising) return; // called back down meanwhile
+            _fsRising = false;
+            var target = _state;
+            _state = IslandState.Volume;
+            if (_hiddenForFullscreen) Island.Visibility = Visibility.Hidden;
+            IslandDrop.BeginAnimation(TranslateTransform.YProperty, null);
+            IslandDrop.Y = 0;
+            ApplyState(target, playSound: false);
+        };
+        IslandDrop.BeginAnimation(TranslateTransform.YProperty, up);
     }
 
     // =====================================================================================

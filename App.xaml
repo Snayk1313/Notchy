@@ -214,10 +214,30 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ContextMenu">
-                        <Border Background="#F01C1C1F" BorderBrush="#26FFFFFF" BorderThickness="1" CornerRadius="12" Padding="5"
-                                MinWidth="170">
+                        <Border x:Name="box" Background="#F01C1C1F" BorderBrush="#26FFFFFF" BorderThickness="1" CornerRadius="12" Padding="5"
+                                MinWidth="170" RenderTransformOrigin="0.5,0">
+                            <Border.RenderTransform>
+                                <ScaleTransform />
+                            </Border.RenderTransform>
                             <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle" />
                         </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsOpen" Value="True">
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="box" Storyboard.TargetProperty="Opacity" From="0" To="1" Duration="0:0:0.14" />
+                                            <DoubleAnimation Storyboard.TargetName="box" Storyboard.TargetProperty="RenderTransform.ScaleX" From="0.92" To="1" Duration="0:0:0.2">
+                                                <DoubleAnimation.EasingFunction><BackEase Amplitude="0.4" EasingMode="EaseOut" /></DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                            <DoubleAnimation Storyboard.TargetName="box" Storyboard.TargetProperty="RenderTransform.ScaleY" From="0.92" To="1" Duration="0:0:0.2">
+                                                <DoubleAnimation.EasingFunction><BackEase Amplitude="0.4" EasingMode="EaseOut" /></DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -232,7 +252,10 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="MenuItem">
-                        <Border x:Name="bd" Background="Transparent" CornerRadius="8" Padding="10,7">
+                        <Border x:Name="bd" CornerRadius="8" Padding="10,7">
+                            <Border.Background>
+                                <SolidColorBrush Color="#00FFFFFF" />
+                            </Border.Background>
                             <StackPanel Orientation="Horizontal">
                                 <ContentPresenter ContentSource="Icon" Width="22" VerticalAlignment="Center" TextElement.FontFamily="{StaticResource IconFont}" />
                                 <ContentPresenter ContentSource="Header" VerticalAlignment="Center" />
@@ -240,7 +263,20 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsHighlighted" Value="True">
-                                <Setter TargetName="bd" Property="Background" Value="#22FFFFFF" />
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <ColorAnimation Storyboard.TargetName="bd" Storyboard.TargetProperty="Background.Color" To="#22FFFFFF" Duration="0:0:0.11" />
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <ColorAnimation Storyboard.TargetName="bd" Storyboard.TargetProperty="Background.Color" To="#00FFFFFF" Duration="0:0:0.18" />
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>

@@ -10,7 +10,7 @@ namespace Notchy;
 public static class WhatsNew
 {
     /// <summary>The version these notes are for (major.minor).</summary>
-    public const string Version = "2.2";
+    public const string Version = "2.3";
 
     public sealed record Highlight(string Art, Color Color, string TagPt, string TagEn, string TitlePt, string TitleEn, string TextPt, string TextEn)
     {
@@ -27,101 +27,116 @@ public static class WhatsNew
 
     public static readonly Highlight[] Highlights =
     {
-        new("calendar", Color.FromRgb(0x7C, 0xC8, 0xFF), "Novo", "New", "Calendário", "Calendar",
-            "Clique na data da ilha para ver o mês, criar eventos com aviso e acompanhar feriados e aniversários.",
-            "Click the date on the island to see the month, create events with reminders and follow holidays and birthdays."),
-        new("chat", Color.FromRgb(0xFF, 0xAA, 0x4C), "Novo", "New", "Chat grátis", "Free Chat",
-            "O Notchy Chat agora também funciona com o Gemini, usando uma chave grátis do Google.",
-            "Notchy Chat now also works with Gemini, using a free key from Google."),
-        new("notices", Color.FromRgb(0xFF, 0x7E, 0xB6), "Novo", "New", "Notificações só no Notchy", "Notifications only on Notchy",
-            "Avisos e sons do Windows ficam em silêncio e tudo aparece na ilha, até em tela cheia, com um som próprio.",
-            "Windows' pop-ups and sounds stay quiet and everything shows on the island, even in full screen, with its own sound."),
-        new("settings", Color.FromRgb(0xA7, 0x8B, 0xFA), "Melhor", "Better", "Configurações organizadas", "Tidier settings",
-            "Novas abas para Notificações, Calendário e clima, Som e dispositivos e Notchy Chat.",
-            "New tabs for Notifications, Calendar and weather, Sound and devices and Notchy Chat."),
+        new("clip", Color.FromRgb(0x8F, 0xB8, 0xFF), "Novo", "New", "Histórico de cópias", "Clipboard history",
+            "Tudo o que você copia fica numa aba da ilha. Win + Alt + V abre de qualquer lugar e Enter cola onde você estava.",
+            "Everything you copy stays in a tab on the island. Win + Alt + V opens it from anywhere and Enter pastes where you were."),
+        new("calendar", Color.FromRgb(0x7C, 0xC8, 0xFF), "Novo", "New", "Agendas conectadas", "Connected calendars",
+            "Os eventos do Google Agenda, Outlook ou iCloud aparecem no calendário da ilha, com a cor de cada agenda.",
+            "Events from Google Calendar, Outlook or iCloud show on the island's calendar, in each calendar's colour."),
+        new("notices", Color.FromRgb(0xFF, 0x7E, 0xB6), "Melhor", "Better", "Notificações por conversa", "Notifications by conversation",
+            "Mensagens da mesma pessoa ficam numa pilha. Limpe um app, uma conversa ou uma por uma.",
+            "Messages from the same person stack up. Clear an app, a conversation or one at a time."),
+        new("level", Color.FromRgb(0xFF, 0xFF, 0xFF), "Melhor", "Better", "Volume em tela cheia", "Volume in full screen",
+            "Em jogos e vídeos, a barra de volume e brilho desce sozinha do topo, sem mostrar a ilha.",
+            "In games and videos, the volume and brightness bar drops down on its own, without showing the island."),
     };
 
     public static readonly Section[] Sections =
     {
-        new("Calendário (novo)", "Calendar (new)",
+        new("Histórico de cópias (novo)", "Clipboard history (new)",
             new[]
             {
-                "Clique na data da ilha para abrir o calendário, com os eventos do dia e os próximos.",
-                "Eventos com repetição, aviso antes, lembrar de novo e cores por tipo.",
-                "Aniversários com idade, feriados do Brasil e festinha com confete.",
-                "Clique no mês ou no ano para pular rapidamente de data."
+                "Uma aba nova com textos, links, cores, imagens e arquivos que você copiou. Busque, filtre por tipo, fixe no topo e copie de novo com um clique.",
+                "Win + Alt + V abre o histórico de qualquer lugar: escolha com as setas e aperte Enter para colar no app que você estava usando.",
+                "O texto das imagens copiadas é lido, então dá para achar um print pela busca.",
+                "Nada é guardado de gerenciadores de senha, janelas anônimas e do que o Windows marca para não guardar. Dá para pausar e escolher apps ignorados.",
+                "Com a ilha fechada, o contorno brilha um instante quando você copia algo."
             },
             new[]
             {
-                "Click the date on the island to open the calendar, with today's and upcoming events.",
-                "Events with repeats, early reminders, snooze and colors by type.",
-                "Birthdays with age, Brazilian holidays and a little confetti party.",
-                "Click the month or the year to jump quickly to a date."
+                "A new tab with the texts, links, colours, images and files you copied. Search, filter by kind, pin to the top and copy again with a click.",
+                "Win + Alt + V opens the history from anywhere: choose with the arrows and press Enter to paste into the app you were using.",
+                "The text in copied images is read, so you can find a screenshot by searching.",
+                "Nothing is kept from password managers, private windows or what Windows marks as not to keep. You can pause it and choose apps to ignore.",
+                "With the island closed, its outline glows for a moment when you copy something."
             }),
-        new("Notchy Chat", "Notchy Chat",
+        new("Calendário", "Calendar",
             new[]
             {
-                "Opção de usar o Gemini com uma chave grátis do Google, para quem não tem o Claude Code.",
-                "Aba própria nas Configurações, com quem responde e o idioma da tradução."
+                "Conecte o Google Agenda, Outlook ou iCloud em Configurações → Calendário e clima, com um passo a passo para cada um.",
+                "Os eventos de fora aparecem com a cor e o nome da agenda, e os avisos podem ser ligados ou desligados por agenda.",
+                "Mude o dia de um evento pelo mini calendário do editor ou arrastando o evento para outro dia."
             },
             new[]
             {
-                "An option to use Gemini with a free key from Google, for those without Claude Code.",
-                "A tab of its own in Settings, with who answers and the translation language."
+                "Connect Google Calendar, Outlook or iCloud in Settings → Calendar and weather, with step-by-step help for each.",
+                "Their events show in the calendar's colour and with its name, and reminders can be turned on or off per calendar.",
+                "Change an event's day with the editor's mini calendar or by dragging the event to another day."
             }),
         new("Notificações", "Notifications",
             new[]
             {
-                "Nova opção Só no Notchy: o aviso e o som do Windows somem, e as notificações continuam na central.",
-                "O cartão pode aparecer em tela cheia, com o mesmo fundo da ilha.",
-                "Som próprio para notificações, com opção de ligar e desligar.",
-                "Programas como o Lightshot agora mostram o ícone."
+                "Mensagens da mesma conversa ficam numa pilha com o número delas, e os apps aparecem com o próprio ícone.",
+                "Limpe um app inteiro, uma conversa ou uma notificação arrastando para o lado, sempre com Desfazer.",
+                "A lista ganhou barra de rolagem quando fica comprida."
             },
             new[]
             {
-                "A new Only on Notchy option: Windows' pop-up and sound go away, and notifications stay in the notification center.",
-                "The card can show in full screen, with the same background as the island.",
-                "A sound of its own for notifications, which you can turn on and off.",
-                "Programs like Lightshot now show their icon."
+                "Messages from the same conversation stack up with their count, and apps show their own icon.",
+                "Clear a whole app, a conversation or one notification by swiping it away, always with Undo.",
+                "The list got a scroll bar when it gets long."
             }),
-        new("Instalação e atualização", "Installing and updating",
+        new("Volume e tela cheia", "Volume and full screen",
             new[]
             {
-                "Quem instala do zero agora tem um assistente com idioma, aparência, notificações e mais. Dá para abrir de novo em Configurações → Geral.",
-                "O download das atualizações mostra versão, tamanho e progresso em Configurações → Sobre.",
-                "A partir da próxima atualização, a instalação aparece num cartão no estilo do Notchy."
+                "A barra de volume e brilho desce sozinha do topo e sobe de volta, sem mostrar a ilha.",
+                "Com a ilha aberta, segure Shift e gire a roda do mouse para mudar o volume.",
+                "Nova opção em Geral para mostrar alarmes e timers tocando mesmo em tela cheia."
             },
             new[]
             {
-                "New installs get an assistant with language, look, notifications and more. You can open it again in Settings → General.",
-                "Update downloads show the version, size and progress in Settings → About.",
-                "From the next update on, installing shows in a card in Notchy's own style."
+                "The volume and brightness bar drops down from the top and goes back up, without showing the island.",
+                "With the island open, hold Shift and turn the mouse wheel to change the volume.",
+                "A new option in General to show ringing alarms and timers even in full screen."
             }),
-        new("Melhorias", "Improvements",
+        new("Animações", "Animations",
             new[]
             {
-                "Pílula na página de clima para atualizar na hora, mostrando há quanto tempo foi atualizado.",
-                "Configurações reorganizadas em abas por assunto.",
-                "Clima, Spotify, letras e atualizações conectam mais rápido em redes com IPv6 lento."
+                "Ao fechar a ilha com uma página aberta, ela esmaece como as abas. Volte em até 3 segundos e ela está no mesmo lugar.",
+                "Uma página aberta de dentro de outra desliza, itens novos entram suavemente nas listas e as opções das Configurações abrem e recolhem sem pular.",
+                "A troca de música, o play e pause, os olhos virando sorriso, a troca de abas, os menus e o sininho agora se movem em vez de trocar de uma vez."
             },
             new[]
             {
-                "A pill on the weather page to refresh right away, showing how long ago it was updated.",
-                "Settings reorganized into tabs by subject.",
-                "Weather, Spotify, lyrics and updates connect faster on networks with slow IPv6."
+                "Closing the island with a page open, it fades like the tabs. Come back within 3 seconds and it's still there.",
+                "A page opened from another slides in, new items glide into lists and options in Settings open and close without jumping.",
+                "Changing songs, play and pause, the eyes turning into a smile, switching tabs, the menus and the bell now move instead of switching at once."
+            }),
+        new("Configurações e primeira abertura", "Settings and first run",
+            new[]
+            {
+                "Páginas novas Copiados e Relógio, sons do Notchy numa seção só, Spotify mais limpo depois de conectar e a barra lateral em grupos.",
+                "O assistente da primeira abertura ganhou os olhinhos, um quadro animado em cada passo, os passos de Copiados e agendas e um tour mostrado na própria ilha."
+            },
+            new[]
+            {
+                "New Clipboard and Clock pages, Notchy's sounds in one section, a cleaner Spotify once connected and the sidebar in groups.",
+                "The first-run assistant got the little eyes, an animated picture on each step, the Clipboard and calendars steps and a tour shown on the island itself."
             }),
         new("Correções", "Fixes",
             new[]
             {
-                "Pedidos de permissão do Claude não ficam mais escondidos atrás de outro chat.",
-                "Downloads pequenos que terminam antes de você escolher a pasta agora contam como concluídos.",
-                "Erros de atualização tentam de novo sozinhos e explicam o que houve."
+                "O contorno do Claude não fica mais na tela quando a barra de volume some em tela cheia.",
+                "A ilha não aparece mais por alguns segundos ao entrar em tela cheia, nem ao parar um alarme em tela cheia.",
+                "Os olhos não ficam mais por cima do nome da música.",
+                "Os botões das Configurações não ficam mais por baixo do conteúdo ao rolar."
             },
             new[]
             {
-                "Claude's permission requests no longer hide behind another chat.",
-                "Small downloads that finish before you pick the folder now count as completed.",
-                "Update errors retry on their own and explain what happened."
+                "Claude's outline no longer stays on screen when the volume bar goes away in full screen.",
+                "The island no longer shows for a few seconds when entering full screen, nor when stopping an alarm in full screen.",
+                "The eyes no longer sit over the song's name.",
+                "Settings' buttons no longer end up under the content when scrolling."
             }),
     };
 }

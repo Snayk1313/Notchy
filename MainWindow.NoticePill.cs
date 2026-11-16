@@ -413,7 +413,7 @@ public partial class MainWindow
             ShowNextNotice();
             return;
         }
-        UpdateState();
         HideAfterCard();
+        UpdateState();
     }
 }

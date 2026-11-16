@@ -135,6 +135,23 @@ public sealed class NotificationService
         HistoryChanged?.Invoke();
     }
 
+    /// <summary>Takes these out of the history (an app's, or one swiped away).</summary>
+    public void Remove(ICollection<Notice> gone)
+    {
+        History.RemoveAll(gone.Contains);
+        HistoryChanged?.Invoke();
+    }
+
+    /// <summary>"Desfazer": puts cleared ones back where they were, newest first.</summary>
+    public void Restore(IEnumerable<Notice> back)
+    {
+        foreach (var n in back)
+            if (!History.Contains(n)) History.Add(n);
+        History.Sort((a, b) => b.Time.CompareTo(a.Time));
+        if (History.Count > 60) History.RemoveRange(60, History.Count - 60);
+        HistoryChanged?.Invoke();
+    }
+
     // ---- tray apps during "Do not disturb" ----------------------------------------------
 
     /// <summary>The id Windows makes up for a program that notifies through a tray balloon (Lightshot…).</summary>
@@ -367,6 +384,9 @@ public sealed class NotificationService
         if (icon != null) _appIcons[appId] = icon; // (not found: the next notification tries again)
         return icon;
     }
+
+    /// <summary>The app's own icon (its logo, or the program's), once one of its notifications has brought it.</summary>
+    public BitmapSource? IconOf(string appId) => _appIcons.TryGetValue(appId, out var icon) ? icon : null;
 
     private System.Windows.Media.Color? AccentFor(string appId, BitmapSource? icon)
     {

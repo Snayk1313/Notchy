@@ -109,6 +109,8 @@ public partial class MainWindow
         // turn the wheel over the time or the dial
         FocusTimeRow.MouseWheel += FocusWheel;
         FocusDial.MouseWheel += FocusWheel;
+        _wheelUsers.Add(FocusTimeRow);
+        _wheelUsers.Add(FocusDial);
 
         // what you're focusing on (typing needs the window to take focus for a moment, like the chat)
         FocusTaskBox.Text = S.FocusTask ?? "";
@@ -319,8 +321,8 @@ public partial class MainWindow
             : _focus.Started ? Loc.T("focus.paused") : Loc.T("focus.ready");
         HomeFocusSub.Text = sub;
         string glyph = _focus.Running ? "" : "";
-        FocusPlayButton.Content = glyph;
-        HomeFocusPlay.Content = glyph;
+        SwapGlyph(FocusPlayButton, glyph);
+        SwapGlyph(HomeFocusPlay, glyph);
 
         // the rest is the Focus tab itself: only while it's the tab on screen (SelectTab refreshes it when it
         // comes up); the minutes then show without rolling, as they're not "changing" in front of you
@@ -527,11 +529,12 @@ public partial class MainWindow
         var buds = _state == IslandState.Compact ? BudsLight() : null; // Bluetooth earbuds: the battery level
         bool cal = _compactMode == CompactMode.CalNotice; // a calendar notice: all the way round, in the event's colour
         bool noticeNow = _compactMode == CompactMode.Notice; // a notification: a soft line all the way round, in the app's colour
-        bool show = _state == IslandState.Compact && (_compactMode == CompactMode.Focus || timer || cal || noticeNow || buds != null) && !_introActive && !_islandMorphing;
+        bool show = _state == IslandState.Compact && (_compactMode == CompactMode.Focus || timer || cal || noticeNow || buds != null) && !_introActive && !_islandMorphing && !IslandLightsOff;
         if (show) _lightIsNotice = noticeNow; // (while fading out it keeps the look it had: no flash of another style)
         bool notice = _lightIsNotice;
         double k = Ease(Math.Clamp(0.14 / Math.Max(0.3, S.SpeedFactor), 0.05, 0.5));
         _focusLightOpacity += ((show ? 1 : 0) - _focusLightOpacity) * k;
+        if (IslandLightsOff) _focusLightOpacity = 0;
         if (_focusLightOpacity < 0.01 && !show)
         {
             if (FocusLight.Visibility == Visibility.Visible) FocusLight.Visibility = FocusTrack.Visibility = Visibility.Collapsed;

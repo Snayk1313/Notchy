@@ -87,6 +87,7 @@ public partial class MainWindow
         ClockTab.Children.Add(_alarmPage);
         ClockTab.Background = Brushes.Transparent; // the wheel works anywhere on the tab
         ClockTab.MouseWheel += ClockTab_MouseWheel;
+        _wheelUsers.Add(ClockTab); // (the wheel goes between the timer and the alarms)
         PlaceClockPages(animate: false);
     }
 
@@ -587,7 +588,7 @@ public partial class MainWindow
         var remaining = sel?.Remaining ?? TimeSpan.FromMinutes(S.TimerMinutes);
         _clockTime.Text = FormatTimer(remaining);
         _clockSub.Text = sel == null ? Loc.T("clock.set") : sel.Running ? Loc.T("clock.left") : Loc.T("clock.paused");
-        _clockPlay.Content = sel?.Running == true ? "" : "";
+        SwapGlyph(_clockPlay, sel?.Running == true ? "" : "");
         _clockArc.Data = ArcGeometry(52, 44.5, sel?.LeftShare ?? 1);
         if (!_clockName.IsKeyboardFocused)
         {

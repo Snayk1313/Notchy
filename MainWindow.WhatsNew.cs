@@ -461,6 +461,34 @@ public partial class MainWindow
                 });
                 break;
             }
+            case "clip":
+            {
+                // the island's outline glowing as something is copied, and the copy sliding into the list below it
+                c.ClipToBounds = true;
+                var isl = Pill(36, 2, 68, 24, Brushes.Black);
+                isl.Stroke = new SolidColorBrush(color);
+                isl.StrokeThickness = 1.6;
+                isl.Effect = glow;
+                Eyes(70, 14, Colors.White, 5, 8);
+                var rows = new List<(Rectangle thumb, Rectangle line)>();
+                for (int i = 0; i < 3; i++)
+                    rows.Add((Pill(22, 36 + i * 15, 11, 11, new SolidColorBrush(Color.FromArgb(0x40, 255, 255, 255))),
+                              Pill(40, 39 + i * 15, 78 - i * 14, 5, new SolidColorBrush(Color.FromArgb(0x90, 255, 255, 255)))));
+                var slide = new TranslateTransform();
+                foreach (var (thumb, line) in rows) { thumb.RenderTransform = slide; line.RenderTransform = slide; }
+                rows[0].thumb.Fill = new SolidColorBrush(color);
+                static double Smooth(double a) => a * a * (3 - 2 * a);
+                _newsArtFrames.Add(t =>
+                {
+                    double p = t % 3.2 / 3.2;
+                    // copied: a flash on the outline, then the list makes room and the new one fades in on top
+                    isl.StrokeThickness = p < 0.25 ? 1.6 + 1.2 * Math.Sin(p / 0.25 * Math.PI) : 0.01;
+                    double come = p < 0.2 ? 0 : p < 0.45 ? Smooth((p - 0.2) / 0.25) : 1;
+                    slide.Y = -15 * (1 - come);
+                    rows[0].thumb.Opacity = rows[0].line.Opacity = come;
+                });
+                break;
+            }
             case "calendar":
             {
                 // the month, with the day of the event lit up and walking along

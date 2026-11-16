@@ -17,7 +17,7 @@ namespace Notchy;
 public partial class MainWindow : Window
 {
     private enum IslandState { None, Idle, Compact, Volume, Expanded }
-    private enum Tab { Home, Claude, Music, Chat, Focus, Clock, Shelf, Downloads, News }
+    private enum Tab { Home, Claude, Music, Chat, Focus, Clock, Shelf, Clip, Downloads, News }
     private enum CompactMode { None, Music, MusicPaused, Claude, ClaudeDone, ClaudeAttention, Focus, FocusDone, Battery, BatteryLow, Update, Transfer, TransferDone, TransferFailed, WhatsNew, Timer, TimerRing, Buds, BudsLow, BudsOff, Notice, CalNotice }
 
     private static readonly Color ClaudeColor = Color.FromRgb(0xE8, 0x82, 0x5F);
@@ -122,6 +122,7 @@ public partial class MainWindow : Window
         InitWeather();
         InitNotices();
         InitCalendar();
+        InitClipboard();
         UpdateOutputIcon();
         _menu = BuildMenu();
         BuildNav();
@@ -261,6 +262,7 @@ public partial class MainWindow : Window
                 Tab.Claude => "Claude",
                 Tab.Music => Loc.T("tab.music"),
                 Tab.Shelf => Loc.T("tab.shelf"),
+                Tab.Clip => Loc.T("tab.clip"),
                 Tab.Downloads => Loc.T("tab.downloads"),
                 Tab.Chat => "Notchy",
                 Tab.Clock => Loc.T("tab.clock"),
@@ -304,12 +306,13 @@ public partial class MainWindow : Window
     {
         if (_introActive) return; // the opening animation hands over when it ends
         IslandState next;
-        bool ringing = _ring != null && !_hiddenForFullscreen; // a timer/alarm calling you takes the island
+        bool ringing = _ring != null && (!_hiddenForFullscreen || S.RingFullscreen); // a timer/alarm calling you takes the island
         // a notification card stays a card under the mouse (so you can click it), instead of opening the island
         ringing |= _noticeShown != null && _transient == CompactMode.Notice && DateTime.UtcNow < _transientUntil;
         ringing |= CalNoticeHolds;
         if (_forcedState is { } forced) next = forced;
-        else if (!ringing && _hoverActive || _clickOpened || _holdOpenAfterPill || _menu.IsOpen || _devicesMenuOpen?.IsOpen == true || _dragOver || _lassoing || ChatKeepsOpen) next = IslandState.Expanded;
+        else if (!ringing && WheelVolumeHolds) next = IslandState.Volume; // (Shift + wheel on the open island: the bar, for a moment)
+        else if (!ringing && _hoverActive && !FullscreenHidesIsland || _clickOpened && !FullscreenHidesIsland || _holdOpenAfterPill || _menu.IsOpen || _devicesMenuOpen?.IsOpen == true || _dragOver || _lassoing || ChatKeepsOpen || ClipKeepsOpen) next = IslandState.Expanded;
         else if (!ringing && DateTime.UtcNow < _volumeOsdUntil || !ringing && (_state == IslandState.Volume && (_volHover || _outMenuOpen?.IsOpen == true)))
             next = IslandState.Volume;
         else
@@ -345,6 +348,7 @@ public partial class MainWindow : Window
         Tab.Claude => 150,
         Tab.Music => 186 + (_lyricTwoLines ? LyricExtraHeight : 0),
         Tab.Shelf => 118,
+        Tab.Clip => ClipTabHeight,
         Tab.Downloads => _dlTabHeight,
         Tab.Focus => 150,
         Tab.Clock => 150,
@@ -371,7 +375,20 @@ public partial class MainWindow : Window
 
     private void ApplyState(IslandState state, bool playSound = true)
     {
+        // full screen: the bar goes back up still drawn as the bar; the island changes once it's out of sight
+        if (_fsRising && state != IslandState.Volume)
+        {
+            _state = state;
+            return;
+        }
+        if (_hiddenForFullscreen && _state == IslandState.Volume && state != IslandState.Volume && Island.Visibility == Visibility.Visible
+            && !FullscreenCardUp)
+        {
+            RiseVolumeBar(state);
+            return;
+        }
         var prev = _state;
+        bool fsDrop = _hiddenForFullscreen && state == IslandState.Volume && prev != IslandState.Volume && (Island.Visibility != Visibility.Visible || _fsRising);
         bool expanding = state == IslandState.Expanded;
         _state = state;
 #if DEBUG
@@ -392,11 +409,19 @@ public partial class MainWindow : Window
             else if (S.TransferProgress && _compactMode == CompactMode.Transfer && ActiveTransfer?.Kind == TransferKind.Download)
                 target = Tab.Downloads;
             else if (_claude.Active?.NeedsAttention == true) target = Tab.Claude;
+            else if (_returnTab is Tab back) target = back; // (back from the volume bar: the tab it was on)
             else if (_userTab is Tab ut && (ut != Tab.Shelf || S.ShelfEnabled)) target = ut;
             else target = SmartTab();
+            // back within a moment: the page it was on (notifications, calendar…) is still there; later, the tab as usual
+            bool backToPage = _subOpen && (DateTime.UtcNow - _subLeftAt).TotalSeconds <= SubReturnSeconds && !_dlOpenRequest && !_podOpenRequest && !_dragOver;
             _podOpenRequest = false;
             _dlOpenRequest = false;
-            if (!_dragOver) SelectTab(target, animate: false);
+            _returnTab = null;
+            if (!backToPage)
+            {
+                if (!_dragOver) SelectTab(target, animate: false); // (closes the page left open)
+                else CloseSubPage(animate: false);
+            }
             if (playSound && prev != IslandState.None) SoundService.Play(Sfx.Expand);
             UpdateClock();
             MaybePulseDate();
@@ -419,12 +444,16 @@ public partial class MainWindow : Window
         Fade(TransferPanel, state == IslandState.Compact && IsTransferMode(_compactMode));
         Fade(VolumePanel, state == IslandState.Volume);
         if (state != IslandState.Volume) SetDeviceListOpen(false);
+        bool stow = !expanding && prev == IslandState.Expanded && _subOpen;
         if (!expanding)
         {
-            CloseSubPage(animate: false);
+            // a page inside the island stays as it is while the island closes (no jump back to the tab); the next opening
+            // decides: back soon, the same page; later, the tab
+            if (stow) _subLeftAt = DateTime.UtcNow;
             SetMoreOpen(false);
         }
         Fade(ExpandedPanel, expanding);
+        if (stow) StowPage();
         AccentGlow.BeginAnimation(OpacityProperty,
             new DoubleAnimation(expanding ? 1 : 0, TimeSpan.FromMilliseconds(Dur(expanding ? 420 : 160))));
         if (expanding) Dispatcher.InvokeAsync(() => MoveNavPill(false), DispatcherPriority.Loaded);
@@ -433,7 +462,8 @@ public partial class MainWindow : Window
         else if (prev == IslandState.Volume && state == IslandState.Idle) DepartToIdle();
         else if (_departAt >= 0) FinishDepart(); // somewhere else meanwhile: no eyes left behind
         // in a full-screen game the island shows just for the volume/brightness bar, then hides again
-        if (_hiddenForFullscreen && state == IslandState.Volume) ApplyFullscreenHide();
+        if (fsDrop) DropVolumeBar();
+        else if (_hiddenForFullscreen && state == IslandState.Volume) ApplyFullscreenHide();
         else if (_hiddenForFullscreen && prev == IslandState.Volume) HideAfterCard();
     }
 
@@ -581,6 +611,7 @@ public partial class MainWindow : Window
         }
 
         UpdateLyrics(pos);
+        UpdateMusicAccentFrame();
 
         if (_state == IslandState.Expanded) UpdateFace(MusicPeak());
         else if (_compactFaceOn) UpdateCompactFace();
@@ -612,11 +643,8 @@ public partial class MainWindow : Window
         if (_state == IslandState.Expanded && _tab == Tab.Downloads) UpdateDownloadsTab(texts: _slowTick && _tick % 2 == 0);
 
         if (_slowTick && _tick % 6 == 0) PollVolume();
-        if (_slowTick && _tick % 60 == 0)
-        {
-            UpdateClock();
-            CheckFullscreen();
-        }
+        if (_slowTick && _tick % 8 == 0) CheckFullscreen(); // ~4 times a second: a game going full screen hides the island right away
+        if (_slowTick && _tick % 60 == 0) UpdateClock();
         if (_slowTick && _tick % 180 == 0)
         {
             _media.PickSession();
@@ -661,8 +689,13 @@ public partial class MainWindow : Window
     {
         if (_hwnd == IntPtr.Zero || !S.GameMode) return;
         bool fullscreen = Native.IsForegroundFullscreen(_hwnd);
-        if (fullscreen == _hiddenForFullscreen) return;
-        _hiddenForFullscreen = fullscreen;
+        if (fullscreen != _hiddenForFullscreen) SetFullscreen(fullscreen);
+    }
+
+    private void SetFullscreen(bool on)
+    {
+        _hiddenForFullscreen = on;
+        if (on && _noticeInPill) DismissNotice(); // a pill under the island goes to the history, not over the game
         ApplyFullscreenHide();
     }
 
@@ -679,6 +712,7 @@ public partial class MainWindow : Window
         AddNav(Tab.Focus, "\uE916");
         AddNav(Tab.Clock, "\uE121");
         AddNav(Tab.Shelf, "\uE7B8");
+        AddNav(Tab.Clip, "\uE77F");
         AddNav(Tab.Downloads, "\uE896");
     }
 
@@ -731,6 +765,7 @@ public partial class MainWindow : Window
         Tab.Music => MusicTab,
         Tab.Chat => ChatTab,
         Tab.Shelf => ShelfTab,
+        Tab.Clip => ClipTab,
         Tab.Downloads => DownloadsTab,
         Tab.News => NewsTab,
         Tab.Clock => ClockTab,
@@ -764,6 +799,7 @@ public partial class MainWindow : Window
             if (t == tab)
             {
                 el.Visibility = Visibility.Visible;
+                el.IsHitTestVisible = true;
                 if (animate && old != tab)
                 {
                     double dir = (int)tab > (int)old ? 1 : -1;
@@ -781,6 +817,24 @@ public partial class MainWindow : Window
                     el.Opacity = 1;
                     el.RenderTransform = null;
                 }
+            }
+            else if (animate && t == old && _state == IslandState.Expanded && el.Visibility == Visibility.Visible && S.SpeedFactor > 0)
+            {
+                // the tab you leave goes out to the other side (like the pages inside the island), then it's put away
+                double dir = (int)tab > (int)old ? 1 : -1;
+                var leaving = t;
+                var away = new TranslateTransform();
+                el.RenderTransform = away;
+                el.IsHitTestVisible = false;
+                var time = TimeSpan.FromMilliseconds(Dur(140)); // (short: two tabs on top of each other is a blur)
+                away.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(0, -28 * dir, time) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+                var fade = new DoubleAnimation(0, time);
+                fade.Completed += (_, _) =>
+                {
+                    if (_tab == leaving) return;
+                    el.Visibility = Visibility.Collapsed;
+                };
+                el.BeginAnimation(OpacityProperty, fade);
             }
             else
             {
@@ -810,6 +864,7 @@ public partial class MainWindow : Window
         if (tab == Tab.Home) UpdateHomeLive();
         if (tab == Tab.Music) _ = PollSpotifyAsync();
         if (tab == Tab.Downloads) UpdateDownloadsTab(force: true);
+        if (tab == Tab.Clip) RenderClip();
         if (tab == Tab.News) OnNewsShown();
         NavPill.Opacity = _nav.ContainsKey(tab) ? 1 : 0; // the news tab has no button in the menu
 
@@ -850,6 +905,7 @@ public partial class MainWindow : Window
         Tab.Focus => FocusColor,
         Tab.Clock => TimerColor,
         Tab.Shelf => ShelfColor,
+        Tab.Clip => ClipColor,
         Tab.Downloads => DoneGreen,
         Tab.Chat => ChatColor,
         Tab.News => NewsGold,
@@ -864,6 +920,7 @@ public partial class MainWindow : Window
             Tab.Music => (Loc.T("music.head.a"), Loc.T("music.head.b")),
             Tab.Focus => (Loc.T("focus.head.a"), Loc.T("focus.head.b")),
             Tab.Shelf => (Loc.T("shelf.head.a"), Loc.T("shelf.head.b")),
+            Tab.Clip => (Loc.T("clip.head.a"), Loc.T("clip.head.b")),
             Tab.Downloads => (Loc.T("downloads.head.a"), Loc.T("downloads.head.b")),
             Tab.Chat => ("Notchy", " Chat"),
             Tab.News => (Loc.T("news.title"), " " + WhatsNew.Version),
@@ -893,6 +950,7 @@ public partial class MainWindow : Window
             Tab.Focus => Color.FromRgb(0x3E, 0x2A, 0x86),
             Tab.Clock => Color.FromRgb(0x1C, 0x44, 0x66),
             Tab.Shelf => Color.FromRgb(0x1C, 0x4A, 0x40),
+            Tab.Clip => Color.FromRgb(0x1E, 0x32, 0x5C),
             Tab.Downloads => Color.FromRgb(0x1C, 0x4A, 0x2A),
             Tab.Chat => Color.FromRgb(0x4A, 0x2E, 0x12),
             Tab.News => Color.FromRgb(0x4A, 0x3A, 0x12),
@@ -1158,45 +1216,31 @@ public partial class MainWindow : Window
     private void OnMediaChanged()
     {
         bool has = _media.HasSession && !string.IsNullOrEmpty(_media.Title);
-        TitleText.Text = has ? _media.Title : Loc.T("music.nothing");
-        ArtistText.Text = has ? _media.Artist : Loc.T("music.hint");
+        SwapText(TitleText, has ? _media.Title : Loc.T("music.nothing"));
+        SwapText(ArtistText, has ? _media.Artist : Loc.T("music.hint"));
         SourceText.Text = _media.SourceName;
         SourceButton.Visibility = _media.HasSession ? Visibility.Visible : Visibility.Collapsed;
 
-        HomeMusicTitle.Text = has ? _media.Title : Loc.T("music.nothing.short");
+        SwapText(HomeMusicTitle, has ? _media.Title : Loc.T("music.nothing.short"));
         HomeMusicSub.Text = has ? (_media.IsPlaying ? _media.Artist : Loc.T("music.paused")) : "—";
         HomeMusicPlay.Visibility = _media.HasSession ? Visibility.Visible : Visibility.Collapsed;
 
         Brush art = _media.Art != null
             ? new ImageBrush(_media.Art) { Stretch = Stretch.UniformToFill }
             : new SolidColorBrush(Color.FromRgb(0x2A, 0x2A, 0x2A));
-        CompactArt.Background = art;
-        ExpandedArt.Background = art;
-        HomeMusicArt.Background = _media.Art != null ? art : new SolidColorBrush(Color.FromArgb(0x33, 255, 255, 255));
+        bool newArt = !ReferenceEquals(_media.Art, _artShown); // (the cover often arrives a moment after the title)
+        _artShown = _media.Art;
+        SwapArt(CompactArt, art, newArt);
+        SwapArt(ExpandedArt, art, newArt, pop: true);
+        SwapArt(HomeMusicArt, _media.Art != null ? art : new SolidColorBrush(Color.FromArgb(0x33, 255, 255, 255)), newArt);
 
-        _musicAccent = _media.ArtColor ?? ColorUtil.Fallback;
-        var bright = new SolidColorBrush(Bright(_musicAccent));
-        bright.Freeze();
-        CompactViz.BarBrush = bright;
-        UpdateEyeColor();
+        SetMusicAccent(_media.ArtColor ?? ColorUtil.Fallback);
         if (_spTimer != null)
         {
             UpdateSpotifyControls();
             _ = PollSpotifyAsync();
         }
-        ApplyGlowEffects();
-        ExpandedViz.BarBrush = bright;
-        var d = Dark(_musicAccent);
-        HomeMusicCard.Background = new LinearGradientBrush(
-            Color.FromRgb((byte)(d.R / 2), (byte)(d.G / 2), (byte)(d.B / 2)),
-            Color.FromRgb((byte)Math.Min(255, d.R * 1.5), (byte)Math.Min(255, d.G * 1.5), (byte)Math.Min(255, d.B * 1.5)),
-            new Point(0, 0), new Point(0.4, 1));
-        if (_tab == Tab.Music)
-        {
-            UpdateHeader();
-            ApplyGlow();
-            MoveNavPill(false);
-        }
+        ApplyMusicAccent();
 
         string key = has ? _media.Artist + "|" + _media.Title : "";
         if (key != _trackKey)
@@ -1211,8 +1255,8 @@ public partial class MainWindow : Window
     private void OnPlaybackChanged()
     {
         string glyph = _media.IsPlaying ? "\uE769" : "\uE768";
-        PlayButton.Content = glyph;
-        HomeMusicPlay.Content = glyph;
+        SwapGlyph(PlayButton, glyph);
+        SwapGlyph(HomeMusicPlay, glyph);
         UpdateEyeColor();
         bool has = _media.HasSession && !string.IsNullOrEmpty(_media.Title);
         HomeMusicSub.Text = has ? (_media.IsPlaying ? _media.Artist : Loc.T("music.paused")) : "—";
@@ -1445,8 +1489,8 @@ public partial class MainWindow : Window
         bool showActive = c != null && (c.IsWorking || c.NeedsAttention ||
                                          (c.TaskEnd != null && (DateTime.Now - c.TaskEnd.Value).TotalMinutes < 3));
 
-        ClaudeActive.Visibility = showActive ? Visibility.Visible : Visibility.Collapsed;
-        ClaudeIdle.Visibility = showActive ? Visibility.Collapsed : Visibility.Visible;
+        FadeVisible(ClaudeActive, showActive, rise: 0);
+        FadeVisible(ClaudeIdle, !showActive, rise: 0);
 
         if (!showActive || c == null)
         {
@@ -1481,7 +1525,7 @@ public partial class MainWindow : Window
         // open where the session lives; a question waiting for permission takes the right side
         ClaudeOpenText.Text = Loc.T("claude.open");
         var ask = c.Ask;
-        ClaudeAskCard.Visibility = ask == null ? Visibility.Collapsed : Visibility.Visible;
+        FadeVisible(ClaudeAskCard, ask != null, rise: 8);
         if (ask != null)
         {
             ClaudeAskTool.Text = ask.Tool.Contains("__") ? ask.Tool[(ask.Tool.LastIndexOf("__", StringComparison.Ordinal) + 2)..] : ask.Tool;
@@ -1494,7 +1538,7 @@ public partial class MainWindow : Window
         }
 
         var edit = ask == null ? c.LastEdit : null;
-        ClaudeFileCard.Visibility = edit == null ? Visibility.Collapsed : Visibility.Visible;
+        FadeVisible(ClaudeFileCard, edit != null, rise: 8);
         if (edit != null)
         {
             ClaudeLang.Text = edit.Lang;
@@ -1744,7 +1788,7 @@ public partial class MainWindow : Window
         {
             if (_levelKind != LevelKind.Volume) SetDeviceListOpen(false);
             ShowVolumeLevel(vol, mute);
-            _volumeOsdUntil = DateTime.UtcNow.AddSeconds(1.6);
+            _volumeOsdUntil = DateTime.UtcNow.AddSeconds(_hiddenForFullscreen ? 1.2 : 1.6);
             OsdHider.HideWindowsOsd();
         }
 
@@ -2005,6 +2049,30 @@ public partial class MainWindow : Window
         png.Save(file);
     }
 
+    /// <summary>Snapshot tests: the first visible element under <paramref name="root"/> that passes <paramref name="ok"/>.</summary>
+    private static T? TestFind<T>(DependencyObject root, Func<T, bool> ok) where T : DependencyObject
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var c = VisualTreeHelper.GetChild(root, i);
+            if (c is T t && ok(t) && (t is not UIElement u || u.IsVisible)) return t;
+            if (TestFind(c, ok) is T found) return found;
+        }
+        return null;
+    }
+
+    /// <summary>Snapshot tests: a click (mouse up) on the nearest clickable Border from <paramref name="from"/> up.</summary>
+    private static bool TestClick(DependencyObject? from)
+    {
+        for (var d = from; d != null; d = VisualTreeHelper.GetParent(d))
+            if (d is Border { Cursor: not null } b && b.Cursor == Cursors.Hand)
+            {
+                b.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = MouseLeftButtonUpEvent });
+                return true;
+            }
+        return false;
+    }
+
     public async Task SnapshotAsync(string folder)
     {
         System.IO.Directory.CreateDirectory(folder);
@@ -2120,14 +2188,940 @@ public partial class MainWindow : Window
             System.IO.File.AppendAllText(log, $"tela cheia, parado: {Island.Visibility}" + Environment.NewLine);
             _volumeOsdUntil = DateTime.UtcNow.AddSeconds(4);
             UpdateState();
-            await Shot("21_fullscreen_volume");
-            System.IO.File.AppendAllText(log, $"tela cheia, volume: {_state} {Island.Visibility}" + Environment.NewLine);
+            await ShotAsync(folder, "24_fs_drop_1", 90);
+            System.IO.File.AppendAllText(log, $"tela cheia, descendo: y={IslandDrop.Y:0} w={Island.ActualWidth:0}" + Environment.NewLine);
+            await ShotAsync(folder, "24_fs_drop_2", 400);
+            System.IO.File.AppendAllText(log, $"tela cheia, volume: {_state} {Island.Visibility} y={IslandDrop.Y:0}" + Environment.NewLine);
             _volumeOsdUntil = DateTime.MinValue;
             UpdateState();
-            await System.Threading.Tasks.Task.Delay(700);
-            System.IO.File.AppendAllText(log, $"tela cheia, depois: {_state} {Island.Visibility}" + Environment.NewLine);
+            await ShotAsync(folder, "24_fs_rise_1", 130);
+            System.IO.File.AppendAllText(log, $"tela cheia, subindo: y={IslandDrop.Y:0} barra={VolumePanel.Opacity:0.##}" + Environment.NewLine);
+            // changed again on the way up: turns around and comes back down
+            _volumeOsdUntil = DateTime.UtcNow.AddSeconds(1.2);
+            UpdateState();
+            await ShotAsync(folder, "24_fs_back_1", 400);
+            System.IO.File.AppendAllText(log, $"tela cheia, voltou: {_state} y={IslandDrop.Y:0}" + Environment.NewLine);
+            _volumeOsdUntil = DateTime.MinValue;
+            UpdateState();
+            await ShotAsync(folder, "24_fs_gone", 700);
+            System.IO.File.AppendAllText(log, $"tela cheia, depois: {_state} {Island.Visibility} y={IslandDrop.Y:0}" + Environment.NewLine);
             _hiddenForFullscreen = false;
             ApplyFullscreenHide();
+        }
+
+        // Full screen: every kind of island (Claude, download, focus, timer, ringing, notification) going full screen,
+        // the volume bar coming down over it and going back up, then leaving full screen
+        if (Environment.GetEnvironmentVariable("NOTCHY_FSTEST") == "1")
+        {
+            string fsLog = System.IO.Path.Combine(folder, "fullscreen.txt");
+            void Log(string step) => System.IO.File.AppendAllText(fsLog,
+                $"{step,-22} ilha={Island.Visibility,-7} estado={_state}/{_compactMode} y={IslandDrop.Y:0} " +
+                $"claude={ClaudeLight.Visibility}:{ClaudeLight.Opacity:0.##} download={TransferLight.Visibility}:{TransferLight.Opacity:0.##} " +
+                $"foco={FocusLight.Visibility}:{FocusLight.Opacity:0.##} bolhaClaude={ClaudePod.Visibility} bolhaDl={DownloadPod.Visibility} pilula={_noticePill.Visibility}" + Environment.NewLine);
+            bool claudeWas = S.ClaudeShowInCompact, gameWas = S.GameMode, notifWas = S.NotifyFullscreen;
+            S.GameMode = false; // keep CheckFullscreen from undoing the fake full screen
+            _forcedState = null;
+            _hoverActive = _clickOpened = false;
+
+            async Task Case(string name, Action setup, Action teardown, bool claude = false)
+            {
+                S.ClaudeShowInCompact = claude;
+                setup();
+                UpdateState();
+                await ShotAsync(folder, $"fs_{name}_0_normal", 1200);
+                Log($"{name} normal");
+                SetFullscreen(true);
+                await ShotAsync(folder, $"fs_{name}_1_tela_cheia", 600);
+                Log($"{name} tela cheia");
+                ShowVolumeLevel(0.4, false);
+                _volumeOsdUntil = DateTime.UtcNow.AddSeconds(1.2);
+                UpdateState();
+                await ShotAsync(folder, $"fs_{name}_2_descendo", 110);
+                Log($"{name} descendo");
+                await ShotAsync(folder, $"fs_{name}_3_barra", 400);
+                Log($"{name} barra");
+                await ShotAsync(folder, $"fs_{name}_4_subindo", 820);
+                Log($"{name} subindo");
+                await ShotAsync(folder, $"fs_{name}_5_depois", 900);
+                Log($"{name} depois");
+                SetFullscreen(false);
+                await ShotAsync(folder, $"fs_{name}_6_saiu", 900);
+                Log($"{name} saiu");
+                teardown();
+                UpdateState();
+                await Task.Delay(900);
+            }
+
+            await Case("claude", () => { }, () => { }, claude: true);
+#if DEBUG
+            await Case("download", () =>
+            {
+                _transfers.Fake = new TransferInfo(TransferKind.Download, "filme.mp4", 1, 0.42, 420_000_000, 1_000_000_000, 8_000_000, TimeSpan.FromSeconds(70));
+                PollTransfers();
+            }, () => { _transfers.Fake = null; PollTransfers(); });
+#endif
+            await Case("foco", () => _focus.Start(), () => _focus.Reset());
+            ClockTimer? tm = null;
+            await Case("timer", () => tm = _clock.Start(5 * 60, "☕ Café"), () => _clock.Remove(tm!));
+            await Case("tocando", () => { tm = _clock.Start(5 * 60, "☕ Café"); OnClockTimerFinished(tm); }, () => { StopRing(); _clock.Remove(tm!); });
+            S.NotifyFullscreen = true;
+            await Case("notificacao", () => OnNotice(new Notice(999981, "WhatsApp", "", "Maria", "Já chegou?", DateTime.Now, null, false) { Accent = Color.FromRgb(0x25, 0xD3, 0x66) }), () => { });
+
+            // a timer going off while already in full screen, with the option on and off
+            bool ringWas = S.RingFullscreen;
+            S.NotifyFullscreen = false;
+            foreach (bool on in new[] { true, false })
+            {
+                S.RingFullscreen = on;
+                string n = on ? "alarme_ligado" : "alarme_desligado";
+                SetFullscreen(true);
+                await Task.Delay(400);
+                tm = _clock.Start(5 * 60, "⏰ Acordar");
+                OnClockTimerFinished(tm);
+                await ShotAsync(folder, $"fs_{n}_1_tocando", 900);
+                Log($"{n} tocando");
+                _hoverRequested = _hoverActive = true; // the mouse on the card, clicking "Parar"
+                StopRing();
+                _clock.Remove(tm);
+                await ShotAsync(folder, $"fs_{n}_2_parou", 60);
+                Log($"{n} parou");
+                await ShotAsync(folder, $"fs_{n}_3_depois", 1500);
+                Log($"{n} depois");
+                _hoverRequested = _hoverActive = false;
+                SetFullscreen(false);
+                await Task.Delay(600);
+            }
+            S.RingFullscreen = ringWas;
+
+            // a notification card over the game, with the mouse on it: dismissed, then one that runs out
+            S.NotifyFullscreen = true;
+            foreach (bool dismiss in new[] { true, false })
+            {
+                string n = dismiss ? "cartao_dispensado" : "cartao_expirou";
+                SetFullscreen(true);
+                await Task.Delay(400);
+                OnNotice(new Notice(dismiss ? 999971u : 999972u, "WhatsApp", "", "Maria", "Bora?", DateTime.Now, null, false) { Accent = Color.FromRgb(0x25, 0xD3, 0x66) });
+                await ShotAsync(folder, $"fs_{n}_1_cartao", 700);
+                Log($"{n} cartao");
+                _hoverRequested = _hoverActive = true;
+                if (dismiss) DismissNotice();
+                else _transientUntil = DateTime.UtcNow; // its time is up (the mouse isn't really on it)
+                await ShotAsync(folder, $"fs_{n}_2_fim", 120);
+                Log($"{n} fim");
+                await ShotAsync(folder, $"fs_{n}_3_depois", 1500);
+                Log($"{n} depois");
+                _hoverRequested = _hoverActive = false;
+                SetFullscreen(false);
+                await Task.Delay(600);
+            }
+
+            S.ClaudeShowInCompact = claudeWas;
+            S.GameMode = gameWas;
+            S.NotifyFullscreen = notifWas;
+        }
+
+        // Notificações: grouped by app, a group folded and opened, cleared with its X, undone, one cleared, the undo running out
+        if (Environment.GetEnvironmentVariable("NOTCHY_NOTIFCLEARTEST") == "1")
+        {
+            string nlog = System.IO.Path.Combine(folder, "notifclear.txt");
+            void NLog(string line) => System.IO.File.AppendAllText(nlog, line + Environment.NewLine);
+            _notices.History.Clear();
+            var now = DateTime.Now;
+            Notice Fake(uint id, string app, string who, string text, int minAgo, Color accent) => new(id, app, "", who, text, now.AddMinutes(-minAgo), null, false) { Accent = accent };
+            var wa = Color.FromRgb(0x25, 0xD3, 0x66);
+            var dc = Color.FromRgb(0x58, 0x65, 0xF2);
+            var gm = Color.FromRgb(0xEA, 0x43, 0x35);
+            foreach (var n in new[] { Fake(1, "Gmail", "Fatura de novembro", "Sua fatura está disponível", 120, gm), Fake(2, "Discord", "Ana", "te mandei o link", 43, dc),
+                         Fake(3, "WhatsApp", "João", "Bora amanhã?", 34, wa), Fake(4, "Discord", "#geral", "Lucas: alguém online?", 19, dc),
+                         Fake(5, "WhatsApp", "Grupo da família", "Pai: Foto", 12, wa), Fake(7, "WhatsApp", "Maria", "tá aí?", 6, wa),
+                         Fake(8, "WhatsApp", "Maria", "e acabou o coisa não é", 3, wa), Fake(6, "WhatsApp", "Maria", "Já chegou em casa?", 1, wa) })
+                _notices.AddLocal(n);
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            SelectTab(Tab.Home, false);
+            await Task.Delay(500);
+            OpenSubPage(Loc.T("notif.title"), NoticesPage);
+            await ShotAsync(folder, "nc_1_page", 600);
+
+            // the three from Maria: a stack, opened and gathered again
+            var front = TestFind<TextBlock>(Island, t => t.Text == "Já chegou em casa?");
+            front?.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = Mouse.PreviewMouseUpEvent }); // (the real mouse goes this way: each element turns it into its PreviewMouseLeftButtonUp)
+            await ShotAsync(folder, "nc_s1_opening", 150);
+            await ShotAsync(folder, "nc_s2_open", 400);
+            NLog($"pilha aberta: {_noticeOpenStacks.Count == 1}");
+            var sv = TestFind<ScrollViewer>(_subPage, _ => true);
+            NLog($"rolagem: {(sv == null ? "nenhuma" : $"pode rolar {sv.ScrollableHeight:0} px, visível {sv.ViewportHeight:0} de {sv.ExtentHeight:0}")}");
+            TestClick(TestFind<TextBlock>(Island, t => t.Text == Loc.T("notif.less")));
+            await ShotAsync(folder, "nc_s3_closing", 150);
+            await ShotAsync(folder, "nc_s4_closed", 400);
+            NLog($"pilha fechada: {_noticeOpenStacks.Count == 0}");
+
+            TestClick(TestFind<TextBlock>(Island, t => t.Text == "DISCORD"));
+            await ShotAsync(folder, "nc_2_folding", 120);
+            await ShotAsync(folder, "nc_3_folded", 400);
+            NLog($"recolhido: {_noticeFolded.Contains("Discord")}");
+            TestClick(TestFind<TextBlock>(Island, t => t.Text == "DISCORD"));
+            await ShotAsync(folder, "nc_4_opened", 500);
+            NLog($"aberto de novo: {!_noticeFolded.Contains("Discord")}");
+
+            TestClick(TestFind<Border>(Island, b => b.ToolTip as string == Loc.F("notif.clear.app", "WhatsApp")));
+            await ShotAsync(folder, "nc_5_clearing", 110);
+            await ShotAsync(folder, "nc_6_cleared", 500);
+            NLog($"WhatsApp limpo: restam {_notices.History.Count} ({string.Join(", ", _notices.History.Select(n => n.App))}), desfazer na tela: {_noticeCleared != null}");
+            TestClick(TestFind<TextBlock>(Island, t => t.Text == Loc.T("dl.undo")));
+            await ShotAsync(folder, "nc_7_undone", 500);
+            NLog($"desfeito: {_notices.History.Count} ({string.Join(", ", _notices.History.Select(n => n.Title))})");
+
+            ClearNotices(new List<Notice> { _notices.History.First(n => n.Title == "Ana") }, Loc.T("notif.cleared.one"), null);
+            await ShotAsync(folder, "nc_8_one", 400);
+            NLog($"uma limpa: {_notices.History.Count}");
+            await ShotAsync(folder, "nc_9_undo_gone", (int)(NoticeUndoSeconds * 1000) + 300);
+            NLog($"depois do tempo: desfazer na tela {_noticeCleared != null}, restam {_notices.History.Count}");
+
+            // closing with the page open: it goes up into the island; back soon, the same page; later, the tab
+            _forcedState = null;
+            _hoverActive = _clickOpened = false;
+            UpdateState();
+            await ShotAsync(folder, "nc_c1_closing", 45);
+            await ShotAsync(folder, "nc_c2_closing", 80);
+            await ShotAsync(folder, "nc_c3_closed", 500);
+            NLog($"fechou: estado {_state}, página guardada {_subOpen}");
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            await ShotAsync(folder, "nc_c4_back_soon", 600);
+            NLog($"voltou logo: página {(_subOpen ? _subTitle.Text : "nenhuma")}, painel {ExpandedPanel.Opacity:0.##}");
+            _forcedState = null;
+            UpdateState();
+            await Task.Delay((int)(SubReturnSeconds * 1000) + 400);
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            await ShotAsync(folder, "nc_c5_back_later", 600);
+            NLog($"voltou depois: página {(_subOpen ? _subTitle.Text : "nenhuma")}, aba {_tab}");
+            OpenSubPage(Loc.T("notif.title"), NoticesPage);
+
+            // an icon with a wide see-through margin: only the drawn part is shown
+            var px = new byte[64 * 64 * 4];
+            for (int y = 16; y < 48; y++) for (int x = 16; x < 48; x++) { int i = (y * 64 + x) * 4; px[i + 2] = 255; px[i + 3] = 255; }
+            var padded = System.Windows.Media.Imaging.BitmapSource.Create(64, 64, 96, 96, PixelFormats.Bgra32, null, px, 64 * 4);
+            NLog($"area desenhada: {DesktopAppIcon.DrawnArea(padded)} (esperado 0,25;0,25;0,5;0,5)");
+
+            CloseSubPage(animate: false);
+            _notices.History.Clear();
+            _forcedState = null;
+            Collapse();
+        }
+
+        // Music paused and played again quickly while Claude works (bubble at the side): nothing may stay over the song's text.
+        // A made-up song with made-up lyrics: sung lines and instrumental stretches (the island's own eyes) every 1.5 s.
+        if (Environment.GetEnvironmentVariable("NOTCHY_MUSICPAUSETEST") == "1")
+        {
+            string plog = System.IO.Path.Combine(folder, "musicpause.txt");
+            void PLog(string line) => System.IO.File.AppendAllText(plog, line + Environment.NewLine);
+            PLog("início");
+            bool claudeWas = S.ClaudeShowInCompact, podWas = S.ClaudePod;
+            S.ClaudeShowInCompact = true;
+            S.ClaudePod = true;
+            _forcedState = null;
+            _hoverActive = _clickOpened = false;
+            _claude.Inject("""{"hook_event_name":"PreToolUse","session_id":"demo","tool_name":"Edit","tool_input":{"file_path":"a.cs"}}""");
+            PLog("claude ok");
+            _media.Fake("Waking up", "Teste", true);
+            PLog("música falsa ok");
+            await Task.Delay(700);
+            var fakeLines = new List<LyricLine>();
+            for (int i = 0; i < 200; i++) fakeLines.Add(new LyricLine(TimeSpan.FromSeconds(i * 1.5), i % 2 == 0 ? "Waking up to you never felt so real" : ""));
+            _lyricsCts?.Cancel();
+            _lines = fakeLines;
+            _lineIdx = int.MinValue;
+            _titleUntil = DateTime.UtcNow;
+            PLog("letra ok");
+            await ShotAsync(folder, "pp_0_playing", 2500);
+            PLog("print ok");
+
+            string Look() => $"pos={_media.Position.TotalSeconds:0.0}s linha={_lineIdx} letra={(_lines == null ? "nula" : _lines.Count.ToString())} tocando={_media.IsPlaying} estado={_state}/{_compactMode} carinha={(_compactFaceOn ? "ligada" : "desligada")}:{_compactFace.Opacity:0.##} instrumental={_compactInstrumental} bloqueada={_islandFaceBlocked} " +
+                             $"texto=\"{CompactText.Text}\" claudePanel={ClaudePanel.Opacity:0.##} bolha={ClaudePod.Visibility}:{ClaudePod.Opacity:0.##} transformando={_podMorphing}";
+            PLog("tocando: " + Look());
+            int bugs = 0;
+            async Task Watch(string name, int ms)
+            {
+                // the bug: the island's eyes on screen while a sung line (or the title) is shown
+                for (int t = 0; t < ms; t += 50)
+                {
+                    await Task.Delay(50);
+                    bool shown = _compactFace.IsVisible && _compactFace.Opacity > 0.15 && CompactText.Text.Length > 0 && CompactText.IsVisible && CompactPanel.Opacity > 0.15 && _state == IslandState.Compact;
+                    if (shown)
+                    {
+                        bugs++;
+                        PLog($"  BUG {name} +{t}ms: " + Look());
+                        await Shot($"pp_bug_{name}_{t}");
+                    }
+                }
+            }
+            foreach (int ms in new[] { 60, 120, 200, 350, 500, 800, 1200, 2000 })
+            {
+                _media.Fake("Waking up", "Teste", false);
+                await Watch($"pausa{ms}", ms);
+                PLog($"  fim da pausa {ms} ms: " + Look());
+                _media.Fake("Waking up", "Teste", true);
+                if (ms is 60 or 350 or 1200)
+                {
+                    int waited = 0;
+                    foreach (int at in new[] { 80, 200, 350, 550, 800, 1200, 2000 })
+                    {
+                        await ShotAsync(folder, $"pp_f_{ms}_{at}", at - waited);
+                        waited = at;
+                        PLog($"    +{at} ms: " + Look());
+                    }
+                }
+                await Watch($"volta{ms}", 3000);
+                PLog($"pausa {ms} ms: " + Look());
+            }
+            for (int k = 0; k < 6; k++) // several quick ones in a row
+            {
+                _media.Fake("Waking up", "Teste", k % 2 == 1);
+                await Watch($"seguidas{k}", 90);
+            }
+            _media.Fake("Waking up", "Teste", true);
+            await Watch("seguidas_fim", 3000);
+            PLog($"seguidas: " + Look());
+            PLog($"total de quadros com o bug: {bugs}");
+
+            // the same with the focus' bubble and the download's bubble (same move, same undo)
+            async Task Other(string name, Action start, Action stop)
+            {
+                start();
+                await Task.Delay(2500);
+                PLog($"{name} tocando: estado={_state}/{_compactMode} bolhaFoco={ClaudePod.Visibility}:{ClaudePod.Opacity:0.##} bolhaDl={DownloadPod.Visibility}:{DownloadPod.Opacity:0.##}");
+                foreach (int ms in new[] { 60, 350 })
+                {
+                    _media.Fake("Waking up", "Teste", false);
+                    await Task.Delay(ms);
+                    _media.Fake("Waking up", "Teste", true);
+                    int waited = 0;
+                    foreach (int at in new[] { 120, 350, 800 })
+                    {
+                        await ShotAsync(folder, $"pp_{name}_{ms}_{at}", at - waited);
+                        waited = at;
+                    }
+                    await Task.Delay(1500);
+                    PLog($"{name} pausa {ms} ms: estado={_state}/{_compactMode} bolhaFoco={ClaudePod.Visibility}:{ClaudePod.Opacity:0.##} x={PodX.X:0} bolhaDl={DownloadPod.Visibility}:{DownloadPod.Opacity:0.##} x={DlPodX.X:0} transformando={_podMorphing}/{_dlPodMorphing}");
+                }
+                stop();
+                await Task.Delay(1500);
+            }
+            S.ClaudeShowInCompact = false;
+            await Task.Delay(1500);
+            await Other("foco", () => _focus.Start(), () => _focus.Reset());
+#if DEBUG
+            bool progWas = S.TransferProgress;
+            S.TransferProgress = true;
+            await Other("download", () =>
+            {
+                _transfers.Fake = new TransferInfo(TransferKind.Download, "filme.mp4", 1, 0.42, 420_000_000, 1_000_000_000, 8_000_000, TimeSpan.FromSeconds(70));
+                PollTransfers();
+            }, () => { _transfers.Fake = null; PollTransfers(); });
+            S.TransferProgress = progWas;
+#endif
+            S.ClaudeShowInCompact = claudeWas;
+            S.ClaudePod = podWas;
+        }
+
+        // Agendas conectadas: the iCal reader against a sample with every case, then that calendar on the island
+        if (Environment.GetEnvironmentVariable("NOTCHY_ICSTEST") == "1")
+        {
+            string ilog = System.IO.Path.Combine(folder, "ics.txt");
+            int fails = 0;
+            void Check(string what, bool ok, string got)
+            {
+                if (!ok) fails++;
+                System.IO.File.AppendAllText(ilog, $"{(ok ? "ok  " : "ERRO")} {what}: {got}" + Environment.NewLine);
+            }
+            var ics = string.Join("\r\n", new[]
+            {
+                "BEGIN:VCALENDAR", "VERSION:2.0", "X-WR-CALNAME:Trabalho",
+                "BEGIN:VTIMEZONE", "TZID:America/Sao_Paulo", "END:VTIMEZONE",
+                // timed, in São Paulo
+                "BEGIN:VEVENT", "UID:a1", "SUMMARY:Reunião\\, sala 3", "DTSTART;TZID=America/Sao_Paulo:20261117T140000", "DTEND;TZID=America/Sao_Paulo:20261117T150000",
+                "BEGIN:VALARM", "TRIGGER:-PT10M", "DESCRIPTION:alarme", "END:VALARM", "END:VEVENT",
+                // UTC
+                "BEGIN:VEVENT", "UID:a2", "SUMMARY:Ligação com Lisboa", "DTSTART:20261118T120000Z", "DTEND:20261118T123000Z", "END:VEVENT",
+                // all-day over three days
+                "BEGIN:VEVENT", "UID:a3", "SUMMARY:Férias", "DTSTART;VALUE=DATE:20261123", "DTEND;VALUE=DATE:20261126", "END:VEVENT",
+                // weekly on Monday and Wednesday, 4 times
+                "BEGIN:VEVENT", "UID:a4", "SUMMARY:Inglês", "DTSTART;TZID=America/Sao_Paulo:20261116T190000", "RRULE:FREQ=WEEKLY;BYDAY=MO,WE;COUNT=4", "END:VEVENT",
+                // every 2 days until the 22nd, except the 20th; the 18th moved to 10:00
+                "BEGIN:VEVENT", "UID:a5", "SUMMARY:Remédio", "DTSTART;TZID=America/Sao_Paulo:20261116T080000", "RRULE:FREQ=DAILY;INTERVAL=2;UNTIL=20261122T235959Z",
+                "EXDATE;TZID=America/Sao_Paulo:20261120T080000", "END:VEVENT",
+                "BEGIN:VEVENT", "UID:a5", "SUMMARY:Remédio (mais tarde)", "RECURRENCE-ID;TZID=America/Sao_Paulo:20261118T080000",
+                "DTSTART;TZID=America/Sao_Paulo:20261118T100000", "END:VEVENT",
+                // the 2nd Tuesday of each month
+                "BEGIN:VEVENT", "UID:a6", "SUMMARY:Condomínio", "DTSTART;VALUE=DATE:20261110", "RRULE:FREQ=MONTHLY;BYDAY=2TU", "END:VEVENT",
+                // every year, and a cancelled one
+                "BEGIN:VEVENT", "UID:a7", "SUMMARY:Aniversário da Ana", "DTSTART;VALUE=DATE:20101125", "RRULE:FREQ=YEARLY", "END:VEVENT",
+                "BEGIN:VEVENT", "UID:a8", "STATUS:CANCELLED", "SUMMARY:Cancelado", "DTSTART:20261119T150000Z", "END:VEVENT",
+                // a folded long line
+                "BEGIN:VEVENT", "UID:a9", "SUMMARY:Um nome muito compri", " do que foi dobrado", "DTSTART;VALUE=DATE:20261127", "END:VEVENT",
+                "END:VCALENDAR"
+            });
+            var (name, evs) = IcsCalendar.Parse(ics, new DateTime(2026, 11, 1), new DateTime(2027, 2, 28));
+            string Days(string n) => string.Join(" ", evs.Where(e => e.Name == n).Select(e => e.Date.ToString("dd/MM") + (e.HasTime ? $" {e.Hour:00}:{e.Minute:00}" : "")));
+            Check("nome da agenda", name == "Trabalho", name ?? "nulo");
+            Check("com fuso (14:00 em São Paulo)", Days("Reunião, sala 3") == $"17/11 {new DateTime(2026, 11, 17, 17, 0, 0, DateTimeKind.Utc).ToLocalTime():HH:mm}", Days("Reunião, sala 3"));
+            Check("UTC", Days("Ligação com Lisboa") == $"18/11 {new DateTime(2026, 11, 18, 12, 0, 0, DateTimeKind.Utc).ToLocalTime():HH:mm}", Days("Ligação com Lisboa"));
+            Check("vários dias", Days("Férias") == "23/11 24/11 25/11", Days("Férias"));
+            Check("semanal seg/qua 4x", Days("Inglês").Split(' ').Where((_, i) => i % 2 == 0).SequenceEqual(new[] { "16/11", "18/11", "23/11", "25/11" }), Days("Inglês"));
+            Check("a cada 2 dias até 22, sem o 20, o 18 movido", Days("Remédio").Replace(" 08:00", "") == "16/11 22/11" && Days("Remédio (mais tarde)") == "18/11 10:00", Days("Remédio") + " | " + Days("Remédio (mais tarde)"));
+            Check("2ª terça do mês", Days("Condomínio").StartsWith("10/11 08/12 12/01 09/02"), Days("Condomínio"));
+            Check("todo ano", Days("Aniversário da Ana") == "25/11", Days("Aniversário da Ana"));
+            Check("cancelado fica de fora", Days("Cancelado") == "", Days("Cancelado"));
+            Check("linha dobrada", Days("Um nome muito comprido que foi dobrado") == "27/11", string.Join(" / ", evs.Select(e => e.Name).Distinct()));
+            Check("evento ignora o alarme", evs.Count(e => e.Name == "alarme") == 0, "");
+            System.IO.File.AppendAllText(ilog, $"falhas: {fails}" + Environment.NewLine);
+
+            // the real way, through the internet: a public Google calendar (Brazil's holidays), then a broken link
+            _calendar.DontSave = true;
+            string? err = await _calendar.AddExternalAsync("https://calendar.google.com/calendar/ical/pt-br.brazilian%23holiday%40group.v.calendar.google.com/public/basic.ics", "google");
+            var real = _calendar.Externals.LastOrDefault();
+            System.IO.File.AppendAllText(ilog, $"internet: erro={err ?? "nenhum"} nome={real?.Name} eventos={real?.Events.Count} primeiro={real?.Events.FirstOrDefault()?.Name} {real?.Events.FirstOrDefault()?.Date:dd/MM/yyyy}" + Environment.NewLine);
+            if (real != null) _calendar.RemoveExternal(real);
+            string? bad = await _calendar.AddExternalAsync("https://calendar.google.com/calendar/ical/nao-existe-123/public/basic.ics", "google");
+            System.IO.File.AppendAllText(ilog, $"link quebrado: {bad}" + Environment.NewLine);
+            string? notLink = await _calendar.AddExternalAsync("isso não é um link", "google");
+            System.IO.File.AppendAllText(ilog, $"não é link: {notLink}" + Environment.NewLine);
+
+            // that calendar, as if connected (not saved), on the island and in the settings
+            _calendar.DontSave = true;
+            var ext = new ExternalCalendar { Name = "Trabalho", Url = "https://example.com/basic.ics", Provider = "google", Color = CalendarService.ExternalColors[0], LastSync = DateTime.Now.AddMinutes(-4) };
+            var shift = DateTime.Today - new DateTime(2026, 11, 17); // (the sample's days moved to around today)
+            foreach (var e in evs) { e.Date = e.Date + shift; e.Source = ext; }
+            ext.Events = evs;
+            _calendar.Externals.Add(ext);
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            SelectTab(Tab.Home, false);
+            await Task.Delay(500);
+            OpenCalendar(DateTime.Today);
+            await ShotAsync(folder, "ics_1_island", 900);
+            CloseSubPage(animate: false);
+            _forcedState = null;
+            Collapse();
+        }
+
+        // Copiados: real copies through the clipboard (the saved history is left alone), the glow, the tab
+        if (Environment.GetEnvironmentVariable("NOTCHY_CLIPTEST") == "1")
+        {
+            string clog = System.IO.Path.Combine(folder, "clip.txt");
+            int cfails = 0;
+            void CCheck(string what, bool ok, string got)
+            {
+                if (!ok) cfails++;
+                System.IO.File.AppendAllText(clog, $"{(ok ? "ok  " : "ERRO")} {what}: {got}" + Environment.NewLine);
+            }
+            var saved = _clip.Items.ToList();
+            _clip.DontSave = true;
+            _clip.Items.Clear();
+            bool wasPaused = S.ClipPaused;
+            S.ClipPaused = false;
+            _forcedState = IslandState.Idle;
+            UpdateState();
+            await Task.Delay(800);
+
+            async Task Copy(Action set) { set(); await Task.Delay(500); }
+            ClipItem? Top() => _clip.Items.FirstOrDefault();
+
+            await Copy(() => System.Windows.Clipboard.SetText("Reunião remarcada para quinta às 14h, sala 3. Leva o relatório impresso."));
+            CCheck("texto", Top()?.Kind == ClipKind.Text && Top()!.Text.StartsWith("Reunião"), $"{Top()?.Kind} {Top()?.App}");
+            await Copy(() => System.Windows.Clipboard.SetText("https://github.com/notchy/notchy"));
+            CCheck("link", Top()?.Kind == ClipKind.Link, $"{Top()?.Kind}");
+            System.Windows.Clipboard.SetText("#E8825F");
+            await ShotAsync(folder, "clip_0_glow", 140);
+            await Task.Delay(400);
+            CCheck("cor", Top()?.Kind == ClipKind.Color, $"{Top()?.Kind}");
+            int before = _clip.Items.Count;
+            await Copy(() =>
+            {
+                var d = new DataObject(DataFormats.UnicodeText, "senha-secreta-123");
+                d.SetData("ExcludeClipboardContentFromMonitorProcessing", new System.IO.MemoryStream(new byte[] { 1, 0, 0, 0 }));
+                System.Windows.Clipboard.SetDataObject(d, true);
+            });
+            CCheck("senha marcada fica de fora", _clip.Items.Count == before && Top()?.Text != "senha-secreta-123", $"{_clip.Items.Count} itens");
+            await Copy(() =>
+            {
+                var d = new DataObject(DataFormats.UnicodeText, "não guardar");
+                d.SetData("CanIncludeInClipboardHistory", new System.IO.MemoryStream(BitConverter.GetBytes(0)));
+                System.Windows.Clipboard.SetDataObject(d, true);
+            });
+            CCheck("“não guardar no histórico” fica de fora", Top()?.Text != "não guardar", $"{Top()?.Text}");
+            var bmpSrc = new System.Windows.Media.Imaging.RenderTargetBitmap(320, 200, 96, 96, PixelFormats.Pbgra32);
+            var dv = new DrawingVisual();
+            using (var dc = dv.RenderOpen())
+                dc.DrawRectangle(new LinearGradientBrush(Color.FromRgb(0xFF, 0x9A, 0x62), Color.FromRgb(0x4A, 0x3A, 0x8A), 45), null, new Rect(0, 0, 320, 200));
+            bmpSrc.Render(dv);
+            await Copy(() => System.Windows.Clipboard.SetImage(bmpSrc));
+            CCheck("imagem", Top()?.Kind == ClipKind.Image && System.IO.File.Exists(Top()!.ImagePath) && Top()!.Width == 320, $"{Top()?.Kind} {Top()?.Width}x{Top()?.Height}");
+            await Copy(() => System.Windows.Clipboard.SetImage(bmpSrc));
+            CCheck("mesma imagem não repete", _clip.Items.Count(x => x.Kind == ClipKind.Image) == 1, $"{_clip.Items.Count(x => x.Kind == ClipKind.Image)}");
+            string tmpFile = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Relatório final.pdf");
+            System.IO.File.WriteAllText(tmpFile, "x");
+            await Copy(() => System.Windows.Clipboard.SetFileDropList(new System.Collections.Specialized.StringCollection { tmpFile }));
+            CCheck("arquivo", Top()?.Kind == ClipKind.Files, $"{Top()?.Kind}");
+            await Copy(() => System.Windows.Clipboard.SetText("https://github.com/notchy/notchy"));
+            CCheck("copiar de novo sobe sem repetir", Top()?.Kind == ClipKind.Link && _clip.Items.Count(x => x.Kind == ClipKind.Link) == 1, $"{_clip.Items.Count} itens");
+            var text = _clip.Items.First(x => x.Kind == ClipKind.Text);
+            _clip.CopyBack(text);
+            await Task.Delay(400);
+            CCheck("clicar copia de volta", System.Windows.Clipboard.GetText() == text.Text && Top() == text && _clip.Items.Count(x => x.Kind == ClipKind.Text) == 1, System.Windows.Clipboard.GetText());
+            S.ClipPaused = true;
+            await Copy(() => System.Windows.Clipboard.SetText("pausado"));
+            CCheck("pausado não guarda", Top()?.Text != "pausado", $"{Top()?.Text}");
+            S.ClipPaused = false;
+
+            // the tab
+            _clip.TogglePin(_clip.Items.First(x => x.Kind == ClipKind.Color));
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            SelectTab(Tab.Clip, false);
+            await ShotAsync(folder, "clip_1_tab", 900);
+            var imgRow = TestFind<TextBlock>(ClipTab, t => t.Text.StartsWith(Loc.F("clip.image", 320, 200)));
+            DependencyObject? up = imgRow;
+            while (up != null && !(up is Border { Child: Grid })) up = VisualTreeHelper.GetParent(up);
+            if (up is Border r) ShowClipPicture(_clip.Items.First(x => x.Kind == ClipKind.Image), r);
+            await ShotAsync(folder, "clip_2_hover_image", 400);
+            _clipOver.Children.Clear();
+            _clipFilter = ClipKind.Image;
+            RenderClip();
+            await ShotAsync(folder, "clip_3_filter_images", 300);
+            _clipFilter = null;
+            _clipQuery = "github";
+            RenderClip();
+            await ShotAsync(folder, "clip_4_search", 300);
+            _clipQuery = "";
+            ClearClip(new List<ClipItem> { _clip.Items.First(x => x.Kind == ClipKind.Files) }, Loc.T("clip.deleted"), slide: false);
+            await ShotAsync(folder, "clip_5_deleted_undo", 400);
+            CCheck("apagar", !_clip.Items.Any(x => x.Kind == ClipKind.Files), "");
+            TestClick(TestFind<TextBlock>(ClipTab, t => t.Text == Loc.T("dl.undo")));
+            await Task.Delay(200);
+            CCheck("desfazer", _clip.Items.Any(x => x.Kind == ClipKind.Files), "");
+            // private windows: the names browsers give them, then a real one (Edge InPrivate) opened and closed again
+            // (Opera ignores --private when it's already open: its "(privada)" name was checked by hand)
+            foreach (var (title, name, want) in new[]
+            {
+                ("about:blank - Opera", "about:blank - Opera (privada)", true),
+                ("about:blank - Opera", "about:blank - Opera", false),
+                ("Nova guia - Google Chrome", "Nova guia - Google Chrome (Incognito)", true),
+                ("Nova guia - Google Chrome", "Nova guia - Google Chrome (anônima)", true),
+                ("Nova guia - Google Chrome", "Nova guia - Google Chrome (Pessoa 1)", false),
+                ("Private notes (draft) - Google Chrome", "Private notes (draft) - Google Chrome", false),
+                ("about:blank — [InPrivate] — Microsoft​ Edge", "", true),
+                ("Página — Navegação privativa do Mozilla Firefox", "Página — Navegação privativa do Mozilla Firefox", true),
+                ("Private browsing tips — Mozilla Firefox", "Private browsing tips — Mozilla Firefox", false),
+            })
+                CCheck($"janela {(want ? "privada" : "normal")}: {name.Length switch { 0 => title, _ => name }}", ClipboardService.IsPrivateName(title, name) == want, "");
+            async Task LivePrivate(string exe, string arg, string label)
+            {
+                if (!System.IO.File.Exists(exe)) return;
+                // every browser window (a browser has several): the new ones are the test's, and only those get closed
+                static List<IntPtr> Windows() => System.Windows.Automation.AutomationElement.RootElement
+                    .FindAll(System.Windows.Automation.TreeScope.Children, new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ClassNameProperty, "Chrome_WidgetWin_1"))
+                    .Cast<System.Windows.Automation.AutomationElement>().Select(e => new IntPtr(e.Current.NativeWindowHandle)).ToList();
+                var before = Windows();
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, arg + " about:blank") { UseShellExecute = false });
+                await Task.Delay(4000);
+                var fresh = Windows().Except(before).ToList();
+                CCheck($"{label} de verdade é reconhecida", fresh.Count > 0 && fresh.Any(ClipboardService.IsPrivateWindow), $"{fresh.Count} janela(s) nova(s)");
+                foreach (var h in fresh) Native.CloseWindow(h);
+            }
+            await LivePrivate(@"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe", "--inprivate", "janela InPrivate do Edge");
+            CCheck("a própria ilha não é privada", !ClipboardService.IsPrivateWindow(_hwnd), "");
+
+            // text in images: a picture with words, read by Windows, then found by the search
+            var ocrBmp = new System.Windows.Media.Imaging.RenderTargetBitmap(640, 160, 96, 96, PixelFormats.Pbgra32);
+            var ocrDv = new DrawingVisual();
+            using (var dc = ocrDv.RenderOpen())
+            {
+                dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, 640, 160));
+                dc.DrawText(new FormattedText("Boleto vence dia 20", Loc.Culture, FlowDirection.LeftToRight, new Typeface("Segoe UI"), 44, Brushes.Black, 1.0), new Point(30, 50));
+            }
+            ocrBmp.Render(ocrDv);
+            await Copy(() => System.Windows.Clipboard.SetImage(ocrBmp));
+            var withText = Top();
+            for (int i = 0; i < 30 && withText?.Ocr == null; i++) await Task.Delay(200);
+            CCheck("lê o texto da imagem", withText?.Ocr?.Contains("Boleto", StringComparison.OrdinalIgnoreCase) == true, $"“{withText?.Ocr}”");
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            SelectTab(Tab.Clip, false);
+            _clipQuery = "boleto";
+            RenderClip();
+            CCheck("busca acha a imagem pelo texto", _clipRows.Count == 1 && _clipRows[0].item == withText, $"{_clipRows.Count} resultado(s)");
+            await ShotAsync(folder, "clip_11_ocr_search", 500);
+            _clipQuery = "";
+            RenderClip();
+
+            // the keyboard: the real shortcut opens it, ↓ chooses, Enter pastes into the window that was in front
+            _forcedState = null;
+            Collapse();
+            await Task.Delay(700);
+            string got = System.IO.Path.Combine(folder, "pasted.txt");
+            string ps1 = System.IO.Path.Combine(folder, "target.ps1");
+            System.IO.File.WriteAllText(ps1, "Add-Type -AssemblyName System.Windows.Forms\n" +
+                "$f = New-Object System.Windows.Forms.Form; $f.Text = 'Notchy teste'; $f.TopMost = $true; $f.Width = 420; $f.Height = 140\n" +
+                "$t = New-Object System.Windows.Forms.TextBox; $t.Dock = 'Fill'; $t.Multiline = $true; $f.Controls.Add($t)\n" +
+                "$timer = New-Object System.Windows.Forms.Timer; $timer.Interval = 9000; $timer.Add_Tick({ [IO.File]::WriteAllText('" + got + "', $t.Text); $f.Close() }); $timer.Start()\n" +
+                "$f.Add_Shown({ $f.Activate(); $t.Focus() }); [void]$f.ShowDialog()\n");
+            using var other = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("powershell", $"-NoProfile -ExecutionPolicy Bypass -File \"{ps1}\"") { UseShellExecute = false, CreateNoWindow = true })!;
+            IntPtr otherHwnd = IntPtr.Zero;
+            for (int i = 0; i < 40 && otherHwnd == IntPtr.Zero; i++)
+            {
+                await Task.Delay(150);
+                other.Refresh();
+                otherHwnd = other.MainWindowHandle;
+            }
+            CCheck("app de teste aberto", otherHwnd != IntPtr.Zero, "");
+            CCheck("atalho registrado", !_clip.HotkeyTaken, S.ClipHotkey);
+            [System.Runtime.InteropServices.DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+            keybd_event(0x5B, 0, 0, UIntPtr.Zero); keybd_event(0x12, 0, 0, UIntPtr.Zero); keybd_event(0x56, 0, 0, UIntPtr.Zero);
+            keybd_event(0x56, 0, 2, UIntPtr.Zero); keybd_event(0x12, 0, 2, UIntPtr.Zero); keybd_event(0x5B, 0, 2, UIntPtr.Zero);
+            await Task.Delay(900);
+            CCheck("atalho abre a aba com o teclado", _clipKeys && _state == IslandState.Expanded && _tab == Tab.Clip && _clipBox.IsKeyboardFocused,
+                $"teclado={_clipKeys} estado={_state} aba={_tab} foco={_clipBox.IsKeyboardFocused} ilha na frente={Native.IsForeground(_hwnd)}");
+            await ShotAsync(folder, "clip_7_keys_open", 200);
+            void Press(Key k)
+            {
+                var src = PresentationSource.FromVisual(_clipBox);
+                _clipBox.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, src, 0, k) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+            }
+            Press(Key.Down);
+            Press(Key.Down);
+            await ShotAsync(folder, "clip_8_keys_down", 250);
+            var chosen = _clipRows[_clipSel].item;
+            CCheck("↓ escolhe", _clipSel == 2, $"{_clipSel} {chosen.Kind}");
+            _clipBox.Text = "github";
+            await Task.Delay(150);
+            CCheck("digitar busca e volta para o primeiro", _clipSel == 0 && _clipRows.Count == 1 && _clipRows[0].item.Kind == ClipKind.Link, $"{_clipSel} de {_clipRows.Count}");
+            await ShotAsync(folder, "clip_9_keys_search", 250);
+            // the window in front when the shortcut came may be anything on this desktop (Windows won't let the test window take
+            // the front from a terminal): the paste goes only to the test window, never to whatever app was open
+            _clipTarget = otherHwnd;
+            if (otherHwnd != IntPtr.Zero && _clipTarget == otherHwnd) Press(Key.Enter);
+            await Task.Delay(900);
+            bool front = Native.IsForeground(otherHwnd);
+            other.WaitForExit(12000);
+            string pasted = System.IO.File.Exists(got) ? System.IO.File.ReadAllText(got) : "(nada)";
+            CCheck("Enter cola no app que estava na frente", pasted == "https://github.com/notchy/notchy", $"“{pasted}” frente={front}");
+            CCheck("ilha fecha depois de colar", !_clipKeys && _state != IslandState.Expanded, $"{_state}");
+            await ShotAsync(folder, "clip_10_pasted", 200);
+
+            _clip.Items.Clear();
+            RenderClip();
+            await ShotAsync(folder, "clip_6_empty", 300);
+            System.IO.File.AppendAllText(clog, $"falhas: {cfails}" + Environment.NewLine);
+
+            // back as it was (the test's pictures go)
+            foreach (var f in System.IO.Directory.GetFiles(ClipboardService.ImageFolder, "*.png"))
+                if (!saved.Any(x => x.Kind == ClipKind.Image && string.Equals(x.ImagePath, f, StringComparison.OrdinalIgnoreCase))) System.IO.File.Delete(f);
+            _clip.Items.AddRange(saved);
+            _clip.DontSave = false;
+            S.ClipPaused = wasPaused;
+            System.IO.File.Delete(tmpFile);
+            _forcedState = null;
+            Collapse();
+        }
+
+        // Revisão das animações: each change caught in the middle (something must be moving), then at rest
+        if (Environment.GetEnvironmentVariable("NOTCHY_ANIMTEST") == "1")
+        {
+            string alog = System.IO.Path.Combine(folder, "anim.txt");
+            void ACheck(string what, bool ok, string got) => System.IO.File.AppendAllText(alog, $"{(ok ? "ok  " : "ERRO")} {what}: {got}" + Environment.NewLine);
+            static bool Moving(DependencyObject root)
+            {
+                if (root is UIElement u && u.RenderTransform is TranslateTransform t && Math.Abs(t.Y) > 0.3) return true;
+                for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++) if (Moving(VisualTreeHelper.GetChild(root, i))) return true;
+                return false;
+            }
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            SelectTab(Tab.Home, false);
+            await Task.Delay(600);
+
+            // 1 · a page opened from another: both are there for a moment, sliding; then only the new one
+            OpenCalendar(DateTime.Today);
+            await Task.Delay(700);
+            OpenCalEditor(null);
+            await ShotAsync(folder, "an_1_editor_mid", 90);
+            int during = _subPage.Children.Count;
+            await Task.Delay(500);
+            ACheck("calendário → editor desliza", during == 2 && _subPage.Children.Count == 1, $"durante {during} páginas, depois {_subPage.Children.Count}");
+            SubPageBack();
+            await ShotAsync(folder, "an_2_back_mid", 90);
+            during = _subPage.Children.Count;
+            await Task.Delay(500);
+            ACheck("‹ volta deslizando", during == 2 && _subPage.Children.Count == 1 && _subTitle.Text == Loc.T("cal.title"), $"durante {during}, depois {_subPage.Children.Count} ({_subTitle.Text})");
+            CloseSubPage(animate: false);
+
+            // 3 · the filters' highlight slides; 4 · a new copy glides in
+            var savedClip = _clip.Items.ToList();
+            _clip.DontSave = true;
+            _clip.Items.Clear();
+            foreach (var t in new[] { "https://github.com/notchy", "Endereço: Rua das Flores, 120", "#E8825F" })
+                _clip.Items.Add(new ClipItem { Kind = ClipboardService.KindOf(t), Text = t, App = "Teste", Time = DateTime.Now.AddMinutes(-5) });
+            _clipBox.Text = ""; // (an earlier test may have left a search)
+            _clipFilter = null;
+            SelectTab(Tab.Clip, false);
+            await Task.Delay(600);
+            var pillT = (TranslateTransform)_clipChipPill.RenderTransform;
+            double x0 = pillT.X;
+            _clipFilter = ClipKind.Link;
+            RenderClip();
+            await ShotAsync(folder, "an_3_filter_mid", 110);
+            double xMid = pillT.X;
+            await Task.Delay(450);
+            ACheck("destaque do filtro desliza", xMid > x0 + 1 && xMid < pillT.X - 1, $"{x0:0} → {xMid:0} → {pillT.X:0}");
+            _clipFilter = null;
+            RenderClip();
+            await Task.Delay(450);
+            _clip.Add(new ClipItem { Kind = ClipKind.Text, Text = "Chegou agora", App = "Teste" });
+            await ShotAsync(folder, "an_4_new_mid", 90);
+            bool moving = Moving(_clipList);
+            await Task.Delay(450);
+            ACheck("item novo entra e os outros descem", moving && !Moving(_clipList), $"no meio: {moving}");
+            _clip.Items.Clear();
+            _clip.Items.AddRange(savedClip);
+            _clip.DontSave = false;
+            _forcedState = null;
+            Collapse();
+        }
+
+        // Assistente: what the real island does for each tip of the tour
+        if (Environment.GetEnvironmentVariable("NOTCHY_SETUPTEST") == "1")
+        {
+            string slog = System.IO.Path.Combine(folder, "setup.txt");
+            _forcedState = null;
+            Collapse();
+            await Task.Delay(700);
+            foreach (var tip in new[] { "open", "date", "bell", "clip", "volume", "shelf" })
+            {
+                SetupTour(tip);
+                await ShotAsync(folder, "tour_" + tip, 950);
+                System.IO.File.AppendAllText(slog, $"{tip}: estado {_state}, aba {_tab}" + Environment.NewLine);
+            }
+            SetupTour(null);
+            await Task.Delay(600);
+            System.IO.File.AppendAllText(slog, $"fim: estado {_state}, forçado {(_forcedState == null ? "não" : "sim")}" + Environment.NewLine);
+            SetupClipDemo();
+            await ShotAsync(folder, "setup_clip_demo", 140);
+        }
+
+        // Animações, segunda passada: each change caught in the middle, then at rest
+        if (Environment.GetEnvironmentVariable("NOTCHY_ANIM2TEST") == "1")
+        {
+            string blog = System.IO.Path.Combine(folder, "anim2.txt");
+            void BCheck(string what, bool ok, string got) => System.IO.File.AppendAllText(blog, $"{(ok ? "ok  " : "ERRO")} {what}: {got}" + Environment.NewLine);
+            static double ScaleOf(FrameworkElement? cell) => cell?.RenderTransform is TransformGroup { Children.Count: 2 } g && g.Children[0] is ScaleTransform st ? st.ScaleY : 1;
+
+            // 3 · eyes ↔ smile (the island at rest)
+            _forcedState = IslandState.Idle;
+            UpdateState();
+            await Task.Delay(900);
+            Happy(); // (keeps the smile for a moment, as when something finishes)
+            await Task.Delay(50);
+            bool eyesStill = EyeL.Visibility == Visibility.Visible;
+            double squash = ScaleOf(EyeL.Parent as FrameworkElement);
+            await ShotAsync(folder, "b3_eyes_mid", 10);
+            await Task.Delay(600);
+            BCheck("olhos se espremem antes do sorriso", eyesStill && squash < 0.98 && HappyL.Visibility == Visibility.Visible && ScaleOf(EyeL.Parent as FrameworkElement) > 0.97,
+                $"no meio: olhos {eyesStill}, altura {squash:0.00}; depois: sorriso {HappyL.Visibility}, altura {ScaleOf(EyeL.Parent as FrameworkElement):0.00}");
+            await ShotAsync(folder, "b3_smile", 10);
+            _happyUntil = DateTime.Now;
+            await Task.Delay(900);
+            BCheck("e voltam", EyeL.Visibility == Visibility.Visible && HappyL.Visibility != Visibility.Visible, $"{EyeL.Visibility}");
+
+            // 1 · a new song, 2 · play ↔ pause (Música tab)
+            _media.Fake("Noite Azul", "Lia Monte", true);
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            SelectTab(Tab.Music, false);
+            await Task.Delay(900);
+            _media.Fake("Maré Alta", "Os Faróis", true);
+            await Task.Delay(60);
+            bool leaving = _textComing.ContainsKey(TitleText);
+            string midTitle = TitleText.Text;
+            await ShotAsync(folder, "b1_song_mid", 60);
+            await Task.Delay(600);
+            BCheck("título desliza para a música nova", leaving && midTitle == "Noite Azul" && TitleText.Text == "Maré Alta" && ArtistText.Text == "Os Faróis", $"no meio “{midTitle}” (saindo {leaving}), depois “{TitleText.Text}”");
+            _media.Fake("Maré Alta", "Os Faróis", false);
+            await Task.Delay(70);
+            double hop = PlayButton.Content is TextBlock { RenderTransform: ScaleTransform ps } ? ps.ScaleX : -1;
+            await Task.Delay(500);
+            BCheck("play/pause com pulinho", hop > 0 && hop < 0.98 && PlayButton.Content is TextBlock { RenderTransform: ScaleTransform { ScaleX: > 0.99 } }, $"no meio {hop:0.00}");
+            await ShotAsync(folder, "b1_song_after", 10);
+
+            // 4 · tabs: the old one is still there, on its way out
+            SelectTab(Tab.Home, false);
+            await Task.Delay(400);
+            SelectTab(Tab.Clock, true);
+            await Task.Delay(70);
+            bool both = HomeTab.Visibility == Visibility.Visible && ClockTab.Visibility == Visibility.Visible && HomeTab.Opacity < 1;
+            await ShotAsync(folder, "b4_tabs_mid", 10);
+            await Task.Delay(500);
+            BCheck("aba antiga sai deslizando", both && HomeTab.Visibility == Visibility.Collapsed && ClockTab.Opacity > 0.99, $"no meio as duas: {both}; depois Início {HomeTab.Visibility}");
+            SelectTab(Tab.Home, true);
+            await Task.Delay(500);
+            BCheck("e a aba volta inteira", HomeTab.Visibility == Visibility.Visible && HomeTab.Opacity > 0.99 && HomeTab.IsHitTestVisible && ClockTab.Visibility == Visibility.Collapsed, $"{HomeTab.Visibility} {HomeTab.Opacity:0.00}");
+
+            // 5 · calendar: the ring glides to the day
+            OpenCalendar(new DateTime(DateTime.Today.Year, DateTime.Today.Month, 10));
+            await Task.Delay(700);
+            var dayBefore = _calDay;
+            _calDay = new DateTime(dayBefore.Year, dayBefore.Month, 20);
+            GlideCalDay(dayBefore);
+            await Task.Delay(90);
+            bool flying = _calRing != null;
+            await ShotAsync(folder, "b5_day_mid", 10);
+            await Task.Delay(500);
+            BCheck("anel desliza até o dia", flying && _calRing == null && _subOpen, $"no meio {flying}, depois {( _calRing == null ? "pousou" : "no ar")}");
+            await ShotAsync(folder, "b5_day_after", 10);
+            CloseSubPage(animate: false);
+
+            // 9 · the bell's count hops
+            int unseen = _noticeUnseen;
+            _noticeUnseen = 1;
+            UpdateBell();
+            await Task.Delay(400);
+            _noticeUnseen = 2;
+            UpdateBell();
+            await Task.Delay(40);
+            double badge = ((FrameworkElement)_bellBadge.Parent).RenderTransform is ScaleTransform bs ? bs.ScaleX : -1;
+            await ShotAsync(folder, "b9_bell_mid", 10);
+            await Task.Delay(450);
+            BCheck("contador do sininho pula", _bell.IsVisible ? badge > 1.02 : badge == -1 || badge >= 1, $"{badge:0.00} (sininho visível: {_bell.IsVisible})");
+            _noticeUnseen = unseen;
+            UpdateBell();
+
+            // 8 · Claude tab: the states fade
+            SelectTab(Tab.Claude, false);
+            await ShotAsync(folder, "b8_claude", 500);
+            _forcedState = null;
+            Collapse();
+        }
+
+        // Shift + wheel on the open island: the volume bar where nothing uses the wheel, and back to the same tab
+        if (Environment.GetEnvironmentVariable("NOTCHY_WHEELTEST") == "1")
+        {
+            string wlog = System.IO.Path.Combine(folder, "wheel.txt");
+            void WCheck(string what, bool ok, string got) => System.IO.File.AppendAllText(wlog, $"{(ok ? "ok  " : "ERRO")} {what}: {got}" + Environment.NewLine);
+            [System.Runtime.InteropServices.DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+            _audio.TryGet(out float volBefore, out _);
+            bool Wheel(UIElement on, int delta)
+            {
+                var args = new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, delta) { RoutedEvent = UIElement.PreviewMouseWheelEvent, Source = on };
+                on.RaiseEvent(args);
+                return args.Handled;
+            }
+            _forcedState = null; // (an earlier part of the test keeps it open by force)
+            _hoverActive = true;
+            _clickOpened = true;
+            UpdateState();
+            SelectTab(Tab.Shelf, false);
+            await Task.Delay(700);
+
+            keybd_event(0x10, 0, 0, UIntPtr.Zero); // Shift held
+            await Task.Delay(100);
+            bool took = Wheel(NavBar, 120);
+            await ShotAsync(folder, "w_1_bar", 450);
+            WCheck("Shift + roda no menu vira a barra de volume", took && _state == IslandState.Volume, $"{_state} tratado {took} lista {WheelTaken(NavBar)} shift {GetAsyncKeyStateShift(0x10)} página {_subOpen} até {WheelVolumeHolds}");
+            WheelVolume(-120); // (back where it was: the open island is the bar now, so the turn goes to it)
+            // the mouse leaves while still turning with Shift: the island closes, and the wheel must not start skipping songs
+            _hoverActive = false;
+            _clickOpened = false;
+            UpdateState();
+            await Task.Delay(200);
+            var skipBefore = _lastTrackSkip;
+            var bubble = new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, 120) { RoutedEvent = UIElement.MouseWheelEvent };
+            Island.RaiseEvent(bubble);
+            WCheck("depois de sair, a roda continua no volume (não passa música)", _lastTrackSkip == skipBefore, $"{_state}");
+            var back2 = new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, -120) { RoutedEvent = UIElement.MouseWheelEvent };
+            Island.RaiseEvent(back2);
+            _hoverActive = true;
+            _clickOpened = true;
+            keybd_event(0x10, 0, 2, UIntPtr.Zero);
+            await Task.Delay((int)(WheelVolumeSeconds * 1000) + 900);
+            await ShotAsync(folder, "w_2_back", 10);
+            WCheck("volta para a mesma aba", _state == IslandState.Expanded && _tab == Tab.Shelf, $"{_state} {_tab}");
+
+            // without Shift: nothing happens on the open island
+            bool plain = Wheel(NavBar, 120);
+            await Task.Delay(300);
+            WCheck("sem Shift a ilha aberta fica como está", _state == IslandState.Expanded, $"{_state} (tratado {plain})");
+
+            // where something uses the wheel (the calendar's month), Shift + wheel leaves it alone
+            OpenCalendar(DateTime.Today);
+            await Task.Delay(700);
+            keybd_event(0x10, 0, 0, UIntPtr.Zero);
+            await Task.Delay(100);
+            var cells = TestFind<Border>(_calBody, b => b.Tag is DateTime);
+            bool onCal = cells != null && Wheel(cells, 120);
+            keybd_event(0x10, 0, 2, UIntPtr.Zero);
+            await Task.Delay(400);
+            WCheck("no calendário a roda continua com ele", _state == IslandState.Expanded, $"{_state} (tratado {onCal})");
+            CloseSubPage(animate: false);
+
+            if (_audio.TryGet(out float volAfter, out _)) WCheck("volume de volta ao que era", Math.Abs(volAfter - volBefore) < 0.011, $"{volBefore:0.00} → {volAfter:0.00}");
+            _hoverActive = false;
+            _clickOpened = false;
+            Collapse();
+        }
+
+        // Calendário: the month page and the editor of an event (a made-up one, removed afterwards)
+        if (Environment.GetEnvironmentVariable("NOTCHY_CALTEST") == "1")
+        {
+            var ev = new CalEvent { Name = "Dentista", Date = DateTime.Today.AddDays(2), HasTime = true, Hour = 14, Minute = 30, Type = CalType.Personal, NoticeMinutes = 15 };
+            _calendar.Put(ev);
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            SelectTab(Tab.Home, false);
+            await Task.Delay(500);
+            OpenSubPage(Loc.T("cal.title"), CalendarPage);
+            await ShotAsync(folder, "cal_1_page", 700);
+            string calLog = System.IO.Path.Combine(folder, "calendar.txt");
+            void CalLog(string line) => System.IO.File.AppendAllText(calLog, line + Environment.NewLine);
+            T? Find<T>(DependencyObject root, Func<T, bool> ok) where T : DependencyObject => TestFind(root, ok);
+            void Click(DependencyObject? from) { if (!TestClick(from)) CalLog("clique: nada para clicar"); }
+
+            // drop target: the cell under a point of the grid knows its day
+            var cell17 = Find<Border>(_calBody, b => b.Tag is DateTime d && d == ev.Date.Date);
+            var centre = cell17!.TranslatePoint(new Point(cell17.ActualWidth / 2, cell17.ActualHeight / 2), _calBody);
+            CalLog($"celula sob o ponto: {(CalCellAt(centre)?.Tag as DateTime?)?.ToString("dd/MM") ?? "nenhuma"} (esperado {ev.Date:dd/MM})");
+
+            // B: the editor's day opens the small month, a day is picked, saved
+            OpenCalEditor(ev);
+            await ShotAsync(folder, "cal_2_editor", 700);
+            Click(Find<TextBlock>(Island, t => t.Text == DayLine(ev.Date)));
+            await ShotAsync(folder, "cal_3a_abrindo_linhas", 70);
+            await ShotAsync(folder, "cal_3b_abrindo_mes", 150);
+            await ShotAsync(folder, "cal_3_mini_open", 400);
+            var target = ev.Date.Date.AddDays(7);
+            Click(Find<TextBlock>(Island, t => t.Text == target.Day.ToString() && t.FontSize == 11));
+            await ShotAsync(folder, "cal_4a_fechando_mes", 110);
+            await ShotAsync(folder, "cal_4b_fechando_linhas", 200);
+            await ShotAsync(folder, "cal_4_mini_picked", 400);
+            Click(Find<TextBlock>(Island, t => t.Text == Loc.T("cal.save")));
+            await ShotAsync(folder, "cal_5_saved", 700);
+            CalLog($"editor: dia salvo {ev.Date:dd/MM} (esperado {target:dd/MM})");
+
+            // C: dropping moves it; a weekly one moves whole, keeping its rhythm
+            MoveCalEvent(ev, ev.Date, ev.Date.AddDays(-3));
+            CalLog($"arrastar: {ev.Date:dd/MM} (esperado {target.AddDays(-3):dd/MM})");
+            var weekly = new CalEvent { Name = "Inglês", Date = new DateTime(2026, 11, 3), Repeat = CalRepeat.Weekly, NotifiedFor = new DateTime(2026, 11, 10) };
+            MoveCalEvent(weekly, new DateTime(2026, 11, 17), new DateTime(2026, 11, 19));
+            CalLog($"semanal: começa {weekly.Date:dd/MM ddd}, dia 19 {weekly.OccursOn(new DateTime(2026, 11, 19))}, dia 17 {weekly.OccursOn(new DateTime(2026, 11, 17))}, aviso zerado {weekly.NotifiedFor == null}");
+            _calendar.Remove(weekly);
+            RefreshCalendar();
+            await ShotAsync(folder, "cal_6_page_after", 600);
+
+            CloseSubPage(animate: false);
+            _calendar.Remove(ev);
+            _forcedState = null;
+            Collapse();
         }
 
         // Relógio: a timer in the ring with others running, the alarms, the editor, the small island and the ring
@@ -2543,10 +3537,8 @@ public partial class MainWindow : Window
 
         var sw = new SettingsWindow { WindowStartupLocation = WindowStartupLocation.Manual, Left = 100, Top = 100 };
         sw.Show();
-        foreach (var page in new[] { "general", "look", "notif", "sounds", "music", "calendar", "focus", "files", "claude", "chat", "about" })
+        void RenderSettings(string name)
         {
-            sw.ShowPage(page);
-            await Task.Delay(700);
             var root = (FrameworkElement)sw.Content;
             var bounds = VisualTreeHelper.GetDescendantBounds(root);
             var rtb = new System.Windows.Media.Imaging.RenderTargetBitmap((int)sw.ActualWidth, (int)sw.ActualHeight, 96, 96, PixelFormats.Pbgra32);
@@ -2557,8 +3549,112 @@ public partial class MainWindow : Window
             rtb.Render(host);
             var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
             enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(rtb));
-            using var fs = System.IO.File.Create(System.IO.Path.Combine(folder, "6_settings_" + page + ".png"));
+            using var fs = System.IO.File.Create(System.IO.Path.Combine(folder, "6_settings_" + name + ".png"));
             enc.Save(fs);
+        }
+        foreach (var page in new[] { "general", "look", "notif", "sounds", "music", "calendar", "clock", "focus", "files", "clip", "claude", "chat", "about" })
+        {
+            sw.ShowPage(page);
+            await Task.Delay(700);
+            RenderSettings(page);
+        }
+        // scrolled down: the page must pass under the window's buttons' band, not through the buttons
+        sw.ShowPage("look");
+        await Task.Delay(500);
+        sw.ScrollPageTo(140);
+        await Task.Delay(300);
+        RenderSettings("look_scrolled");
+        sw.ShowPage("calendar");
+        await Task.Delay(500);
+        sw.TestExtWizard("google");
+        await Task.Delay(300);
+        sw.ScrollPageTo(330);
+        await Task.Delay(300);
+        RenderSettings("calendar_wizard");
+        sw.TestExtWizard("samsung");
+        await Task.Delay(300);
+        sw.ScrollPageTo(330);
+        await Task.Delay(300);
+        RenderSettings("calendar_wizard_samsung");
+        if (Environment.GetEnvironmentVariable("NOTCHY_HOTKEYTEST") == "1")
+        {
+            // the shortcut: recorded with real keys through the field, then Win + V taken from Windows
+            string hlog = System.IO.Path.Combine(folder, "hotkey.txt");
+            void HCheck(string what, bool ok, string got) => System.IO.File.AppendAllText(hlog, $"{(ok ? "ok  " : "ERRO")} {what}: {got}" + Environment.NewLine);
+            [System.Runtime.InteropServices.DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+            void Keys(params byte[] vks)
+            {
+                foreach (var k in vks) keybd_event(k, 0, 0, UIntPtr.Zero);
+                for (int i = vks.Length - 1; i >= 0; i--) keybd_event(vks[i], 0, 2, UIntPtr.Zero);
+            }
+            [System.Runtime.InteropServices.DllImport("user32.dll")] static extern short GetAsyncKeyState(int vk);
+            static bool GetAsyncKeyStateWin() => GetAsyncKeyState(0x5B) < 0 || GetAsyncKeyState(0x5C) < 0;
+            string saved = S.ClipHotkey;
+            sw.ShowPage("clip");
+            sw.Activate();
+            await Task.Delay(700);
+            RenderSettings("hk_1_idle");
+            var rec = TestFind<Button>((DependencyObject)sw.Content, b => b.Content is TextBlock { Text: var t } && t == Loc.T("s.cl.key.rec"));
+            rec?.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            await Task.Delay(300);
+            keybd_event(0x11, 0, 0, UIntPtr.Zero); keybd_event(0x12, 0, 0, UIntPtr.Zero);
+            await Task.Delay(300);
+            RenderSettings("hk_2_holding");
+            keybd_event(0x4B, 0, 0, UIntPtr.Zero); keybd_event(0x4B, 0, 2, UIntPtr.Zero);
+            keybd_event(0x12, 0, 2, UIntPtr.Zero); keybd_event(0x11, 0, 2, UIntPtr.Zero);
+            await Task.Delay(500);
+            RenderSettings("hk_3_recorded");
+            HCheck("gravar Ctrl + Alt + K", S.ClipHotkey == "Ctrl+Alt+K" && !_clip.HotkeyTaken, S.ClipHotkey);
+            Collapse();
+            await Task.Delay(500);
+            Keys(0x11, 0x12, 0x4B);
+            await Task.Delay(900);
+            HCheck("Ctrl + Alt + K abre a aba", _clipKeys && _tab == Tab.Clip, $"{_state} {_tab} teclado {_clipKeys}");
+            if (_clipKeys) EndClipKeys();
+            await Task.Delay(500);
+
+            S.ClipHotkey = "Win+V";
+            _clip.SetHotkey(S.ClipHotkey, force: true);
+            await Task.Delay(300);
+            Keys(0x5B, 0x56);
+            await Task.Delay(900);
+            HCheck("Win + V abre o Notchy no lugar do Windows", _clipKeys && _tab == Tab.Clip && !_clip.HotkeyTaken, $"{_state} {_tab} teclado {_clipKeys}");
+            HCheck("Win não fica preso depois", GetAsyncKeyStateWin() == false, "");
+            if (_clipKeys) EndClipKeys();
+            await Task.Delay(500);
+
+            S.ClipHotkey = saved;
+            AppSettings.Commit();
+            _clip.SetHotkey(saved, force: true);
+            HCheck("de volta ao atalho de antes", !_clip.HotkeyTaken, saved);
+        }
+        if (Environment.GetEnvironmentVariable("NOTCHY_ANIM2TEST") == "1")
+        {
+            // 13 · the sidebar's highlight slides; 14 · the search results come in
+            sw.ShowPage("general");
+            await Task.Delay(600);
+            double y0 = sw.TestSideMarkY();
+            sw.ShowPage("files");
+            await Task.Delay(90);
+            double yMid = sw.TestSideMarkY();
+            RenderSettings("b13_side_mid");
+            await Task.Delay(500);
+            System.IO.File.AppendAllText(System.IO.Path.Combine(folder, "anim2.txt"),
+                $"{(yMid > y0 + 1 && yMid < sw.TestSideMarkY() - 1 ? "ok  " : "ERRO")} Configurações: destaque da barra lateral desliza: {y0:0} → {yMid:0} → {sw.TestSideMarkY():0}" + Environment.NewLine);
+            RenderSettings("b13_side_after");
+            sw.ShowPage("calendar"); // (back where the next test expects it)
+            await Task.Delay(500);
+        }
+        if (Environment.GetEnvironmentVariable("NOTCHY_ANIMTEST") == "1")
+        {
+            // 5 · a step of the wizard: the rows glide instead of jumping
+            sw.TestExtWizard("google");
+            await Task.Delay(70);
+            RenderSettings("glide_mid");
+            bool glide = sw.TestAnyMoving();
+            await Task.Delay(450);
+            System.IO.File.AppendAllText(System.IO.Path.Combine(folder, "anim.txt"),
+                $"{(glide && !sw.TestAnyMoving() ? "ok  " : "ERRO")} Configurações: linhas deslizam ao mudar: no meio {glide}" + Environment.NewLine);
         }
 
         Application.Current.Shutdown();
