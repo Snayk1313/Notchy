@@ -47,7 +47,6 @@ public partial class MainWindow
             UpdateSpotifyControls();
             await PollSpotifyAsync();
         });
-        QueueTitle.Text = Loc.T("sp.queue");
         UpdateSpotifyControls();
     }
 
@@ -57,7 +56,6 @@ public partial class MainWindow
         var vis = on ? Visibility.Visible : Visibility.Collapsed;
         LikeButton.Visibility = ShuffleButton.Visibility = RepeatButton.Visibility = QueueButton.Visibility = vis;
         if (!on && _queueOpen) CloseQueue();
-        QueueTitle.Text = Loc.T("sp.queue");
 
         if (on && _spState?.Device is { } dev)
         {

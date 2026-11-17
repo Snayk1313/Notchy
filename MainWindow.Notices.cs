@@ -267,7 +267,7 @@ public partial class MainWindow
         var groups = all.GroupBy(n => n.App).ToList();
         var everyRow = new List<FrameworkElement>();
         list.Children.Add(ListGlide.Key(ListTop(all.Count == 0 ? Loc.T("notif.empty") : (all.Count == 1 ? Loc.T("notif.count1") : Loc.F("notif.count", all.Count)),
-            all.Count == 0 ? null : ListPill("", Loc.T("notif.clear"), false, () => ClearNotices(all, Loc.T("notif.cleared.all"), everyRow))), "top"));
+            all.Count == 0 ? null : ListPill(Glyph(0xE74D), Loc.T("notif.clear"), false, () => ClearNotices(all, Loc.T("notif.cleared.all"), everyRow))), "top"));
         // grouped by app, the app with the newest one first
         foreach (var group in groups)
         {
@@ -429,7 +429,7 @@ public partial class MainWindow
         var logo = _notices.IconOf(items[0].AppId) ?? items.FirstOrDefault(n => !n.IsPhoto && n.Avatar != null)?.Avatar;
         var icon = new Border { Width = 18, Height = 18, CornerRadius = new CornerRadius(logo != null ? 3 : 5), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 7, 0),
             Background = logo != null ? new ImageBrush(logo) { Stretch = Stretch.Uniform, Viewbox = DesktopAppIcon.DrawnArea(logo) } : items[0].Accent is Color c ? Br(c) : White(0x30) };
-        var name = new TextBlock { Text = app.ToUpperInvariant(), FontSize = 10, FontWeight = FontWeights.SemiBold, Foreground = White(0x80), VerticalAlignment = VerticalAlignment.Center };
+        var name = new TextBlock { Text = app, FontSize = 10.5, Foreground = White(0x88), VerticalAlignment = VerticalAlignment.Center };
         var count = new Border { CornerRadius = new CornerRadius(7), Background = White(0x14), Padding = new Thickness(5, 0, 5, 1), Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
             Child = new TextBlock { Text = items.Count.ToString(), FontSize = 9, FontWeight = FontWeights.SemiBold, Foreground = White(0xAA) } };
         var turn = new RotateTransform(folded ? -90 : 0);

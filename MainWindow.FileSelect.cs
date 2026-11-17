@@ -29,6 +29,11 @@ public partial class MainWindow
     {
         DownloadsTab.Background = Brushes.Transparent; // the gaps between rows can start a lasso too
         _shelfSel = new FileSelector(this, ShelfDropZone, ShelfItems, ShelfScroll, ShelfTab, ShelfColor);
+        DownloadsTab.Children.Remove(DownloadsScroll);
+        DownloadsScroll.Content = null;
+        var dlHost = Scroller(DownloadsList);
+        DownloadsScroll = (ScrollViewer)dlHost.Children[0];
+        DownloadsTab.Children.Insert(0, dlHost);
         _dlSel = new FileSelector(this, DownloadsTab, DownloadsList, DownloadsScroll, DownloadsTab, DoneGreen);
 
         _selPillText = new TextBlock { FontSize = 10.5, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };

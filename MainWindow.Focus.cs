@@ -135,6 +135,9 @@ public partial class MainWindow
             if (_hwnd != IntPtr.Zero) Native.SetActivatable(_hwnd, false);
         };
         FocusTaskBox.LostKeyboardFocus += (_, _) => S.Save();
+        // the same name box as the timer and the alarm: it outlines in the tab's colour while typing
+        FocusTaskBox.GotKeyboardFocus += (_, _) => FocusTaskField.BorderBrush = new SolidColorBrush(FocusColor);
+        FocusTaskBox.LostKeyboardFocus += (_, _) => FocusTaskField.BorderBrush = Brushes.Transparent;
         FocusTaskHint.Visibility = FocusTaskBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
 
         GlowUnder(FocusPlayButton, FocusColor, true, 14, 0.55);
@@ -145,8 +148,9 @@ public partial class MainWindow
         var t = new TextBlock { Text = text, FontSize = 10.5, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(Color.FromArgb(0xAA, 255, 255, 255)) };
         var chip = new Border
         {
-            Child = t, CornerRadius = new CornerRadius(9), Padding = new Thickness(8, 2, 8, 2), Margin = new Thickness(0, 0, 4, 0),
-            Background = new SolidColorBrush(Color.FromArgb(0x10, 255, 255, 255)), Cursor = Cursors.Hand
+            Child = t, CornerRadius = new CornerRadius(7), Padding = new Thickness(8, 2, 8, 2), Margin = new Thickness(0, 0, 4, 0),
+            Background = new SolidColorBrush(Color.FromArgb(0x10, 255, 255, 255)), Cursor = Cursors.Hand,
+            BorderThickness = new Thickness(1.3), BorderBrush = Brushes.Transparent
         };
         chip.MouseEnter += (_, _) => chip.Opacity = 0.8;
         chip.MouseLeave += (_, _) => chip.Opacity = 1;
@@ -352,7 +356,8 @@ public partial class MainWindow
         foreach (var (chip, text, minutes) in _focusChips)
         {
             bool sel = focusMode && S.FocusMinutes == minutes;
-            chip.Background = new SolidColorBrush(sel ? Color.FromArgb(0x33, FocusColor.R, FocusColor.G, FocusColor.B) : Color.FromArgb(0x10, 255, 255, 255));
+            chip.Background = new SolidColorBrush(sel ? Color.FromArgb(0x38, FocusColor.R, FocusColor.G, FocusColor.B) : Color.FromArgb(0x10, 255, 255, 255));
+            chip.BorderBrush = sel ? new SolidColorBrush(FocusColor) : Brushes.Transparent;
             text.Foreground = new SolidColorBrush(sel ? Colors.White : Color.FromArgb(0xAA, 255, 255, 255));
         }
         if (_breakChip != null && _breakChipText != null)
@@ -360,6 +365,7 @@ public partial class MainWindow
             _breakChipText.Text = "☕ " + S.BreakMinutes;
             _breakChip.Background = new SolidColorBrush(!focusMode ? Color.FromArgb(0x30, BreakGreen.R, BreakGreen.G, BreakGreen.B) : Color.FromArgb(0x0A, 255, 255, 255));
             _breakChipText.Foreground = new SolidColorBrush(!focusMode ? Colors.White : Color.FromArgb(0x99, 255, 255, 255));
+            _breakChip.BorderBrush = !focusMode ? new SolidColorBrush(BreakGreen) : Brushes.Transparent;
         }
 
         // today, the streak and this week

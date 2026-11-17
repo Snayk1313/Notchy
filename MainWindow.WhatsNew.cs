@@ -27,7 +27,8 @@ public partial class MainWindow
     private Grid? _newsArt;
     private TextBlock? _newsTag, _newsTitle, _newsText;
     private StackPanel? _newsDots;
-    private ScrollViewer? _newsList;
+    private Grid? _newsList;
+    private ScrollViewer? _newsScroll;
     private TextBlock? _newsAllText;
     private Border? _newsPrev, _newsNext;
     private int _newsIndex;
@@ -117,7 +118,7 @@ public partial class MainWindow
         {
             list.Children.Add(new TextBlock
             {
-                Text = s.Title.ToUpper(CultureInfo.CurrentCulture), FontSize = 10.5, FontWeight = FontWeights.Bold,
+                Text = s.Title, FontSize = 10.5,
                 Foreground = new SolidColorBrush(Color.FromArgb(0x77, 255, 255, 255)), Margin = new Thickness(0, 10, 0, 4)
             });
             foreach (var item in s.Items)
@@ -132,7 +133,9 @@ public partial class MainWindow
                 list.Children.Add(row);
             }
         }
-        _newsList = new ScrollViewer { Content = list, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Visibility = Visibility.Collapsed, FocusVisualStyle = null };
+        _newsList = Scroller(list);
+        _newsList.Visibility = Visibility.Collapsed;
+        _newsScroll = (ScrollViewer)_newsList.Children[0];
         NewsTab.Children.Add(_newsList);
 
         // dots and buttons
@@ -201,7 +204,7 @@ public partial class MainWindow
         if (_newsPrev != null && _newsNext != null) _newsPrev.Visibility = _newsNext.Visibility = showList ? Visibility.Collapsed : Visibility.Visible;
         if (showList)
         {
-            _newsList.ScrollToTop();
+            _newsScroll?.ScrollToTop();
             _newsList.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(Dur(220))));
         }
         else ShowNewsCard(_newsIndex, animate: true);

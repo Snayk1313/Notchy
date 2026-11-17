@@ -915,10 +915,23 @@ public sealed partial class SettingsWindow : Window
             }));
         if (S.WeatherAuto) return; // the box is only for picking a city by hand
 
+        // the same field as the search at the top of the sidebar: a dark rounded box with the magnifier
         var cityBox = new TextBox
         {
-            Width = _setup ? 170 : 250, Text = S.WeatherCity, // (the assistant is narrower: the title keeps its room) Background = new SolidColorBrush(Color.FromArgb(0x30, 0, 0, 0)), Foreground = Brushes.White, CaretBrush = Brushes.White,
-            BorderBrush = new SolidColorBrush(Color.FromArgb(0x24, 255, 255, 255)), BorderThickness = new Thickness(1), Padding = new Thickness(8, 5, 8, 5), FontSize = 12
+            Text = S.WeatherCity, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = Brushes.White, CaretBrush = Brushes.White,
+            Padding = new Thickness(26, 6, 8, 6), FontSize = 12, FocusVisualStyle = null, VerticalContentAlignment = VerticalAlignment.Center
+        };
+        var cityGrid = new Grid();
+        cityGrid.Children.Add(cityBox);
+        cityGrid.Children.Add(new TextBlock
+        {
+            Text = "", FontFamily = (FontFamily)Application.Current.FindResource("IconFont"), FontSize = 11.5, Foreground = Dim(0x77),
+            Margin = new Thickness(9, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false
+        });
+        var cityField = new Border
+        {
+            Child = cityGrid, CornerRadius = new CornerRadius(10), Width = _setup ? 170 : 250, // (the assistant is narrower: the title keeps its room)
+            Background = new SolidColorBrush(Color.FromArgb(0x0E, 255, 255, 255)), BorderBrush = new SolidColorBrush(Color.FromArgb(0x14, 255, 255, 255)), BorderThickness = new Thickness(1)
         };
         var results = new StackPanel { Margin = new Thickness(16, 0, 16, 10) };
         var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
@@ -963,7 +976,7 @@ public sealed partial class SettingsWindow : Window
             timer.Stop();
             timer.Start();
         };
-        Row(section, Loc.T("s.weather.city"), Loc.T("s.weather.city.d"), cityBox);
+        Row(section, Loc.T("s.weather.city"), Loc.T("s.weather.city.d"), cityField);
         section.Children.Add(results);
         if (_focusCityBox)
         {

@@ -649,7 +649,7 @@
                                     <Border Grid.Column="1" CornerRadius="12" Background="#16FFFFFF" BorderBrush="#12FFFFFF" BorderThickness="1"
                                             Padding="10,8" VerticalAlignment="Top" Margin="0,2,0,0">
                                         <StackPanel>
-                                            <TextBlock x:Name="ClaudeRecentTitle" FontSize="9.5" FontWeight="Bold" Foreground="#88FFFFFF" />
+                                            <TextBlock x:Name="ClaudeRecentTitle" FontSize="10" Foreground="#77FFFFFF" />
                                             <StackPanel x:Name="ClaudeRecentList" Margin="0,4,0,0" />
                                         </StackPanel>
                                     </Border>
@@ -745,25 +745,6 @@
                                     </DockPanel>
                                 </Grid>
 
-                                <!-- Spotify queue: slides over the player -->
-                                <Border x:Name="QueuePanel" Grid.RowSpan="3" Background="#F2141418" CornerRadius="12" Margin="0,0,0,4"
-                                        BorderBrush="#14FFFFFF" BorderThickness="1" Visibility="Collapsed">
-                                    <Border.RenderTransform>
-                                        <TranslateTransform x:Name="QueueSlide" />
-                                    </Border.RenderTransform>
-                                    <Grid Margin="10,6,6,6">
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="Auto" />
-                                            <RowDefinition />
-                                        </Grid.RowDefinitions>
-                                        <TextBlock x:Name="QueueTitle" FontSize="11" FontWeight="Bold" Foreground="#99FFFFFF" VerticalAlignment="Center" />
-                                        <Button Style="{StaticResource IconButton}" Content="&#xE711;" FontSize="9" Padding="6"
-                                                HorizontalAlignment="Right" Click="Queue_Click" />
-                                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,2,0,0">
-                                            <StackPanel x:Name="QueueList" />
-                                        </ScrollViewer>
-                                    </Grid>
-                                </Border>
                             </Grid>
 
                             <!-- FOCUS -->
@@ -810,12 +791,13 @@
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="*" />
                                     </Grid.RowDefinitions>
+                                    <Border x:Name="FocusTaskField" Background="#0EFFFFFF" CornerRadius="8" Padding="8,1" BorderThickness="1.3" BorderBrush="Transparent">
                                     <Grid>
                                         <TextBox x:Name="FocusTaskBox" Background="Transparent" BorderThickness="0" Foreground="White" CaretBrush="White"
                                                  FontSize="12" Padding="0,3,0,3" FocusVisualStyle="{x:Null}" MaxLength="80" />
                                         <TextBlock x:Name="FocusTaskHint" FontSize="12" Foreground="#66FFFFFF" Margin="2,3,0,0" IsHitTestVisible="False" />
-                                        <Rectangle Height="1" VerticalAlignment="Bottom" StrokeDashArray="3 3" Stroke="#33FFFFFF" StrokeThickness="1" />
                                     </Grid>
+                                    </Border>
                                     <!-- the time: minutes are a little reel that rolls when they change -->
                                     <StackPanel x:Name="FocusTimeRow" Grid.Row="1" Orientation="Horizontal" Margin="0,3,0,0" Background="Transparent"
                                                 Cursor="SizeNS" HorizontalAlignment="Left">

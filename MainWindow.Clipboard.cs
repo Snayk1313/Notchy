@@ -77,13 +77,8 @@ public partial class MainWindow
         box.PreviewKeyDown += ClipKey;
         _clipTop = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
         _clipPause = new Border();
-        var search = WithHint(box, Loc.T("clip.search"), TextAlignment.Left);
+        var search = SearchField(box, Loc.T("clip.search"));
         search.VerticalAlignment = VerticalAlignment.Center;
-        // the magnifier from the icon font, as in Settings (the "⌕" character came from a fallback font and was cut)
-        var searchGrid = (Grid)search.Child;
-        ((TextBlock)searchGrid.Children[1]).Margin = new Thickness(26, 0, 0, 0);
-        searchGrid.Children.Add(new TextBlock { Text = "", FontFamily = (FontFamily)Application.Current.FindResource("IconFont"), FontSize = 11, Foreground = White(0x77),
-            Margin = new Thickness(9, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false });
         _clipKeysHint = new TextBlock { Text = Loc.T("clip.keys"), FontSize = 10, Foreground = White(0x66), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 10, 0), IsHitTestVisible = false, Visibility = Visibility.Collapsed };
         ((Grid)search.Child).Children.Add(_clipKeysHint);
@@ -92,7 +87,8 @@ public partial class MainWindow
 
         // ---- Tudo · Texto · Imagens · Links · Arquivos
         _clipChips = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(2, 0, 0, 4) };
-        _clipChipPill = new Border { CornerRadius = new CornerRadius(9), Background = Brushes.White, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
+        _clipChipPill = new Border { CornerRadius = new CornerRadius(7), Background = new SolidColorBrush(Color.FromArgb(0x38, ClipColor.R, ClipColor.G, ClipColor.B)),
+            BorderBrush = new SolidColorBrush(ClipColor), BorderThickness = new Thickness(1.3), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
             RenderTransform = new TranslateTransform(), Opacity = 0, IsHitTestVisible = false };
         Grid.SetRow(_clipChipPill, 1);
         Grid.SetRow(_clipChips, 1);
@@ -164,7 +160,7 @@ public partial class MainWindow
             foreach (var (kind, key) in new (ClipKind?, string)[] { (null, "clip.f.all"), (ClipKind.Text, "clip.f.text"), (ClipKind.Image, "clip.f.image"), (ClipKind.Link, "clip.f.link"), (ClipKind.Files, "clip.f.files") })
             {
                 var text = new TextBlock { FontSize = 10.5, FontWeight = FontWeights.SemiBold };
-                var chip = new Border { CornerRadius = new CornerRadius(9), Padding = new Thickness(9, 2, 9, 3), Margin = new Thickness(0, 0, 5, 0), Cursor = Cursors.Hand, VerticalAlignment = VerticalAlignment.Center, Child = text };
+                var chip = new Border { CornerRadius = new CornerRadius(7), Padding = new Thickness(9, 2, 9, 3), Margin = new Thickness(0, 0, 5, 0), Cursor = Cursors.Hand, VerticalAlignment = VerticalAlignment.Center, Child = text };
                 var k = kind;
                 chip.MouseLeftButtonUp += (_, e) =>
                 {
@@ -182,7 +178,7 @@ public partial class MainWindow
             bool on = _clipFilter == kind;
             chip.Background = on ? Brushes.Transparent : White(0x12);
             text.Text = Loc.T(key);
-            text.Foreground = on ? new SolidColorBrush(Color.FromRgb(0x11, 0x11, 0x14)) : White(0xB0);
+            text.Foreground = on ? Brushes.White : White(0xB0);
         }
         bool filterChanged = _clipPillAt != _clipFilter && _clipPillPlaced;
         Dispatcher.BeginInvoke(() => MoveClipPill(filterChanged), System.Windows.Threading.DispatcherPriority.Loaded);
@@ -233,7 +229,7 @@ public partial class MainWindow
     }
 
     private static TextBlock ClipSection(string text) =>
-        new() { Text = text.ToUpperInvariant(), FontSize = 9.5, FontWeight = FontWeights.Bold, Foreground = White(0x70), Margin = new Thickness(6, 6, 0, 3) };
+        new() { Text = text, FontSize = 10, Foreground = White(0x77), Margin = new Thickness(6, 6, 0, 3) };
 
     private static string ClipTitle(ClipItem x) => x.Kind switch
     {

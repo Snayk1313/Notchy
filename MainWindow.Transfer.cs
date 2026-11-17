@@ -633,20 +633,18 @@ public partial class MainWindow
         if (history.Count > 0)
         {
             DownloadsList.Children.Add(ListGlide.Key(RecentTitle(history.Count), "recent"));
-            h += 18;
+            h += 26;
             foreach (var e in history)
             {
                 var row = HistoryRow(e);
                 _dlHistoryRows.Add(row);
                 row.Tag = new GlideKey("done:" + e.Path);
                 DownloadsList.Children.Add(row);
-                h += 38;
+                h += 40;
             }
         }
         _dlSel.Sync();
         h = Math.Ceiling(h) + 4;
-        // more than fits: the list scrolls (a little room so the rows don't touch the scrollbar)
-        DownloadsList.Margin = new Thickness(0, 0, h > DownloadsMaxHeight ? 4 : 0, 0);
         h = Math.Clamp(h, 96, DownloadsMaxHeight);
         if (Math.Abs(h - _dlTabHeight) > 0.5)
         {
@@ -659,8 +657,8 @@ public partial class MainWindow
 
     private static TextBlock SectionTitle(string text) => new()
     {
-        Text = text.ToUpperInvariant(), FontSize = 9.5, FontWeight = FontWeights.Bold,
-        Foreground = new SolidColorBrush(Color.FromArgb(0x88, 255, 255, 255)), Margin = new Thickness(4, 2, 0, 4), Height = 14
+        Text = text, FontSize = 10,
+        Foreground = new SolidColorBrush(Color.FromArgb(0x77, 255, 255, 255)), Margin = new Thickness(4, 2, 0, 4), Height = 14
     };
 
     /// <summary>"Recentes", with "Selecionar" (and "Marcar todos" while selecting) on the right.</summary>
@@ -668,13 +666,15 @@ public partial class MainWindow
     {
         var title = SectionTitle(Loc.T("dl.recent"));
         title.Margin = new Thickness(0);
-        var grid = new Grid { Height = 14, Margin = new Thickness(4, 2, 0, 4) };
+        // tall enough for the "Limpar" pill: overhanging, it was cut by the list's scroller at the top
+        title.VerticalAlignment = VerticalAlignment.Center;
+        var grid = new Grid { Height = 22, Margin = new Thickness(4, 0, 0, 4) };
         grid.Children.Add(title);
 
         Border Link(Action click, out TextBlock text)
         {
             text = new TextBlock { FontSize = 10, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(Color.FromArgb(0x99, 255, 255, 255)) };
-            var b = new Border { Child = text, Padding = new Thickness(7, 2, 7, 2), Margin = new Thickness(0, -3, 0, -3), Background = Brushes.Transparent, Cursor = Cursors.Hand, Tag = "noselect" };
+            var b = new Border { Child = text, Padding = new Thickness(7, 2, 7, 2), Background = Brushes.Transparent, Cursor = Cursors.Hand, Tag = "noselect", VerticalAlignment = VerticalAlignment.Center };
             b.MouseLeftButtonUp += (_, e) =>
             {
                 e.Handled = true;
@@ -683,7 +683,7 @@ public partial class MainWindow
             };
             return b;
         }
-        var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
         if (count >= 2)
         {
             _dlAllLink = Link(() => _dlSel.MarkAll(), out var all);
@@ -692,8 +692,11 @@ public partial class MainWindow
             row.Children.Add(Link(() => _dlSel.SetMode(!_dlSel.Mode), out var select));
             _dlSelectText = select;
         }
-        row.Children.Add(Link(ClearDownloads, out var clear));
-        clear.Text = Loc.T("dl.clear");
+        // the same "Limpar" pill as Copiados and Notificações
+        var clear = ListPill(Glyph(0xE74D), Loc.T("dl.clear"), false, ClearDownloads);
+        clear.Margin = new Thickness(6, 0, 0, 0);
+        clear.Tag = "noselect";
+        row.Children.Add(clear);
         grid.Children.Add(row);
         return grid;
     }
@@ -905,24 +908,25 @@ public partial class MainWindow
         grid.Children.Add(texts);
         string path = e.Path;
         var folder = SmallButton("", Loc.T("dl.folder"), () => ShowInFolder(path));
-        Grid.SetColumn(folder, 2);
+        // the folder sits at the right edge, like the last button of the other lists; the X shows left of it on hover
+        Grid.SetColumn(folder, 3);
         grid.Children.Add(folder);
 
         var row = new Border
         {
             Child = grid, CornerRadius = new CornerRadius(10), Padding = new Thickness(8.5, 2.5, 6.5, 2.5), Margin = new Thickness(0, 0, 0, 2),
-            BorderThickness = new Thickness(1.5), BorderBrush = Brushes.Transparent, Background = Brushes.Transparent, Cursor = Cursors.Hand, Height = 36, ToolTip = Loc.T("dl.open")
+            BorderThickness = new Thickness(1.5), BorderBrush = Brushes.Transparent, Background = Brushes.Transparent, Cursor = Cursors.Hand, Height = 38, ToolTip = Loc.T("dl.open")
         };
         var remove = SmallButton("", Loc.T("dl.remove"), () => RemoveDownload(path, row));
-        remove.Opacity = 0;
-        Grid.SetColumn(remove, 3);
+        remove.Visibility = Visibility.Collapsed;
+        Grid.SetColumn(remove, 2);
         grid.Children.Add(remove);
         bool hovering = false, isMarked = false;
         void Tint() => row.Background = isMarked
             ? new SolidColorBrush(Color.FromArgb(0x1C, DoneGreen.R, DoneGreen.G, DoneGreen.B))
             : hovering ? new SolidColorBrush(Color.FromArgb(0x12, 255, 255, 255)) : Brushes.Transparent;
-        row.MouseEnter += (_, _) => { hovering = true; remove.Opacity = 1; Tint(); };
-        row.MouseLeave += (_, _) => { hovering = false; remove.Opacity = 0; Tint(); };
+        row.MouseEnter += (_, _) => { hovering = true; remove.Visibility = Visibility.Visible; Tint(); };
+        row.MouseLeave += (_, _) => { hovering = false; remove.Visibility = Visibility.Collapsed; Tint(); };
         _dlSel.Items.Add(new SelItem
         {
             Path = path,

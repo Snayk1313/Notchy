@@ -232,9 +232,10 @@ public partial class MainWindow
         var answerStack = new StackPanel();
         answerStack.Children.Add(_thinking);
         answerStack.Children.Add(_answerText);
-        _answerScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = answerStack, Padding = new Thickness(0, 0, 6, 0) };
-        Grid.SetRow(_answerScroll, 1);
-        _answerView.Children.Add(_answerScroll);
+        var answerHost = Scroller(answerStack);
+        _answerScroll = (ScrollViewer)answerHost.Children[0];
+        Grid.SetRow(answerHost, 1);
+        _answerView.Children.Add(answerHost);
 
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
         _copyButton = SmallPill(0xE8C8, "chat.copy", async () =>

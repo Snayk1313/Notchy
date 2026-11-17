@@ -161,13 +161,12 @@ public partial class MainWindow
         // name, time, buttons
         var mid = new StackPanel { Margin = new Thickness(4, 2, 8, 0) };
         Grid.SetColumn(mid, 1);
-        var nameGrid = new Grid { Width = 160, HorizontalAlignment = HorizontalAlignment.Left };
+        var nameGrid = new Grid { Width = 142 };
         _clockName = new TextBox { Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = Brushes.White, CaretBrush = Brushes.White,
             FontSize = 12, Padding = new Thickness(0, 3, 0, 3), FocusVisualStyle = null, MaxLength = 40, SelectionBrush = Br(TimerColor) };
         _clockNameHint = new TextBlock { FontSize = 12, Foreground = White(0x66), Margin = new Thickness(2, 3, 0, 0), IsHitTestVisible = false };
         nameGrid.Children.Add(_clockName);
         nameGrid.Children.Add(_clockNameHint);
-        nameGrid.Children.Add(new Rectangle { Height = 1, VerticalAlignment = VerticalAlignment.Bottom, StrokeDashArray = new DoubleCollection { 3, 3 }, Stroke = White(0x33), StrokeThickness = 1 });
         MakeTypable(_clockName, () =>
         {
             if (_clockSel != null)
@@ -177,7 +176,7 @@ public partial class MainWindow
             }
         });
         _clockName.TextChanged += (_, _) => _clockNameHint.Visibility = _clockName.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
-        mid.Children.Add(nameGrid);
+        mid.Children.Add(NameBox(nameGrid, _clockName, TimerColor));
 
         _clockTime = new TextBlock { FontSize = 38, FontWeight = FontWeights.Bold, Foreground = Brushes.White, Margin = new Thickness(0, 2, 0, -3),
             Background = Brushes.Transparent, Cursor = Cursors.SizeNS, HorizontalAlignment = HorizontalAlignment.Left };
@@ -301,16 +300,15 @@ public partial class MainWindow
 
         var right = new StackPanel { Margin = new Thickness(16, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
         Grid.SetColumn(right, 1);
-        var nameGrid = new Grid { Width = 150, HorizontalAlignment = HorizontalAlignment.Left };
+        var nameGrid = new Grid { Width = 132 };
         _edName = new TextBox { Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = Brushes.White, CaretBrush = Brushes.White,
             FontSize = 12, Padding = new Thickness(0, 2, 0, 2), FocusVisualStyle = null, MaxLength = 30, SelectionBrush = Br(TimerColor) };
         _edNameHint = new TextBlock { FontSize = 12, Foreground = White(0x66), Margin = new Thickness(2, 2, 0, 0), IsHitTestVisible = false };
         nameGrid.Children.Add(_edName);
         nameGrid.Children.Add(_edNameHint);
-        nameGrid.Children.Add(new Rectangle { Height = 1, VerticalAlignment = VerticalAlignment.Bottom, StrokeDashArray = new DoubleCollection { 3, 3 }, Stroke = White(0x33), StrokeThickness = 1 });
         MakeTypable(_edName, null);
         _edName.TextChanged += (_, _) => _edNameHint.Visibility = _edName.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
-        right.Children.Add(nameGrid);
+        right.Children.Add(NameBox(nameGrid, _edName, TimerColor));
 
         var days = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
         for (int i = 0; i < 7; i++)
@@ -331,7 +329,7 @@ public partial class MainWindow
         right.Children.Add(days);
 
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 9, 0, 0) };
-        var cancel = Pill(Loc.T("clock.cancel"), White(0x14), White(0xCC), new Thickness(10, 3, 10, 3));
+        var cancel = Pill(Loc.T("clock.cancel"), White(0x14), White(0xCC), new Thickness(9, 3, 10, 3), Glyph(0xE711));
         cancel.Tag = "clock.cancel";
         cancel.MouseLeftButtonUp += (_, e) =>
         {
@@ -339,7 +337,7 @@ public partial class MainWindow
             SoundService.Play(Sfx.Click);
             CloseAlarmEditor();
         };
-        var save = Pill(Loc.T("clock.save"), Br(TimerColor), Br(TimerInk), new Thickness(12, 3, 12, 3));
+        var save = Pill(Loc.T("clock.save"), Br(TimerColor), Br(TimerInk), new Thickness(10, 3, 12, 3), Glyph(0xE73E));
         save.Tag = "clock.save";
         save.MouseLeftButtonUp += (_, e) =>
         {
@@ -347,7 +345,7 @@ public partial class MainWindow
             SoundService.Play(Sfx.Click);
             SaveAlarmEditor();
         };
-        _edDelete = Pill(Loc.T("clock.delete"), Brushes.Transparent, Br(Color.FromRgb(0xFF, 0x8A, 0x80)), new Thickness(8, 3, 8, 3));
+        _edDelete = Pill(Loc.T("clock.delete"), Brushes.Transparent, Br(Color.FromRgb(0xFF, 0x8A, 0x80)), new Thickness(8, 3, 8, 3), Glyph(0xE74D));
         _edDelete.Tag = "clock.delete";
         _edDelete.MouseLeftButtonUp += (_, e) =>
         {
@@ -366,11 +364,21 @@ public partial class MainWindow
         return ed;
     }
 
-    private static Border Pill(string text, Brush background, Brush foreground, Thickness padding)
+    /// <summary>A small pill; with a glyph (the alarm editor's Cancelar ✕ / Salvar ✓, like the event editor's) the icon goes before the text.</summary>
+    private static Border Pill(string text, Brush background, Brush foreground, Thickness padding, string? glyph = null)
     {
+        UIElement child = new TextBlock { Text = text, FontSize = 10.5, FontWeight = FontWeights.SemiBold, Foreground = foreground, VerticalAlignment = VerticalAlignment.Center };
+        if (glyph != null)
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal };
+            row.Children.Add(new TextBlock { Text = glyph, FontFamily = (FontFamily)Application.Current.FindResource("IconFont"), FontSize = 10, Foreground = foreground,
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 5, 0) });
+            row.Children.Add(child);
+            child = row;
+        }
         var b = new Border
         {
-            Child = new TextBlock { Text = text, FontSize = 10.5, FontWeight = FontWeights.SemiBold, Foreground = foreground, VerticalAlignment = VerticalAlignment.Center },
+            Child = child,
             Background = background, CornerRadius = new CornerRadius(10), Padding = padding, Margin = new Thickness(0, 0, 5, 0), Cursor = Cursors.Hand
         };
         b.MouseEnter += (_, _) => b.Opacity = 0.8;
@@ -416,7 +424,7 @@ public partial class MainWindow
         _undoText.Text = Loc.T("clock.deleted");
         _undoLink.Text = Loc.T("clock.undo");
         foreach (var pill in new[] { _edDelete }.Concat(((StackPanel)_edDelete.Parent).Children.OfType<Border>()))
-            if (pill.Tag is string key && pill.Child is TextBlock tb) tb.Text = Loc.T(key);
+            if (pill.Tag is string key && (pill.Child as TextBlock ?? (pill.Child as Panel)?.Children.OfType<TextBlock>().LastOrDefault()) is { } tb) tb.Text = Loc.T(key);
         _clockSideKey = _alarmCardsKey = "";
         UpdateClockUi();
     }
@@ -668,7 +676,7 @@ public partial class MainWindow
                 {
                     Child = text, CornerRadius = new CornerRadius(10), Padding = new Thickness(0, 6, 0, 6), Margin = new Thickness(0, 0, 5, 5), Cursor = Cursors.Hand,
                     Background = on ? Br(Color.FromArgb(0x33, TimerColor.R, TimerColor.G, TimerColor.B)) : White(0x0E),
-                    BorderBrush = on ? Br(Color.FromArgb(0x66, TimerColor.R, TimerColor.G, TimerColor.B)) : White(0x12), BorderThickness = new Thickness(1)
+                    BorderBrush = on ? Br(TimerColor) : White(0x12), BorderThickness = new Thickness(1.3)
                 };
                 int minutes = m;
                 cell.MouseEnter += (_, _) => cell.Opacity = 0.8;

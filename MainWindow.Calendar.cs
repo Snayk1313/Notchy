@@ -536,7 +536,7 @@ public partial class MainWindow
         var after = _calendar.After(_calDay, 12);
         if (after.Count > 0)
         {
-            list.Children.Add(new TextBlock { Text = Loc.T("cal.next"), FontSize = 10, FontWeight = FontWeights.Bold, Foreground = White(0x66), Margin = new Thickness(6, 8, 0, 3) });
+            list.Children.Add(new TextBlock { Text = Loc.T("cal.next"), FontSize = 10, Foreground = White(0x77), Margin = new Thickness(6, 8, 0, 3) });
             foreach (var (e, day) in after) list.Children.Add(CalRow(e, day, true));
         }
 
@@ -1235,6 +1235,34 @@ public partial class MainWindow
         return new Border { Child = grid, CornerRadius = new CornerRadius(9), Background = rounded ? White(0x0E) : Brushes.Transparent };
     }
 
+    /// <summary>
+    /// A field where you give something a name (focus session, timer, alarm, event): a soft rounded box that outlines in the
+    /// tab's colour while you type. Searching and asking use <see cref="SearchField"/> instead.
+    /// </summary>
+    private static Border NameBox(UIElement content, TextBox box, Color accent)
+    {
+        var b = new Border { Child = content, Background = White(0x0E), CornerRadius = new CornerRadius(8), Padding = new Thickness(8, 1, 8, 1),
+            BorderThickness = new Thickness(1.3), BorderBrush = Brushes.Transparent, HorizontalAlignment = HorizontalAlignment.Left };
+        box.GotKeyboardFocus += (_, _) => b.BorderBrush = Br(accent);
+        box.LostKeyboardFocus += (_, _) => b.BorderBrush = Brushes.Transparent;
+        return b;
+    }
+
+    /// <summary>The island's search pill (Copiados, the weather's city): <see cref="WithHint"/> with the magnifier on the left.</summary>
+    private Border SearchField(TextBox box, string hint)
+    {
+        box.Background = Brushes.Transparent;
+        box.BorderThickness = new Thickness(0);
+        box.Padding = new Thickness(24, box.Padding.Top, 6, box.Padding.Bottom);
+        var field = WithHint(box, hint, TextAlignment.Left);
+        var grid = (Grid)field.Child;
+        ((TextBlock)grid.Children[1]).Margin = new Thickness(26, 0, 0, 0);
+        // the magnifier from the icon font, as in Settings (the "⌕" character came from a fallback font and was cut)
+        grid.Children.Add(new TextBlock { Text = "", FontFamily = (FontFamily)Application.Current.FindResource("IconFont"), FontSize = 11, Foreground = White(0x77),
+            Margin = new Thickness(9, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false });
+        return field;
+    }
+
     private static FrameworkElement CalLineOf(string label, UIElement control, double top = 8)
     {
         var line = new DockPanel { Margin = new Thickness(0, top, 0, 0) };
@@ -1256,15 +1284,17 @@ public partial class MainWindow
 
         var name = new TextBox
         {
-            Text = editing?.Name ?? "", Background = Brushes.Transparent, BorderBrush = White(0x40), BorderThickness = new Thickness(0, 0, 0, 1.3), Foreground = Brushes.White, CaretBrush = Brushes.White,
-            FontSize = 14, Padding = new Thickness(2, 3, 2, 5), FocusVisualStyle = null, SelectionBrush = Br(Color.FromRgb(0x7F, 0xD0, 0xFF))
+            Text = editing?.Name ?? "", Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = Brushes.White, CaretBrush = Brushes.White,
+            FontSize = 14, Padding = new Thickness(0, 3, 0, 4), FocusVisualStyle = null, SelectionBrush = Br(Color.FromRgb(0x7F, 0xD0, 0xFF))
         };
         MakeTypable(name, null);
         var time = CalBox(editing is { HasTime: true } ? $"{editing.Hour:00}:{editing.Minute:00}" : "", 66);
         var born = CalBox(editing is { BornYear: > 0 } ? editing.BornYear.ToString() : "", 66);
 
         var page = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
-        page.Children.Add(WithHint(name, Loc.T("cal.name.hint"), TextAlignment.Left, rounded: false));
+        var nameField = NameBox(WithHint(name, Loc.T("cal.name.hint"), TextAlignment.Left, rounded: false), name, Colors.White);
+        nameField.HorizontalAlignment = HorizontalAlignment.Stretch;
+        page.Children.Add(nameField);
 
         var dayLine = new DockPanel();
         var timeHost = WithHint(time, Loc.T("cal.allday.short"));
@@ -1458,7 +1488,7 @@ public partial class MainWindow
             string title = name.Text.Trim();
             if (title.Length == 0)
             {
-                name.BorderBrush = Br(Color.FromRgb(0xF5, 0xA5, 0x24));
+                nameField.BorderBrush = Br(Color.FromRgb(0xF5, 0xA5, 0x24));
                 return;
             }
             int hour = 0, minute = 0;
@@ -1658,7 +1688,7 @@ public partial class MainWindow
         var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
         if (dot is Color c) row.Children.Add(new Ellipse { Width = 6, Height = 6, Fill = Br(c), Margin = new Thickness(0, 0, 5, 0), VerticalAlignment = VerticalAlignment.Center });
         row.Children.Add(new TextBlock { Text = text, FontSize = 11, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
-        var cell = new Border { Child = row, Height = 26, CornerRadius = new CornerRadius(9), Margin = new Thickness(2, 0, 2, 0), Cursor = Cursors.Hand, BorderThickness = new Thickness(1) };
+        var cell = new Border { Child = row, Height = 26, CornerRadius = new CornerRadius(8), Margin = new Thickness(2, 0, 2, 0), Cursor = Cursors.Hand, BorderThickness = new Thickness(1.3) };
         cell.MouseLeftButtonUp += (_, e) =>
         {
             e.Handled = true;
@@ -1670,8 +1700,9 @@ public partial class MainWindow
 
     private static void MarkCell(Border cell, bool on, bool enabled)
     {
-        cell.Background = White((byte)(on ? 0x2C : 0x0D));
-        cell.BorderBrush = on ? White(0x55) : Brushes.Transparent;
+        // the chosen option: a light tint and an outline in the tab's colour (white on the home tab), like every choice row
+        cell.Background = White((byte)(on ? 0x30 : 0x0D));
+        cell.BorderBrush = on ? White(0xC8) : Brushes.Transparent;
         cell.Opacity = enabled ? 1 : 0.35;
         cell.Cursor = enabled ? Cursors.Hand : Cursors.Arrow;
         if (cell.Child is Panel p && p.Children[^1] is TextBlock t) t.Foreground = on ? Brushes.White : White(0xB0);

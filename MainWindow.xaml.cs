@@ -278,7 +278,7 @@ public partial class MainWindow : Window
 
         HomeMusicLabel.Text = Loc.T("tab.music");
         HomeFocusLabel.Text = Loc.T("tab.focus");
-        ClaudeRecentTitle.Text = Loc.T("claude.recent").ToUpperInvariant();
+        ClaudeRecentTitle.Text = Loc.T("claude.recent");
         ApplyFocusTexts();
         ApplyClockTexts();
         ApplySubPageTexts();
@@ -2215,6 +2215,93 @@ public partial class MainWindow : Window
             Application.Current.Shutdown();
             return;
         }
+        if (Environment.GetEnvironmentVariable("NOTCHY_UIFIXTEST") == "1")
+        {
+            await Task.Delay(4000); // (the hello wave first)
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            // Downloads: "agora" whole, folder at the edge, the X on hover, the thin bar when it scrolls
+            SelectTab(Tab.Downloads, false);
+            var dl = Enumerable.Range(1, 9).Select(i => new DownloadEntry($@"C:\teste\arquivo gigante {i}.zip", i * 9_678_123, DateTime.UtcNow)).ToList();
+            BuildDownloadsTab(null, new List<DownloadFile>(), dl);
+            await ShotAsync(folder, "dl", 900);
+            _dlHistoryRows[1].RaiseEvent(new MouseEventArgs(Mouse.PrimaryDevice, 0) { RoutedEvent = Mouse.MouseEnterEvent });
+            DownloadsScroll.ScrollToVerticalOffset(30);
+            await ShotAsync(folder, "dl_hover_scroll", 300);
+            _dlSel.SetMode(true);
+            _dlSel.Marked.Add(dl[0].Path);
+            _dlSel.Sync();
+            DownloadsScroll.ScrollToTop();
+            await ShotAsync(folder, "dl_mode", 500);
+            _dlSel.Reset();
+            // Chat: one pair of eyes on the start screen; the thin bar on a long answer
+            SelectTab(Tab.Chat, false);
+            await ShotAsync(folder, "chat_idle", 900);
+            SetChatView(ChatView.Answer);
+            _answerText.Text = string.Join("\n\n", Enumerable.Range(1, 12).Select(i => $"Parágrafo {i}: a ilha dinâmica mostra música, timers e alertas no topo da tela."));
+            await Task.Delay(500);
+            _answerScroll.ScrollToVerticalOffset(60);
+            await ShotAsync(folder, "chat_answer", 300);
+            SetChatView(ChatView.Idle);
+            // What's new: the full list with the thin bar
+            SelectTab(Tab.News, false);
+            _newsManual = true;
+            ToggleNewsList();
+            await Task.Delay(500);
+            _newsScroll?.ScrollToVerticalOffset(40);
+            await ShotAsync(folder, "news_list", 300);
+            // Weather: the city box as a search pill
+            SelectTab(Tab.Home, false);
+            OpenCityPage();
+            await ShotAsync(folder, "city_typed", 900);
+            _cityBox!.Text = "";
+            await ShotAsync(folder, "city_empty", 400);
+            Application.Current.Shutdown();
+            return;
+        }
+        if (Environment.GetEnvironmentVariable("NOTCHY_PATTERNTEST") == "1")
+        {
+            await Task.Delay(4000); // (the hello wave first)
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            // Limpar pills and plain section titles
+            SelectTab(Tab.Downloads, false);
+            BuildDownloadsTab(null, new List<DownloadFile>(), Enumerable.Range(1, 3).Select(i => new DownloadEntry($@"C:\teste\arquivo{i}.pdf", i * 1234567, DateTime.UtcNow)).ToList());
+            await ShotAsync(folder, "p_dl", 900);
+            SelectTab(Tab.Clip, false);
+            await ShotAsync(folder, "p_clip", 900);
+            SelectTab(Tab.Home, false);
+            OnNotice(new Notice(999961, "WhatsApp", "", "Maria", "Já chegou?", DateTime.Now, null, false) { Accent = Color.FromRgb(0x25, 0xD3, 0x66) });
+            await Task.Delay(300);
+            EndNotice();
+            OpenSubPage(Loc.T("notif.title"), NoticesPage);
+            await ShotAsync(folder, "p_notices", 900);
+            CloseSubPage(animate: false);
+            // the event editor: name box, choices, buttons; and the list's "Próximos"
+            OpenCalendar(DateTime.Today);
+            await ShotAsync(folder, "p_cal", 900);
+            OpenCalEditor(null);
+            await ShotAsync(folder, "p_cal_editor", 900);
+            CloseSubPage(animate: false);
+            // clock: timer name box and shortcuts; alarm editor buttons
+            SelectTab(Tab.Clock, false);
+            ShowClockPage(alarms: false);
+            await ShotAsync(folder, "p_timer", 900);
+            ShowClockPage(alarms: true);
+            OpenAlarmEditor(null);
+            await ShotAsync(folder, "p_alarm_editor", 900);
+            _edName.Focus();
+            Keyboard.Focus(_edName);
+            await ShotAsync(folder, "p_alarm_editor_focus", 300);
+            CloseAlarmEditor();
+            SelectTab(Tab.Focus, false);
+            await ShotAsync(folder, "p_focus", 900);
+            Application.Current.Shutdown();
+            return;
+        }
+        // only Settings pages (e.g. NOTCHY_SETTINGSTEST=calendar): straight to them, the island prints skipped
+        string? settingsOnly = Environment.GetEnvironmentVariable("NOTCHY_SETTINGSTEST");
+        if (!string.IsNullOrEmpty(settingsOnly)) goto settings;
         if (Environment.GetEnvironmentVariable("NOTCHY_PASTETEST") == "1")
         {
             await PasteTestAsync(folder);
@@ -3709,6 +3796,7 @@ public partial class MainWindow : Window
             }
         }
 
+        settings:
         var sw = new SettingsWindow { WindowStartupLocation = WindowStartupLocation.Manual, Left = 100, Top = 100 };
         sw.Show();
         void RenderSettings(string name)
@@ -3726,7 +3814,7 @@ public partial class MainWindow : Window
             using var fs = System.IO.File.Create(System.IO.Path.Combine(folder, "6_settings_" + name + ".png"));
             enc.Save(fs);
         }
-        foreach (var page in new[] { "general", "look", "notif", "sounds", "music", "calendar", "clock", "focus", "files", "clip", "claude", "chat", "about" })
+        foreach (var page in !string.IsNullOrEmpty(settingsOnly) ? settingsOnly.Split(',') : new[] { "general", "look", "notif", "sounds", "music", "calendar", "clock", "focus", "files", "clip", "claude", "chat", "about" })
         {
             sw.ShowPage(page);
             await Task.Delay(700);

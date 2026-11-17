@@ -440,17 +440,13 @@ public partial class MainWindow
     {
         var box = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
         box.Children.Add(ListTop(Loc.T("s.weather.city.d"), null));
-        var field = new Grid();
         _cityBox = new TextBox
         {
-            Background = White(0x0E), BorderBrush = White(0x1C), BorderThickness = new Thickness(1), Foreground = Brushes.White, CaretBrush = Brushes.White,
-            FontSize = 12.5, Padding = new Thickness(10, 7, 10, 7), FocusVisualStyle = null, SelectionBrush = Br(Color.FromRgb(0x7F, 0xD0, 0xFF)),
+            Foreground = Brushes.White, CaretBrush = Brushes.White,
+            FontSize = 12.5, Padding = new Thickness(0, 7, 0, 7), FocusVisualStyle = null, SelectionBrush = Br(Color.FromRgb(0x7F, 0xD0, 0xFF)),
             Text = S.WeatherCity
         };
-        var hint = new TextBlock { Text = Loc.T("weather.city.hint"), FontSize = 12.5, Foreground = White(0x55), Margin = new Thickness(12, 8, 0, 0), IsHitTestVisible = false,
-            Visibility = S.WeatherCity.Length == 0 ? Visibility.Visible : Visibility.Collapsed };
-        field.Children.Add(_cityBox);
-        field.Children.Add(hint);
+        var field = SearchField(_cityBox, Loc.T("weather.city.hint"));
         MakeTypable(_cityBox, null);
         _cityResults = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
         _citySearch?.Stop();
@@ -462,7 +458,6 @@ public partial class MainWindow
         };
         _cityBox.TextChanged += (_, _) =>
         {
-            hint.Visibility = _cityBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
             _citySearch.Stop();
             _citySearch.Start();
         };
