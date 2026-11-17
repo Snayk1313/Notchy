@@ -1295,9 +1295,9 @@ public partial class MainWindow : Window
             if (cts.IsCancellationRequested) return;
             _lines = lines;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
-            return;
+            return; // (another song: it's that one's turn)
         }
         catch (Exception ex)
         {
@@ -1307,6 +1307,41 @@ public partial class MainWindow : Window
         {
             _lyricsLoading = false;
             _lineIdx = int.MinValue;
+            _ = PrefetchLyrics(cts.Token);
+        }
+    }
+
+    /// <summary>
+    /// With Spotify connected: the next songs in its queue get their lyrics fetched now, one after another, so they show
+    /// at once when the song starts. Only ones not saved yet; stops when the song changes (the next one starts its own).
+    /// </summary>
+    private async Task PrefetchLyrics(CancellationToken ct)
+    {
+        if (!S.LyricsEnabled || !Spotify.IsConnected) return;
+        try
+        {
+            var queue = await Spotify.QueueAsync();
+            foreach (var next in queue.Where(q => q.Name.Length > 0).Take(3))
+            {
+                if (ct.IsCancellationRequested) return;
+                if (_lyrics.IsKnown(next.Name, next.Artists)) continue;
+                try
+                {
+                    await _lyrics.GetAsync(next.Name, next.Artists, next.Album, next.Duration, ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                catch (Exception ex) when (ex is TimeoutException or System.Net.Http.HttpRequestException)
+                {
+                    // (the site is slow now: this one is tried again when it plays)
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            App.Log(ex);
         }
     }
 
@@ -2371,6 +2406,61 @@ public partial class MainWindow : Window
             System.IO.File.AppendAllText(System.IO.Path.Combine(folder, "pin.txt"), $"{Environment.NewLine}clique no %: {pin.TestZoomState}");
             pin.TestSave(System.IO.Path.Combine(folder, "p5_reset.png"));
             pin.Close();
+            Application.Current.Shutdown();
+            return;
+        }
+        // only the lyrics (quick): straight to LRCLIB for a few songs, how long and whether it found them
+        if (Environment.GetEnvironmentVariable("NOTCHY_LYRICSTEST") == "1")
+        {
+            var log = System.IO.Path.Combine(folder, "letras.txt");
+            foreach (var (t, a, al, secs) in new[]
+                     {
+                         ("High and Dry", "Radiohead", "The Bends", 257), ("Evidências", "Chitãozinho & Xororó", "", 278),
+                         ("Bohemian Rhapsody", "Queen", "A Night at the Opera", 354), ("Tempo Perdido", "Legião Urbana", "", 301),
+                         ("Blinding Lights", "The Weeknd", "After Hours", 200)
+                     })
+            {
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                string result;
+                try
+                {
+                    var lrc = await _lyrics.TestFetchAsync(t, a, al, TimeSpan.FromSeconds(secs), CancellationToken.None);
+                    result = lrc == null ? "sem letra" : $"achou ({LyricsService.Parse(lrc).Count} linhas)";
+                }
+                catch (Exception ex)
+                {
+                    result = "falhou: " + ex.GetType().Name + " " + ex.Message;
+                }
+                System.IO.File.AppendAllText(log, $"{t} — {a}: {result} em {clock.Elapsed.TotalSeconds:0.0} s{Environment.NewLine}");
+            }
+            // a song that doesn't exist: the second time it's known at once
+            string fake = "Musica que nao existe " + DateTime.Now.Ticks;
+            for (int i = 1; i <= 2; i++)
+            {
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                string what;
+                try
+                {
+                    using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+                    var got = await _lyrics.GetAsync(fake, "Ninguem", "", TimeSpan.FromSeconds(180), guard.Token);
+                    what = got == null ? "sem letra" : "achou?";
+                }
+                catch (Exception ex)
+                {
+                    what = "erro " + ex.GetType().Name + ": " + ex.Message;
+                }
+                System.IO.File.AppendAllText(log, $"inventada, vez {i}: {what} em {clock.Elapsed.TotalSeconds:0.00} s · guardada {_lyrics.IsKnown(fake, "Ninguem")}{Environment.NewLine}");
+            }
+            // the Spotify queue, fetched ahead
+            if (Spotify.IsConnected)
+            {
+                var queue = (await Spotify.QueueAsync()).Take(3).ToList();
+                System.IO.File.AppendAllText(log, $"fila do Spotify: {string.Join(" | ", queue.Select(q => $"{q.Name} — {q.Artists} ({q.Album}, {q.Duration.TotalSeconds:0} s) já tinha {_lyrics.IsKnown(q.Name, q.Artists)}"))}{Environment.NewLine}");
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                await PrefetchLyrics(CancellationToken.None);
+                System.IO.File.AppendAllText(log, $"busca adiantada em {clock.Elapsed.TotalSeconds:0.0} s: {string.Join(" | ", queue.Select(q => $"{q.Name}: {_lyrics.IsKnown(q.Name, q.Artists)}"))}{Environment.NewLine}");
+            }
+            else System.IO.File.AppendAllText(log, "Spotify não conectado: a busca adiantada não foi testada" + Environment.NewLine);
             Application.Current.Shutdown();
             return;
         }

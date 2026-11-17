@@ -16,7 +16,7 @@ using System.Threading.Tasks;
 namespace Notchy;
 
 public sealed record SpotifyDevice(string Id, string Name, string Type, bool Active, bool SupportsVolume);
-public sealed record SpotifyTrack(string Id, string Uri, string Name, string Artists, string? ImageUrl);
+public sealed record SpotifyTrack(string Id, string Uri, string Name, string Artists, string? ImageUrl, string Album = "", TimeSpan Duration = default);
 
 public sealed class SpotifyState
 {
@@ -399,7 +399,9 @@ public sealed class SpotifyService
                 t.TryGetProperty("id", out var id) ? id.GetString() ?? "" : "",
                 t.TryGetProperty("uri", out var uri) ? uri.GetString() ?? "" : "",
                 t.TryGetProperty("name", out var nm) ? nm.GetString() ?? "" : "",
-                artists, image));
+                artists, image,
+                t.TryGetProperty("album", out var alb) && alb.TryGetProperty("name", out var an) ? an.GetString() ?? "" : "",
+                t.TryGetProperty("duration_ms", out var dm) && dm.ValueKind == JsonValueKind.Number ? TimeSpan.FromMilliseconds(dm.GetDouble()) : default));
         }
         return list;
     }
