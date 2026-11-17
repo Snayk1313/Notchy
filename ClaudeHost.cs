@@ -124,7 +124,7 @@ public static class ClaudeHost
             var hwnd = new IntPtr(host.Hwnd);
             if (IsWindow(hwnd) && GetWindowThreadProcessId(hwnd, out uint pid) != 0 && pid == host.Pid)
             {
-                Focus(hwnd);
+                Native.FocusWindow(hwnd);
                 return OpenResult.Focused;
             }
         }
@@ -175,29 +175,6 @@ public static class ClaudeHost
         }
         Process.Start(psi);
         return true;
-    }
-
-    /// <summary>
-    /// SetForegroundWindow is refused to a window that isn't in front (the island never takes focus):
-    /// borrowing the foreground thread's input queue for a moment makes it allowed.
-    /// </summary>
-    private static void Focus(IntPtr hwnd)
-    {
-        if (IsIconic(hwnd)) ShowWindow(hwnd, 9 /* SW_RESTORE */);
-        if (SetForegroundWindow(hwnd)) return;
-        IntPtr fg = GetForegroundWindow();
-        uint fgThread = GetWindowThreadProcessId(fg, out _);
-        uint me = GetCurrentThreadId();
-        bool attached = fgThread != 0 && fgThread != me && AttachThreadInput(me, fgThread, true);
-        try
-        {
-            BringWindowToTop(hwnd);
-            SetForegroundWindow(hwnd);
-        }
-        finally
-        {
-            if (attached) AttachThreadInput(me, fgThread, false);
-        }
     }
 
     // ------------------------------------------------------------------ native

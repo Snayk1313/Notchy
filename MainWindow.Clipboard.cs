@@ -64,7 +64,7 @@ public partial class MainWindow
         var box = new TextBox
         {
             Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = Brushes.White, CaretBrush = Brushes.White, FontSize = 11.5,
-            Padding = new Thickness(6, 5, 6, 5), FocusVisualStyle = null, SelectionBrush = Br(ClipColor), VerticalAlignment = VerticalAlignment.Center
+            Padding = new Thickness(24, 5, 6, 5), FocusVisualStyle = null, SelectionBrush = Br(ClipColor), VerticalAlignment = VerticalAlignment.Center
         };
         MakeTypable(box, null);
         _clipBox = box;
@@ -77,8 +77,13 @@ public partial class MainWindow
         box.PreviewKeyDown += ClipKey;
         _clipTop = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
         _clipPause = new Border();
-        var search = WithHint(box, "⌕  " + Loc.T("clip.search"), TextAlignment.Left);
+        var search = WithHint(box, Loc.T("clip.search"), TextAlignment.Left);
         search.VerticalAlignment = VerticalAlignment.Center;
+        // the magnifier from the icon font, as in Settings (the "⌕" character came from a fallback font and was cut)
+        var searchGrid = (Grid)search.Child;
+        ((TextBlock)searchGrid.Children[1]).Margin = new Thickness(26, 0, 0, 0);
+        searchGrid.Children.Add(new TextBlock { Text = "", FontFamily = (FontFamily)Application.Current.FindResource("IconFont"), FontSize = 11, Foreground = White(0x77),
+            Margin = new Thickness(9, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false });
         _clipKeysHint = new TextBlock { Text = Loc.T("clip.keys"), FontSize = 10, Foreground = White(0x66), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 10, 0), IsHitTestVisible = false, Visibility = Visibility.Collapsed };
         ((Grid)search.Child).Children.Add(_clipKeysHint);
@@ -109,6 +114,7 @@ public partial class MainWindow
         Deactivated += (_, _) =>
         {
             // another app in front (a click outside, Alt+Tab, or the paste going back): the keyboard session is over
+            if (_clipTakingFront) return; // (taking the front from Explorer flickers through a deactivation)
             _clipKeys = false;
             _clipKeysHint.Visibility = Visibility.Collapsed;
         };
@@ -339,7 +345,7 @@ public partial class MainWindow
             if (!x.Pinned && !Selected()) pin.Opacity = 0;
             _clipOver.Children.Clear();
         };
-        row.MouseLeftButtonUp += (_, e) =>
+        row.MouseLeftButtonUp += async (_, e) =>
         {
             e.Handled = true;
             SoundService.Play(Sfx.Click);
@@ -349,7 +355,7 @@ public partial class MainWindow
                 PasteClip(x); // (opened by the shortcut: a click pastes too)
                 return;
             }
-            if (_clip.CopyBack(x))
+            if (await _clip.CopyBack(x))
             {
                 FaceReact(Mood.Happy, 0.6);
                 FlashClipCopied(); // (the list is drawn again with it on top)
@@ -505,7 +511,7 @@ public partial class MainWindow
     // ---------------------------------------------------------------- the keyboard
 
     /// <summary>The shortcut: open on Copiados with the search box taking the keys (pressed again: closes).</summary>
-    private void OpenClipFromKeys(IntPtr front)
+    private async void OpenClipFromKeys(IntPtr front)
     {
         if (!S.ClipEnabled || FullscreenHidesIsland) return;
         if (_clipKeys && _state == IslandState.Expanded)
@@ -514,6 +520,8 @@ public partial class MainWindow
             return;
         }
         _clipTarget = front == _hwnd ? IntPtr.Zero : front;
+        _clipField = null;
+        var field = _clipTarget != IntPtr.Zero ? ClipboardService.FocusedAsync() : null;
         _clipKeys = true;
         _clipSel = 0;
         _clipFilter = null;
@@ -524,7 +532,14 @@ public partial class MainWindow
         if (_tab != Tab.Clip) SelectTab(Tab.Clip, animate: false);
         RenderClip();
         _clipKeysHint.Visibility = Visibility.Visible;
+        // which control had the focus is read before the island takes it (a short wait at most)
+        if (field != null && await System.Threading.Tasks.Task.WhenAny(field, System.Threading.Tasks.Task.Delay(250)) == field) _clipField = field.Result;
+        if (!_clipKeys) return; // (closed meanwhile)
         if (_hwnd != IntPtr.Zero) Native.SetActivatable(_hwnd, true);
+        // (over Explorer, Activate alone is refused and the keys stay there)
+        _clipTakingFront = true;
+        try { if (_hwnd != IntPtr.Zero) Native.FocusWindow(_hwnd); }
+        finally { _clipTakingFront = false; }
         Activate();
         _clipBox.Focus();
         Keyboard.Focus(_clipBox);
@@ -534,6 +549,7 @@ public partial class MainWindow
     {
         _clipKeys = false;
         _clipTarget = IntPtr.Zero;
+        _clipField = null;
         _clipSel = -1;
         _clipKeysHint.Visibility = Visibility.Collapsed;
         Keyboard.ClearFocus();
@@ -555,7 +571,7 @@ public partial class MainWindow
             case Key.Enter:
                 if (sel == null) break;
                 if (_clipTarget != IntPtr.Zero) PasteClip(sel);
-                else if (_clip.CopyBack(sel)) FlashClipCopied();
+                else CopyClip(sel);
                 break;
             case Key.Escape:
                 if (_clipBox.Text.Length > 0) _clipBox.Text = "";
@@ -597,18 +613,34 @@ public partial class MainWindow
     }
 
     /// <summary>Enter: copied, the island closes, and Ctrl+V goes to the app that was in front.</summary>
+    private bool _clipTakingFront;
+    private bool _clipPasting; // (a second Enter while the clipboard is busy doesn't paste twice)
+    private System.Windows.Automation.AutomationElement? _clipField; // the control that had the focus when the shortcut came
+
     private async void PasteClip(ClipItem item)
     {
+        if (_clipPasting) return;
         var target = _clipTarget;
-        if (!_clip.CopyBack(item))
+        var field = _clipField;
+        _clipPasting = true;
+        bool copied;
+        try { copied = await _clip.CopyBack(item); }
+        finally { _clipPasting = false; }
+        if (!copied)
         {
             if (_clipRows.FirstOrDefault(r => r.item == item).row?.Child is Grid { Children: [_, StackPanel { Children: [_, TextBlock sub] }, ..] }) sub.Text = Loc.T("clip.gone");
             return;
         }
+        if (!_clipKeys || _clipTarget != target) return; // (closed meanwhile: Esc or the shortcut again)
         // the app goes back to the front while the island still has it (Windows allows it then), then the island closes
-        var paste = ClipboardService.PasteIntoAsync(target);
+        var paste = ClipboardService.PasteIntoAsync(target, field);
         EndClipKeys();
         await paste;
+    }
+
+    private async void CopyClip(ClipItem item)
+    {
+        if (await _clip.CopyBack(item)) FlashClipCopied();
     }
 
     /// <summary>The white highlight goes under the chosen filter (sliding there when it changes).</summary>

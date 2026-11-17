@@ -7,13 +7,23 @@ using System.Windows.Shapes;
 
 namespace Notchy;
 
-/// <summary>Thin rounded slider (progress / volume) that grows on hover, like the iOS one.</summary>
+/// <summary>
+/// Thin rounded slider (progress / volume) that grows on hover, like the iOS one. Under the mouse, a lighter stretch runs
+/// from the value to where a click would land, with a little label over it (the time, the volume) when <see cref="HoverLabel"/> is set.
+/// </summary>
 public class BarSlider : Grid
 {
     private readonly Border _track = new();
+    private readonly Border _ghost = new();
     private readonly Border _fill = new();
     private readonly Ellipse _thumb = new();
+    private readonly Border _tag = new();
+    private readonly TextBlock _tagText = new();
     private double _value;
+    private double? _hoverAt; // where the mouse is (0..1), while it's over the bar
+
+    /// <summary>The label over the mouse for a value (0..1); null: no label.</summary>
+    public Func<double, string>? HoverLabel { get; set; }
 
     public event Action<double>? ValueChanging;
     public event Action<double>? ValueCommitted;
@@ -56,21 +66,50 @@ public class BarSlider : Grid
         _thumb.Opacity = 0;
         _thumb.IsHitTestVisible = false;
 
+        _ghost.Background = new SolidColorBrush(Color.FromArgb(0x70, 255, 255, 255));
+        _ghost.HorizontalAlignment = HorizontalAlignment.Left;
+        _ghost.VerticalAlignment = VerticalAlignment.Center;
+        _ghost.IsHitTestVisible = false;
+        _ghost.Opacity = 0;
+
+        // the label sits over the bar (outside it), centred on the mouse
+        _tagText.FontSize = 11;
+        _tagText.Foreground = Brushes.White;
+        _tag.Child = _tagText;
+        _tag.Background = new SolidColorBrush(Color.FromRgb(0x2B, 0x2B, 0x30));
+        _tag.BorderBrush = new SolidColorBrush(Color.FromArgb(0x1C, 255, 255, 255));
+        _tag.BorderThickness = new Thickness(1);
+        _tag.CornerRadius = new CornerRadius(6);
+        _tag.Padding = new Thickness(7, 2, 7, 3);
+        _tag.IsHitTestVisible = false;
+        _tag.Opacity = 0;
+        // (on a canvas: a grid would cut the label to the bar's height)
+        var tagLayer = new Canvas { IsHitTestVisible = false };
+        tagLayer.Children.Add(_tag);
+
         Children.Add(_track);
+        Children.Add(_ghost);
         Children.Add(_fill);
         Children.Add(_thumb);
+        Children.Add(tagLayer);
 
         SetHover(false);
         SizeChanged += (_, _) => UpdateVisual();
         MouseEnter += (_, _) => SetHover(true);
-        MouseLeave += (_, _) => { if (!IsDragging) SetHover(false); };
+        MouseLeave += (_, _) =>
+        {
+            if (IsDragging) return;
+            SetHover(false);
+            _hoverAt = null;
+            UpdateHover();
+        };
     }
 
     private void SetHover(bool on)
     {
         double h = on ? 6 : 4;
-        _track.Height = _fill.Height = h;
-        _track.CornerRadius = _fill.CornerRadius = new CornerRadius(h / 2);
+        _track.Height = _fill.Height = _ghost.Height = h;
+        _track.CornerRadius = _fill.CornerRadius = _ghost.CornerRadius = new CornerRadius(h / 2);
         _thumb.Opacity = on && ShowThumb ? 1 : 0;
     }
 
@@ -79,6 +118,41 @@ public class BarSlider : Grid
         double w = ActualWidth;
         _fill.Width = Math.Max(0, w * _value);
         _thumb.Margin = new Thickness(Math.Clamp(w * _value - _thumb.Width / 2, 0, Math.Max(0, w - _thumb.Width)), 0, 0, 0);
+        UpdateHover();
+    }
+
+    /// <summary>For the snapshot tests: as if the mouse were over the bar at <paramref name="x"/> (0..1), or gone (null).</summary>
+    internal void HoverAt(double? x)
+    {
+        _hoverAt = x;
+        SetHover(x != null);
+        UpdateHover();
+    }
+
+    private void UpdateHover()
+    {
+        double w = ActualWidth;
+        // (dragging: the value is the mouse, so only the label shows)
+        double? at = IsDragging ? _value : _hoverAt;
+        if (at is not double x || w <= 0)
+        {
+            _ghost.Opacity = _tag.Opacity = 0;
+            return;
+        }
+        double a = Math.Min(_value, x) * w, b = Math.Max(_value, x) * w;
+        _ghost.Margin = new Thickness(a, 0, 0, 0);
+        _ghost.Width = b - a;
+        _ghost.Opacity = IsDragging ? 0 : 1;
+        if (HoverLabel == null)
+        {
+            _tag.Opacity = 0;
+            return;
+        }
+        _tagText.Text = HoverLabel(x);
+        _tag.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        Canvas.SetLeft(_tag, x * w - _tag.DesiredSize.Width / 2);
+        Canvas.SetTop(_tag, -_tag.DesiredSize.Height - 1);
+        _tag.Opacity = 1;
     }
 
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
@@ -91,7 +165,9 @@ public class BarSlider : Grid
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
+        _hoverAt = ActualWidth > 0 ? Math.Clamp(e.GetPosition(this).X / ActualWidth, 0, 1) : null;
         if (IsDragging) SetFromMouse(e);
+        else UpdateHover();
     }
 
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
@@ -100,7 +176,12 @@ public class BarSlider : Grid
         IsDragging = false;
         ReleaseMouseCapture();
         ValueCommitted?.Invoke(_value);
-        if (!IsMouseOver) SetHover(false);
+        if (!IsMouseOver)
+        {
+            SetHover(false);
+            _hoverAt = null;
+        }
+        UpdateHover();
         e.Handled = true;
     }
 
@@ -111,6 +192,8 @@ public class BarSlider : Grid
         IsDragging = false;
         ValueCommitted?.Invoke(_value);
         SetHover(false);
+        _hoverAt = null;
+        UpdateHover();
     }
 
     private void SetFromMouse(MouseEventArgs e)

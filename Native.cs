@@ -220,9 +220,31 @@ internal static class Native
     /// <summary>Asks a window to close (as its X would).</summary>
     public static void CloseWindow(IntPtr hwnd) => PostMessage(hwnd, 0x0010 /* WM_CLOSE */, IntPtr.Zero, IntPtr.Zero);
 
+    /// <summary>
+    /// Brings a window to the front. SetForegroundWindow is refused when Windows doesn't think this app has the user's
+    /// attention (the island never takes focus, a shortcut taken by a keyboard hook…): borrowing the foreground thread's
+    /// input queue for a moment makes it allowed.
+    /// </summary>
     public static void FocusWindow(IntPtr hwnd)
     {
         if (IsIconic(hwnd)) ShowWindow(hwnd, 9 /* SW_RESTORE */);
-        SetForegroundWindow(hwnd);
+        if (SetForegroundWindow(hwnd) && GetForegroundWindow() == hwnd) return;
+        uint fgThread = GetWindowThreadProcessId(GetForegroundWindow(), out _);
+        uint me = GetCurrentThreadId();
+        bool attached = fgThread != 0 && fgThread != me && AttachThreadInput(me, fgThread, true);
+        try
+        {
+            BringWindowToTop(hwnd);
+            SetForegroundWindow(hwnd);
+        }
+        finally
+        {
+            if (attached) AttachThreadInput(me, fgThread, false);
+        }
     }
+
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] private static extern bool AttachThreadInput(uint a, uint b, bool attach);
+    [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr h);
 }

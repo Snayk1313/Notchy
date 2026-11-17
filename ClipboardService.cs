@@ -169,8 +169,22 @@ public sealed class ClipboardService
         return true;
     }
 
-    /// <summary>Back to the app that was in front, and Ctrl+V there.</summary>
-    public static async Task PasteIntoAsync(IntPtr target)
+    /// <summary>The control with the keyboard focus in another app (a text box…), read before the island takes the focus.</summary>
+    public static Task<System.Windows.Automation.AutomationElement?> FocusedAsync() => Task.Run(() =>
+    {
+        try
+        {
+            var el = System.Windows.Automation.AutomationElement.FocusedElement;
+            return el == null || el.Current.ProcessId == Environment.ProcessId ? null : el;
+        }
+        catch
+        {
+            return null;
+        }
+    });
+
+    /// <summary>Back to the app that was in front, and Ctrl+V there (into <paramref name="field"/>, the control that had the focus).</summary>
+    public static async Task PasteIntoAsync(IntPtr target, System.Windows.Automation.AutomationElement? field = null)
     {
         if (target == IntPtr.Zero) return;
         if (!SetForegroundWindow(target) || GetForegroundWindow() != target)
@@ -181,6 +195,22 @@ public sealed class ClipboardService
             SetForegroundWindow(target);
         }
         await Task.Delay(90);
+        // Explorer doesn't give the focus back to its search box when it comes back to the front: put it back where it was
+        bool refocused = field != null && await Task.Run(() =>
+        {
+            try
+            {
+                var now = System.Windows.Automation.AutomationElement.FocusedElement;
+                if (now != null && System.Windows.Automation.Automation.Compare(now, field)) return false;
+                field.SetFocus();
+                return true;
+            }
+            catch
+            {
+                return false; // (gone, or it can't take the focus: the paste goes where the app put it)
+            }
+        });
+        if (refocused) await Task.Delay(80);
         // (the shortcut's own keys may still be down: let them go first)
         foreach (byte vk in new byte[] { 0x5B, 0x5C, 0x12, 0x10 }) if (GetAsyncKeyState(vk) < 0) keybd_event(vk, 0, 2, UIntPtr.Zero);
         keybd_event(0x11, 0, 0, UIntPtr.Zero);
@@ -334,11 +364,25 @@ public sealed class ClipboardService
     // ---------------------------------------------------------------- actions
 
     /// <summary>Puts the item back on the clipboard (and on top of the list).</summary>
-    public bool CopyBack(ClipItem item)
+    public async Task<bool> CopyBack(ClipItem item)
     {
-        _ignoreUntil = DateTime.UtcNow.AddSeconds(1); // (not taken again as a new copy)
+        var took = System.Diagnostics.Stopwatch.StartNew();
+        string holder = "";
         for (int i = 0; i < 5; i++)
         {
+            // another app has the clipboard open: wait here, not inside WPF (its retries sleep the island's thread,
+            // which is also the one answering the keyboard hook, so the whole keyboard froze and the paste was lost)
+            while (took.ElapsedMilliseconds < 3000)
+            {
+                if (OpenClipboard(IntPtr.Zero))
+                {
+                    CloseClipboard();
+                    break;
+                }
+                holder = ProcessOf(GetOpenClipboardWindow());
+                await Task.Delay(25);
+            }
+            _ignoreUntil = DateTime.UtcNow.AddSeconds(1); // (not taken again as a new copy)
             try
             {
                 switch (item.Kind)
@@ -362,11 +406,12 @@ public sealed class ClipboardService
                 Items.Insert(0, item);
                 Save();
                 Changed?.Invoke();
+                if (took.ElapsedMilliseconds > 300) App.Log(new TimeoutException($"Copiados: devolver levou {took.ElapsedMilliseconds} ms (área de transferência com {holder})"));
                 return true;
             }
             catch (COMException)
             {
-                System.Threading.Thread.Sleep(40);
+                await Task.Delay(40);
             }
             catch (Exception ex)
             {
@@ -374,7 +419,22 @@ public sealed class ClipboardService
                 return false;
             }
         }
+        App.Log(new TimeoutException($"Copiados: não deu para devolver em {took.ElapsedMilliseconds} ms (área de transferência com {holder})"));
         return false;
+    }
+
+    private static string ProcessOf(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return "um app sem janela";
+        try
+        {
+            GetWindowThreadProcessId(hwnd, out uint pid);
+            return System.Diagnostics.Process.GetProcessById((int)pid).ProcessName;
+        }
+        catch
+        {
+            return "?";
+        }
     }
 
     public void TogglePin(ClipItem item)
@@ -606,6 +666,9 @@ public sealed class ClipboardService
     [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int vk);
     [DllImport("user32.dll")] private static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
     [DllImport("user32.dll")] private static extern IntPtr GetClipboardOwner();
+    [DllImport("user32.dll")] private static extern IntPtr GetOpenClipboardWindow();
+    [DllImport("user32.dll")] private static extern bool OpenClipboard(IntPtr hwnd);
+    [DllImport("user32.dll")] private static extern bool CloseClipboard();
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
 }

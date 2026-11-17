@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Collections.Generic;
 using System.Threading;
@@ -95,6 +95,8 @@ public partial class MainWindow : Window
 
         ProgressSlider.ValueChanging += v => ElapsedText.Text = Format(TimeSpan.FromTicks((long)(_media.Duration.Ticks * v)));
         ProgressSlider.ValueCommitted += async v => await _media.SeekAsync(TimeSpan.FromTicks((long)(_media.Duration.Ticks * v)));
+        ProgressSlider.HoverLabel = v => Format(TimeSpan.FromTicks((long)(_media.Duration.Ticks * v)));
+        VolumeSlider.HoverLabel = v => $"{Math.Round(v * 100)}%";
         VolumeSlider.ValueChanging += SetMusicVolume;
         VolumeSlider.ValueCommitted += SetMusicVolume;
 
@@ -2073,10 +2075,152 @@ public partial class MainWindow : Window
         return false;
     }
 
+    /// <summary>
+    /// Only the paste from Copiados (NOTCHY_PASTETEST, quick): the real shortcut, a real Enter, into a test window and into
+    /// Explorer's search box. The saved history is left alone.
+    /// </summary>
+    private async Task PasteTestAsync(string folder)
+    {
+        string log = System.IO.Path.Combine(folder, "paste.txt");
+        int fails = 0;
+        void Check(string what, bool ok, string got)
+        {
+            if (!ok) fails++;
+            System.IO.File.AppendAllText(log, $"{(ok ? "ok  " : "ERRO")} {what}: {got}" + Environment.NewLine);
+        }
+        [System.Runtime.InteropServices.DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+        var saved = _clip.Items.ToList();
+        _clip.DontSave = true;
+        _clip.Items.Clear();
+        bool wasPaused = S.ClipPaused;
+        S.ClipPaused = false;
+        System.Windows.Clipboard.SetText("https://github.com/notchy/notchy");
+        await Task.Delay(600);
+        Check("link no histórico", _clip.Items.FirstOrDefault()?.Kind == ClipKind.Link, $"{_clip.Items.Count} itens");
+
+        var hk = KeyboardHook.Parse(S.ClipHotkey)!.Value;
+        var hkKeys = new (uint mod, byte vk)[] { (KeyboardHook.ModWin, 0x5B), (KeyboardHook.ModCtrl, 0x11), (KeyboardHook.ModAlt, 0x12), (KeyboardHook.ModShift, 0x10) }
+            .Where(m => (hk.mods & m.mod) != 0).Select(m => m.vk).Append((byte)hk.vk).ToList();
+        string Value(System.Windows.Automation.AutomationElement? el)
+        {
+            try { return el != null && el.TryGetCurrentPattern(System.Windows.Automation.ValuePattern.Pattern, out var p) ? ((System.Windows.Automation.ValuePattern)p).Current.Value : "(sem valor)"; }
+            catch (Exception e) { return e.GetType().Name; }
+        }
+        // the shortcut over the window in front, ↵ held a moment like a real press, then what landed in the box
+        async Task PasteInto(string name, IntPtr window)
+        {
+            for (int i = 0; i < 30 && window != IntPtr.Zero && !Native.IsForeground(window); i++) await Task.Delay(100);
+            var box = await Task.Run(() => System.Windows.Automation.AutomationElement.FocusedElement);
+            string boxName = box == null ? "(nada)" : await Task.Run(() => $"{box.Current.ControlType.ProgrammaticName} “{box.Current.Name}”");
+            Check($"{name}: na frente com a caixa focada", window != IntPtr.Zero && box != null && Native.IsForeground(window), boxName);
+            foreach (var k in hkKeys) keybd_event(k, 0, 0, UIntPtr.Zero);
+            foreach (var k in Enumerable.Reverse(hkKeys)) keybd_event(k, 0, 2, UIntPtr.Zero);
+            await Task.Delay(900);
+            Check($"{name}: atalho abre por cima", _clipKeys && _clipTarget == window, $"teclado={_clipKeys} alvo certo={_clipTarget == window}");
+            if (_clipKeys && _clipTarget == window)
+            {
+                keybd_event(0x0D, 0, 0, UIntPtr.Zero);
+                await Task.Delay(110);
+                keybd_event(0x0D, 0, 2, UIntPtr.Zero);
+            }
+            await Task.Delay(900);
+            string typed = await Task.Run(() => Value(box));
+            Check($"{name}: Enter cola na caixa", typed.Contains("github.com/notchy"), $"“{typed}”");
+        }
+
+        // a plain test window
+        string ps1 = System.IO.Path.Combine(folder, "target.ps1");
+        System.IO.File.WriteAllText(ps1, "Add-Type -AssemblyName System.Windows.Forms\n" +
+            "$f = New-Object System.Windows.Forms.Form; $f.Text = 'Notchy teste'; $f.TopMost = $true; $f.Width = 420; $f.Height = 140\n" +
+            "$t = New-Object System.Windows.Forms.TextBox; $t.Dock = 'Fill'; $t.Multiline = $false; $f.Controls.Add($t)\n" +
+            "$timer = New-Object System.Windows.Forms.Timer; $timer.Interval = 12000; $timer.Add_Tick({ $f.Close() }); $timer.Start()\n" +
+            "$f.Add_Shown({ $f.Activate(); $t.Focus() }); [void]$f.ShowDialog()\n");
+        using (var other = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("powershell", $"-NoProfile -ExecutionPolicy Bypass -File \"{ps1}\"") { UseShellExecute = false, CreateNoWindow = true })!)
+        {
+            IntPtr win = IntPtr.Zero;
+            for (int i = 0; i < 40 && win == IntPtr.Zero; i++)
+            {
+                await Task.Delay(150);
+                other.Refresh();
+                win = other.MainWindowHandle;
+            }
+            await Task.Delay(400);
+            await PasteInto("app de teste", win);
+            if (win != IntPtr.Zero) Native.CloseWindow(win);
+        }
+
+        // Explorer's search box (Ctrl+E): with Enter down it gives the focus to the file list and drops the Ctrl+V
+        var cabinet = new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ClassNameProperty, "CabinetWClass");
+        int[] Cabinets() => System.Windows.Automation.AutomationElement.RootElement.FindAll(System.Windows.Automation.TreeScope.Children, cabinet)
+            .Cast<System.Windows.Automation.AutomationElement>().Select(e => e.Current.NativeWindowHandle).ToArray();
+        var openBefore = (await Task.Run(Cabinets)).ToHashSet();
+        System.Diagnostics.Process.Start("explorer.exe", folder);
+        IntPtr ex = IntPtr.Zero;
+        for (int i = 0; i < 40 && ex == IntPtr.Zero; i++)
+        {
+            await Task.Delay(150);
+            ex = new IntPtr((await Task.Run(Cabinets)).FirstOrDefault(h => !openBefore.Contains(h)));
+        }
+        for (int i = 0; i < 30 && ex != IntPtr.Zero && !Native.IsForeground(ex); i++) await Task.Delay(100);
+        await Task.Delay(1200); // (Explorer draws the folder before the search box takes keys)
+        keybd_event(0x11, 0, 0, UIntPtr.Zero); keybd_event(0x45, 0, 0, UIntPtr.Zero);
+        keybd_event(0x45, 0, 2, UIntPtr.Zero); keybd_event(0x11, 0, 2, UIntPtr.Zero);
+        await Task.Delay(700);
+        await PasteInto("Explorer", ex);
+        if (ex != IntPtr.Zero) Native.CloseWindow(ex);
+
+        _clip.Items.Clear();
+        _clip.Items.AddRange(saved);
+        _clip.DontSave = false;
+        S.ClipPaused = wasPaused;
+        System.IO.File.AppendAllText(log, $"falhas: {fails}" + Environment.NewLine);
+    }
+
     public async Task SnapshotAsync(string folder)
     {
         System.IO.Directory.CreateDirectory(folder);
         await Task.Delay(2500);
+        // only the music bars' hover (quick): the lighter stretch and the label, on progress and volume
+        if (Environment.GetEnvironmentVariable("NOTCHY_BARHOVERTEST") == "1")
+        {
+            await Task.Delay(4000); // (the hello wave first)
+            _media.Fake("Waking up", "Teste", true);
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            SelectTab(Tab.Music, false);
+            await Task.Delay(900);
+            ProgressSlider.HoverAt(0.8);
+            VolumeSlider.HoverAt(null);
+            await ShotAsync(folder, "bar_progress_ahead", 300);
+            ProgressSlider.HoverAt(0.1);
+            await ShotAsync(folder, "bar_progress_behind", 300);
+            ProgressSlider.HoverAt(null);
+            VolumeSlider.HoverAt(0.9);
+            await ShotAsync(folder, "bar_volume", 300);
+            VolumeSlider.HoverAt(null);
+            Application.Current.Shutdown();
+            return;
+        }
+        // only Copiados' search box (quick): empty, then with text
+        if (Environment.GetEnvironmentVariable("NOTCHY_CLIPSEARCHTEST") == "1")
+        {
+            await Task.Delay(4000); // (the hello wave first)
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            SelectTab(Tab.Clip, false);
+            await ShotAsync(folder, "search_empty", 900);
+            _clipBox.Text = "boleto";
+            await ShotAsync(folder, "search_typed", 400);
+            _clipBox.Text = "";
+            Application.Current.Shutdown();
+            return;
+        }
+        if (Environment.GetEnvironmentVariable("NOTCHY_PASTETEST") == "1")
+        {
+            await PasteTestAsync(folder);
+            Application.Current.Shutdown();
+            return;
+        }
 
         // fake a Claude task so the Claude views have content
         _claude.Inject("""{"hook_event_name":"UserPromptSubmit","session_id":"demo","cwd":"C:\\proj\\Notchy","prompt":"Adicionar abas e sons"}""");
@@ -2668,7 +2812,7 @@ public partial class MainWindow : Window
             await Copy(() => System.Windows.Clipboard.SetText("https://github.com/notchy/notchy"));
             CCheck("copiar de novo sobe sem repetir", Top()?.Kind == ClipKind.Link && _clip.Items.Count(x => x.Kind == ClipKind.Link) == 1, $"{_clip.Items.Count} itens");
             var text = _clip.Items.First(x => x.Kind == ClipKind.Text);
-            _clip.CopyBack(text);
+            await _clip.CopyBack(text);
             await Task.Delay(400);
             CCheck("clicar copia de volta", System.Windows.Clipboard.GetText() == text.Text && Top() == text && _clip.Items.Count(x => x.Kind == ClipKind.Text) == 1, System.Windows.Clipboard.GetText());
             S.ClipPaused = true;
@@ -2766,7 +2910,7 @@ public partial class MainWindow : Window
             System.IO.File.WriteAllText(ps1, "Add-Type -AssemblyName System.Windows.Forms\n" +
                 "$f = New-Object System.Windows.Forms.Form; $f.Text = 'Notchy teste'; $f.TopMost = $true; $f.Width = 420; $f.Height = 140\n" +
                 "$t = New-Object System.Windows.Forms.TextBox; $t.Dock = 'Fill'; $t.Multiline = $true; $f.Controls.Add($t)\n" +
-                "$timer = New-Object System.Windows.Forms.Timer; $timer.Interval = 9000; $timer.Add_Tick({ [IO.File]::WriteAllText('" + got + "', $t.Text); $f.Close() }); $timer.Start()\n" +
+                "$timer = New-Object System.Windows.Forms.Timer; $timer.Interval = 14000; $timer.Add_Tick({ [IO.File]::WriteAllText('" + got + "', $t.Text); $f.Close() }); $timer.Start()\n" +
                 "$f.Add_Shown({ $f.Activate(); $t.Focus() }); [void]$f.ShowDialog()\n");
             using var other = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("powershell", $"-NoProfile -ExecutionPolicy Bypass -File \"{ps1}\"") { UseShellExecute = false, CreateNoWindow = true })!;
             IntPtr otherHwnd = IntPtr.Zero;
@@ -2777,14 +2921,26 @@ public partial class MainWindow : Window
                 otherHwnd = other.MainWindowHandle;
             }
             CCheck("app de teste aberto", otherHwnd != IntPtr.Zero, "");
+            // (the test window takes the front itself once it's shown: only then the shortcut, or it takes it from the island)
+            for (int i = 0; i < 30 && otherHwnd != IntPtr.Zero && !Native.IsForeground(otherHwnd); i++) await Task.Delay(100);
+            await Task.Delay(400);
             CCheck("atalho registrado", !_clip.HotkeyTaken, S.ClipHotkey);
             [System.Runtime.InteropServices.DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
-            keybd_event(0x5B, 0, 0, UIntPtr.Zero); keybd_event(0x12, 0, 0, UIntPtr.Zero); keybd_event(0x56, 0, 0, UIntPtr.Zero);
-            keybd_event(0x56, 0, 2, UIntPtr.Zero); keybd_event(0x12, 0, 2, UIntPtr.Zero); keybd_event(0x5B, 0, 2, UIntPtr.Zero);
+            // the shortcut that's set (Win+V goes through the keyboard hook, the others through RegisterHotKey)
+            var hk = KeyboardHook.Parse(S.ClipHotkey)!.Value;
+            var hkKeys = new (uint mod, byte vk)[] { (KeyboardHook.ModWin, 0x5B), (KeyboardHook.ModCtrl, 0x11), (KeyboardHook.ModAlt, 0x12), (KeyboardHook.ModShift, 0x10) }
+                .Where(m => (hk.mods & m.mod) != 0).Select(m => m.vk).Append((byte)hk.vk).ToList();
+            foreach (var k in hkKeys) keybd_event(k, 0, 0, UIntPtr.Zero);
+            foreach (var k in Enumerable.Reverse(hkKeys)) keybd_event(k, 0, 2, UIntPtr.Zero);
             await Task.Delay(900);
             CCheck("atalho abre a aba com o teclado", _clipKeys && _state == IslandState.Expanded && _tab == Tab.Clip && _clipBox.IsKeyboardFocused,
                 $"teclado={_clipKeys} estado={_state} aba={_tab} foco={_clipBox.IsKeyboardFocused} ilha na frente={Native.IsForeground(_hwnd)}");
             await ShotAsync(folder, "clip_7_keys_open", 200);
+            if (!_clipKeys) // (another window took the front first: the rest is still checked)
+            {
+                OpenClipFromKeys(otherHwnd);
+                await Task.Delay(600);
+            }
             void Press(Key k)
             {
                 var src = PresentationSource.FromVisual(_clipBox);
@@ -2793,23 +2949,41 @@ public partial class MainWindow : Window
             Press(Key.Down);
             Press(Key.Down);
             await ShotAsync(folder, "clip_8_keys_down", 250);
-            var chosen = _clipRows[_clipSel].item;
-            CCheck("↓ escolhe", _clipSel == 2, $"{_clipSel} {chosen.Kind}");
+            var chosen = _clipSel >= 0 && _clipSel < _clipRows.Count ? _clipRows[_clipSel].item : null;
+            CCheck("↓ escolhe", _clipSel == 2, $"{_clipSel} {chosen?.Kind}");
             _clipBox.Text = "github";
             await Task.Delay(150);
             CCheck("digitar busca e volta para o primeiro", _clipSel == 0 && _clipRows.Count == 1 && _clipRows[0].item.Kind == ClipKind.Link, $"{_clipSel} de {_clipRows.Count}");
             await ShotAsync(folder, "clip_9_keys_search", 250);
             // the window in front when the shortcut came may be anything on this desktop (Windows won't let the test window take
             // the front from a terminal): the paste goes only to the test window, never to whatever app was open
+            // another app holds the clipboard open for a moment: Enter must not hold the island's thread (it's also the one
+            // answering the keyboard hook) and the paste still goes through once the clipboard is free
             _clipTarget = otherHwnd;
+            // (another process, with a window: Windows lets the same process, or one without a window, open it anyway)
+            string heldMark = System.IO.Path.Combine(folder, "held.txt");
+            string holdPs1 = System.IO.Path.Combine(folder, "hold.ps1");
+            System.IO.File.WriteAllText(holdPs1, "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.Form\n" + "Add-Type -Name C -Namespace W -MemberDefinition '[DllImport(\"user32.dll\")] public static extern bool OpenClipboard(System.IntPtr h); [DllImport(\"user32.dll\")] public static extern bool CloseClipboard();'\n" +
+                "if ([W.C]::OpenClipboard($f.Handle)) { Set-Content '" + heldMark + "' 1; Start-Sleep -Milliseconds 1500; [void][W.C]::CloseClipboard() }\n");
+            using var busy = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("powershell", $"-NoProfile -ExecutionPolicy Bypass -File \"{holdPs1}\"") { UseShellExecute = false, CreateNoWindow = true })!;
+            for (int t = 0; t < 80 && !System.IO.File.Exists(heldMark); t++) await Task.Delay(50);
+            bool held0 = System.IO.File.Exists(heldMark);
+            var enter = System.Diagnostics.Stopwatch.StartNew();
             if (otherHwnd != IntPtr.Zero && _clipTarget == otherHwnd) Press(Key.Enter);
+            long held = enter.ElapsedMilliseconds;
+            Press(Key.Enter); // (a second Enter while waiting doesn't paste twice)
+            await Task.Delay(100);
+            CCheck("Enter com a área de transferência ocupada não trava", held < 100 && _clipKeys, $"{held} ms, ainda esperando={_clipKeys}, ocupada={held0}");
+            busy.WaitForExit(5000);
+            await Task.Delay(400);
             await Task.Delay(900);
             bool front = Native.IsForeground(otherHwnd);
-            other.WaitForExit(12000);
+            other.WaitForExit(16000);
             string pasted = System.IO.File.Exists(got) ? System.IO.File.ReadAllText(got) : "(nada)";
             CCheck("Enter cola no app que estava na frente", pasted == "https://github.com/notchy/notchy", $"“{pasted}” frente={front}");
             CCheck("ilha fecha depois de colar", !_clipKeys && _state != IslandState.Expanded, $"{_state}");
             await ShotAsync(folder, "clip_10_pasted", 200);
+
 
             _clip.Items.Clear();
             RenderClip();
