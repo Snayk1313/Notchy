@@ -459,6 +459,8 @@ public partial class MainWindow
     private void OnClipCopied(ClipItem item)
     {
         if (_state is not (IslandState.Idle or IslandState.Compact) || IslandLightsOff || _hiddenForFullscreen || _introActive) return;
+        // a capture copied it: its own light comes with the picture into the island
+        if (_capturing || DateTime.UtcNow < _quietClipUntil || _transient == CompactMode.Shot) return;
         var color = item.Kind == ClipKind.Color ? ClipColorOf(item.Text) : ClipColor;
         GlowOutline(color);
         BlinkOnce();
@@ -492,6 +494,20 @@ public partial class MainWindow
         a.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromPercent(0.35)));
         a.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromPercent(1), new CubicEase { EasingMode = EasingMode.EaseIn }));
         _clipLight.BeginAnimation(OpacityProperty, a);
+    }
+
+    private DateTime _quietClipUntil;
+
+    /// <summary>Every frame while the copy light is on: it keeps the island's shape if the island changes size.</summary>
+    private void UpdateClipLight()
+    {
+        if (_clipLight == null || _clipLight.Opacity < 0.01) return;
+        double W = Island.ActualWidth, H = Island.ActualHeight - _topHidden;
+        if (W < 2 || H < 2 || !_clipOutline.Build(W, H, _topHidden)) return;
+        _clipLight.Width = W;
+        _clipLight.Height = H + _topHidden;
+        _clipLight.Data = _clipOutline.Segment(0, _clipOutline.Length);
+        _clipLight.Margin = Island.Margin;
     }
 
     private void BlinkOnce()

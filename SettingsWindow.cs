@@ -135,8 +135,9 @@ public sealed partial class SettingsWindow : Window
         _sideMark.Margin = new Thickness(SideGlowRoom, SideGlowRoom, SideGlowRoom, 0);
         sideLayers.Children.Add(_sideMark);
         sideLayers.Children.Add(_sideItems);
-        var itemsScroll = new ScrollViewer { Content = sideLayers, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FocusVisualStyle = null,
+        var itemsScroll = new GlideScrollViewer { Content = sideLayers, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FocusVisualStyle = null,
             Margin = new Thickness(-SideGlowRoom, -SideGlowRoom, -SideGlowRoom, 0) };
+        ScrollPolish.Fade(itemsScroll, horizontal: false);
         Grid.SetRow(itemsScroll, 2);
         sideGrid.Children.Add(itemsScroll);
         var version = new TextBlock { Text = "Notchy " + Updater.CurrentVersion, FontSize = 10.5, Foreground = Dim(0x44), Margin = new Thickness(10, 8, 0, 0) };
@@ -149,7 +150,7 @@ public sealed partial class SettingsWindow : Window
         var content = new Grid();
         content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(40) });
         content.RowDefinitions.Add(new RowDefinition());
-        _scroll = new ScrollViewer
+        _scroll = new GlideScrollViewer
         {
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             Content = _pageHost,
@@ -159,11 +160,10 @@ public sealed partial class SettingsWindow : Window
         Grid.SetRowSpan(_scroll, 2);
         // The page scrolls only below the window buttons' band (they have no background: it showed through them),
         // and fades out at that edge instead of being cut. The page itself starts where it always did.
-        const double ScrollTop = 24, FadeEdge = 10;
+        const double ScrollTop = 24;
         _scroll.Margin = new Thickness(0, ScrollTop, 0, 0);
         _pageHost.Margin = new Thickness(34, 40 - ScrollTop, 34, 30);
-        _scroll.OpacityMask = new LinearGradientBrush(new GradientStopCollection { new(Colors.Transparent, 0), new(Colors.Black, 1) },
-            new Point(0, 0), new Point(0, FadeEdge)) { MappingMode = BrushMappingMode.Absolute };
+        ScrollPolish.Fade(_scroll, horizontal: false); // (fades at the top once scrolled, and at the bottom while there's more)
         _scroll.Loaded += (_, _) =>
         {
             // ...and the scroll bar starts under the band too
@@ -630,19 +630,38 @@ public sealed partial class SettingsWindow : Window
     }
 
     /// <summary>A row: title, description (returned, so it can change) and the control on the right.</summary>
-    private TextBlock Row(StackPanel section, string title, string desc, UIElement control, bool sub = false)
+    /// <param name="below">The control under the texts instead of beside them (a wide one in a narrow page).</param>
+    private TextBlock Row(StackPanel section, string title, string desc, UIElement control, bool sub = false, bool below = false)
     {
         var g = new Grid { Margin = new Thickness(sub ? 34 : 16, 11, 16, 11), MinHeight = 32 };
         g.ColumnDefinitions.Add(new ColumnDefinition());
         g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 20, 0) };
+        if (below)
+        {
+            g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        }
+        var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, below ? 0 : 20, 0) };
         texts.Children.Add(new TextBlock { Text = title, FontSize = 13, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
         var d = new TextBlock { Text = desc, FontSize = 11.5, Foreground = Dim(0x80), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 0), LineHeight = 16 };
         if (string.IsNullOrEmpty(desc)) d.Visibility = Visibility.Collapsed;
         texts.Children.Add(d);
         g.Children.Add(texts);
-        if (control is FrameworkElement fe) fe.VerticalAlignment = VerticalAlignment.Center;
-        Grid.SetColumn(control, 1);
+        if (control is FrameworkElement fe)
+        {
+            fe.VerticalAlignment = VerticalAlignment.Center;
+            if (below)
+            {
+                fe.HorizontalAlignment = HorizontalAlignment.Left;
+                fe.Margin = new Thickness(0, 10, 0, 0);
+            }
+        }
+        if (below)
+        {
+            Grid.SetRow(control, 1);
+            Grid.SetColumnSpan(texts, 2);
+        }
+        else Grid.SetColumn(control, 1);
         g.Children.Add(control);
         g.Tag = new GlideKey("row:" + title);
         if (section.Children.Count == 0 && section.Parent is Border card) card.Tag = new GlideKey("card:" + title); // (a card is known by its first row)
@@ -1134,12 +1153,54 @@ public sealed partial class SettingsWindow : Window
         return p;
     }
 
+    /// <summary>The capture's shortcut field (Configurações and the assistant): Print Screen by default, any combination, or a key alone.</summary>
+    private ShortcutSpec CaptureShortcut(Action<string>? changed = null) => new(Loc.T("s.cap.key"),
+        () => S.CaptureHotkey, v => S.CaptureHotkey = v,
+        v =>
+        {
+            Island?.SetCaptureHotkey(v);
+            changed?.Invoke(v);
+        },
+        () => false, () => Island?.SetCaptureHotkey(""),
+        (name, labels) => name == "Snapshot" ? Loc.T("s.cap.key.prtsc") : Loc.F("s.cap.key.set", string.Join(" + ", labels)),
+        Loc.T("s.cap.key.off"), Loc.T("s.cap.key.needmod"), true);
+
     private StackPanel FilesPage()
     {
         var p = Page("files");
         var main = Section(p);
         Row(main, Loc.T("s.fi.xfer"), Loc.T("s.fi.xfer.d"), Toggle(S.TransferProgress, v => S.TransferProgress = v));
         Row(main, Loc.T("s.fi.shelf"), Loc.T("s.fi.shelf.d"), Toggle(S.ShelfEnabled, v => S.ShelfEnabled = v));
+
+        var cap = Section(p, Loc.T("s.sec.capture"));
+        ShortcutRow(cap, CaptureShortcut());
+        string Folder() => string.IsNullOrWhiteSpace(S.CaptureFolder)
+            ? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Notchy") : S.CaptureFolder;
+        var folderButtons = new StackPanel { Orientation = Orientation.Horizontal };
+        TextBlock folderDesc = null!;
+        folderButtons.Children.Add(ActionButton(Loc.T("s.cap.folder.pick"), () =>
+        {
+            using var dlg = new System.Windows.Forms.FolderBrowserDialog { SelectedPath = Folder(), UseDescriptionForTitle = true, Description = Loc.T("s.cap.folder") };
+            if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+            S.CaptureFolder = dlg.SelectedPath;
+            AppSettings.Commit();
+            folderDesc.Text = Folder();
+        }, primary: true));
+        var open = ActionButton(Loc.T("s.cap.folder.open"), () =>
+        {
+            try
+            {
+                System.IO.Directory.CreateDirectory(Folder());
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Folder()) { UseShellExecute = true });
+            }
+            catch (Exception ex)
+            {
+                App.Log(ex);
+            }
+        });
+        open.Margin = new Thickness(8, 0, 0, 0);
+        folderButtons.Children.Add(open);
+        folderDesc = Row(cap, Loc.T("s.cap.folder"), Folder(), folderButtons);
         return p;
     }
 
@@ -1207,6 +1268,15 @@ public sealed partial class SettingsWindow : Window
 
 #if DEBUG
     /// <summary>Acts out every update state on the "Sobre" page, saves a picture of each and quits.</summary>
+    /// <summary>Snapshot tests: where the page's edge fade sits and what it shows.</summary>
+    public string TestScrollMask()
+    {
+        var p = _scroll.Template?.FindName("PART_ScrollContentPresenter", _scroll) as FrameworkElement;
+        var m = (p?.OpacityMask ?? _scroll.OpacityMask) as LinearGradientBrush;
+        return $"presenter {(p == null ? "não" : "sim")} máscara em {(p?.OpacityMask != null ? "presenter" : _scroll.OpacityMask != null ? "scroll" : "nada")} " +
+            (m == null ? "" : string.Join(" ", m.GradientStops.Select(g => $"{g.Offset:0.00}/{g.Color.A}"))) + $" offset {_scroll.VerticalOffset:0}/{_scroll.ScrollableHeight:0}";
+    }
+
     /// <summary>Snapshot tests: "Conectar agenda" open on a service.</summary>
     public void TestExtWizard(string provider)
     {

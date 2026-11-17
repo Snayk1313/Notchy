@@ -100,9 +100,23 @@ public sealed class KeyboardHook : IDisposable
         return vk == 0 ? null : (mods, (uint)vk);
     }
 
+    /// <summary>A key that can be a shortcut on its own (nobody types with it): Print Screen, Pause, Scroll Lock, Insert, F1–F24.</summary>
+    public static bool IsBareKey(int vk) => vk is 0x2C or 0x13 or 0x91 or 0x2D || vk is >= 0x70 and <= 0x87;
+
+    /// <summary>A shortcut that is one key alone ("Snapshot" = Print Screen, "F9", "Pause"…), or null.</summary>
+    public static int? ParseBare(string name)
+    {
+        if (string.IsNullOrEmpty(name) || name.Contains('+') || !Enum.TryParse<Key>(name, true, out var key)) return null;
+        int vk = KeyInterop.VirtualKeyFromKey(key);
+        return IsBareKey(vk) ? vk : null;
+    }
+
+    public static string FormatBare(int vk) => vk == 0x2C ? "Snapshot" : KeyInterop.KeyFromVirtualKey(vk).ToString(); // (Print Screen has two names in Key: always this one)
+
     /// <summary>The keys as they are shown (one chip each).</summary>
     public static string[] Labels(string name)
     {
+        if (ParseBare(name) is int bare) return new[] { KeyLabel(bare) };
         if (Parse(name) is not { } k) return Array.Empty<string>();
         var list = Mods.Where(m => (k.mods & m.mod) != 0).Select(m => m.name).ToList();
         list.Add(KeyLabel((int)k.vk));
@@ -118,6 +132,8 @@ public sealed class KeyboardHook : IDisposable
             >= Key.D0 and <= Key.D9 => ((int)(key - Key.D0)).ToString(),
             >= Key.NumPad0 and <= Key.NumPad9 => "Num " + (int)(key - Key.NumPad0),
             Key.Return => "Enter",
+            Key.Snapshot => "Print Screen",
+            Key.Scroll => "Scroll Lock",
             Key.Back => "Backspace",
             Key.Escape => "Esc",
             Key.Oem3 => "'",

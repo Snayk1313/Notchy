@@ -261,7 +261,7 @@ public partial class MainWindow
         SetIslandSizeNow(size.Width, size.Height + _topHidden);
         VolumePanel.Width = size.Width;
         VolumePanel.Height = size.Height;
-        foreach (var p in new UIElement[] { IdlePanel, CompactPanel, _budsPanel, _noticePanel, _calPanel, _ringPanel, WhatsNewPanel, ClaudePanel, TransferPanel, ExpandedPanel, AccentGlow })
+        foreach (var p in new UIElement[] { IdlePanel, CompactPanel, _budsPanel, _noticePanel, _calPanel, _shotPanel, _ringPanel, WhatsNewPanel, ClaudePanel, TransferPanel, ExpandedPanel, AccentGlow })
         {
             p.BeginAnimation(OpacityProperty, null);
             p.Opacity = 0;

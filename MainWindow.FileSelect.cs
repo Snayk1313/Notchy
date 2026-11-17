@@ -28,6 +28,14 @@ public partial class MainWindow
     private void InitFileSelect()
     {
         DownloadsTab.Background = Brushes.Transparent; // the gaps between rows can start a lasso too
+        // the shelf row gets the thin bar too, lying along the bottom
+        var shelfParent = (Panel)ShelfScroll.Parent;
+        shelfParent.Children.Remove(ShelfScroll);
+        ShelfScroll.Content = null;
+        var shelfHost = Scroller(ShelfItems, horizontal: true);
+        shelfHost.Margin = new Thickness(6, 2, 6, 2); // (the cards are 76 tall: with the bar below, a marked one's frame must still fit)
+        ShelfScroll = (ScrollViewer)shelfHost.Children[0];
+        shelfParent.Children.Add(shelfHost);
         _shelfSel = new FileSelector(this, ShelfDropZone, ShelfItems, ShelfScroll, ShelfTab, ShelfColor);
         DownloadsTab.Children.Remove(DownloadsScroll);
         DownloadsScroll.Content = null;

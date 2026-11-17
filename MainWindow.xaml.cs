@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Collections.Generic;
 using System.Threading;
@@ -18,7 +18,7 @@ public partial class MainWindow : Window
 {
     private enum IslandState { None, Idle, Compact, Volume, Expanded }
     private enum Tab { Home, Claude, Music, Chat, Focus, Clock, Shelf, Clip, Downloads, News }
-    private enum CompactMode { None, Music, MusicPaused, Claude, ClaudeDone, ClaudeAttention, Focus, FocusDone, Battery, BatteryLow, Update, Transfer, TransferDone, TransferFailed, WhatsNew, Timer, TimerRing, Buds, BudsLow, BudsOff, Notice, CalNotice }
+    private enum CompactMode { None, Music, MusicPaused, Claude, ClaudeDone, ClaudeAttention, Focus, FocusDone, Battery, BatteryLow, Update, Transfer, TransferDone, TransferFailed, WhatsNew, Timer, TimerRing, Buds, BudsLow, BudsOff, Notice, CalNotice, Shot }
 
     private static readonly Color ClaudeColor = Color.FromRgb(0xE8, 0x82, 0x5F);
     private static readonly Color FocusColor = Color.FromRgb(0xB7, 0x9C, 0xFF);
@@ -114,6 +114,7 @@ public partial class MainWindow : Window
         InitTransfers();
         InitClaudeFace();
         InitShelfFace();
+        InitCapture();
         InitWhatsNew();
         InitFocusTab();
         InitClockTab();
@@ -312,6 +313,7 @@ public partial class MainWindow : Window
         // a notification card stays a card under the mouse (so you can click it), instead of opening the island
         ringing |= _noticeShown != null && _transient == CompactMode.Notice && DateTime.UtcNow < _transientUntil;
         ringing |= CalNoticeHolds;
+        ringing |= ShotNoticeHolds;
         if (_forcedState is { } forced) next = forced;
         else if (!ringing && WheelVolumeHolds) next = IslandState.Volume; // (Shift + wheel on the open island: the bar, for a moment)
         else if (!ringing && _hoverActive && !FullscreenHidesIsland || _clickOpened && !FullscreenHidesIsland || _holdOpenAfterPill || _menu.IsOpen || _devicesMenuOpen?.IsOpen == true || _dragOver || _lassoing || ChatKeepsOpen || ClipKeepsOpen) next = IslandState.Expanded;
@@ -341,7 +343,7 @@ public partial class MainWindow : Window
         IslandState.Idle => new Size(IdleWidth, 30),
         IslandState.Volume => LevelSize(),
         IslandState.Expanded => new Size(480, _subOpen ? SubPageHeight : TabHeight(_tab)),
-        _ => new Size(CompactWidth(_compactMode), _compactMode == CompactMode.TimerRing ? RingHeight : _compactMode == CompactMode.Notice ? NoticeHeight : _compactMode == CompactMode.CalNotice ? CalNoticeHeight : IsTransferMode(_compactMode) ? TransferHeight : 34)
+        _ => new Size(CompactWidth(_compactMode), _compactMode == CompactMode.TimerRing ? RingHeight : _compactMode == CompactMode.Notice ? NoticeHeight : _compactMode == CompactMode.CalNotice ? CalNoticeHeight : _compactMode == CompactMode.Shot ? ShotHeight : IsTransferMode(_compactMode) ? TransferHeight : 34)
     };
 
     private double TabHeight(Tab t) => 34 + 40 + 2 + t switch
@@ -370,6 +372,7 @@ public partial class MainWindow : Window
         CompactMode.BudsOff => BudsOffWidth,
         CompactMode.Notice => NoticeWidth,
         CompactMode.CalNotice => _calWidth,
+        CompactMode.Shot => ShotWidth,
         CompactMode.WhatsNew => WhatsNewWidth(),
         CompactMode.Transfer or CompactMode.TransferDone or CompactMode.TransferFailed => TransferWidth,
         _ => 320
@@ -436,10 +439,11 @@ public partial class MainWindow : Window
         AnimateIslandSize(TargetSize(state), expanding || prev == IslandState.Expanded);
 
         Fade(IdlePanel, state == IslandState.Idle);
-        Fade(CompactPanel, state == IslandState.Compact && !IsTransferMode(_compactMode) && !IsClaudeMode(_compactMode) && _compactMode is not (CompactMode.WhatsNew or CompactMode.TimerRing) && !IsBudsMode(_compactMode) && _compactMode is not (CompactMode.Notice or CompactMode.CalNotice));
+        Fade(CompactPanel, state == IslandState.Compact && !IsTransferMode(_compactMode) && !IsClaudeMode(_compactMode) && _compactMode is not (CompactMode.WhatsNew or CompactMode.TimerRing) && !IsBudsMode(_compactMode) && _compactMode is not (CompactMode.Notice or CompactMode.CalNotice or CompactMode.Shot));
         Fade(_budsPanel, state == IslandState.Compact && IsBudsMode(_compactMode));
         Fade(_noticePanel, state == IslandState.Compact && _compactMode == CompactMode.Notice);
         Fade(_calPanel, state == IslandState.Compact && _compactMode == CompactMode.CalNotice);
+        Fade(_shotPanel, state == IslandState.Compact && _compactMode == CompactMode.Shot);
         Fade(_ringPanel, state == IslandState.Compact && _compactMode == CompactMode.TimerRing);
         Fade(WhatsNewPanel, state == IslandState.Compact && _compactMode == CompactMode.WhatsNew);
         Fade(ClaudePanel, state == IslandState.Compact && IsClaudeMode(_compactMode));
@@ -638,6 +642,8 @@ public partial class MainWindow : Window
         UpdateTransferEyes();
         UpdateEyeTrip();
         UpdateShelfFace();
+        UpdateShotNotice();
+        UpdateClipLight();
         UpdateNavActivity();
         UpdateFocusFrame();
         UpdateFocusPod();
@@ -1033,7 +1039,7 @@ public partial class MainWindow : Window
     {
         var m = _compactMode;
         // Claude / download alone have their own panels: leave the generic one as it was while it fades out
-        if (IsClaudeMode(m) || IsTransferMode(m) || m is CompactMode.WhatsNew or CompactMode.TimerRing or CompactMode.Notice or CompactMode.CalNotice || IsBudsMode(m))
+        if (IsClaudeMode(m) || IsTransferMode(m) || m is CompactMode.WhatsNew or CompactMode.TimerRing or CompactMode.Notice or CompactMode.CalNotice or CompactMode.Shot || IsBudsMode(m))
         {
             if (IsTransferMode(m)) UpdateTransferPanel();
             ShowCompactFace(false);
@@ -2302,6 +2308,416 @@ public partial class MainWindow : Window
         // only Settings pages (e.g. NOTCHY_SETTINGSTEST=calendar): straight to them, the island prints skipped
         string? settingsOnly = Environment.GetEnvironmentVariable("NOTCHY_SETTINGSTEST");
         if (!string.IsNullOrEmpty(settingsOnly)) goto settings;
+        // only the pinned capture (quick): the names under the buttons, the zoom inside the picture, a corner resize
+        if (Environment.GetEnvironmentVariable("NOTCHY_PINTEST") == "1")
+        {
+            await Task.Delay(1500);
+            var v = new DrawingVisual();
+            using (var dc = v.RenderOpen())
+            {
+                dc.DrawRectangle(new LinearGradientBrush(Color.FromRgb(0x1E, 0x3A, 0x5F), Color.FromRgb(0xC9, 0x73, 0x5A), 30), null, new Rect(0, 0, 600, 360));
+                for (int i = 0; i < 5; i++) dc.DrawRectangle(new SolidColorBrush(Color.FromRgb((byte)(80 + i * 35), 200, (byte)(220 - i * 30))), null, new Rect(60 + i * 100, 300 - i * 45, 60, 40 + i * 45));
+                dc.DrawEllipse(Brushes.White, null, new Point(300, 120), 30, 30);
+            }
+            var pic = new System.Windows.Media.Imaging.RenderTargetBitmap(600, 360, 96, 96, PixelFormats.Pbgra32);
+            pic.Render(v);
+            pic.Freeze();
+            var pin = new PinWindow(pic, new Int32Rect(400, 300, 600, 360), _ => { }, (_, _) => { });
+            pin.Show();
+            await Task.Delay(700);
+            // the real screen around it: Windows' rounded corners and shadow only show there
+            using (var screen = new System.Drawing.Bitmap(700, 460))
+            {
+                using (var g = System.Drawing.Graphics.FromImage(screen)) g.CopyFromScreen(350, 250, 0, 0, screen.Size);
+                screen.Save(System.IO.Path.Combine(folder, "p0_screen.png"));
+            }
+            pin.TestShowTools();
+            pin.TestTip(0);
+            await Task.Delay(400);
+            pin.TestTip(1);
+            await Task.Delay(70);
+            pin.TestSave(System.IO.Path.Combine(folder, "p1_tip_sliding.png"));
+            await Task.Delay(300);
+            pin.TestTip(2);
+            await Task.Delay(300);
+            pin.TestSave(System.IO.Path.Combine(folder, "p2_tip_close.png"));
+            double w0 = pin.Width, h0 = pin.Height;
+            pin.TestZoom(new Point(300, 120), 2.5);
+            await Task.Delay(200);
+            pin.TestSave(System.IO.Path.Combine(folder, "p3_zoom.png"));
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "pin.txt"), $"zoom muda a janela: {pin.Width != w0 || pin.Height != h0} · {pin.TestZoomState}");
+            pin.TestPan(new Vector(-150, -80));
+            System.IO.File.AppendAllText(System.IO.Path.Combine(folder, "pin.txt"), $"{Environment.NewLine}depois de mover: {pin.TestZoomState}");
+            await Task.Delay(100);
+            pin.TestSave(System.IO.Path.Combine(folder, "p3b_panned.png"));
+            pin.TestResize(2, new Vector(-200, 0));
+            await Task.Delay(300);
+            System.IO.File.AppendAllText(System.IO.Path.Combine(folder, "pin.txt"), $"{Environment.NewLine}depois de diminuir: {pin.TestZoomState}{Environment.NewLine}");
+            await Task.Delay(300);
+            pin.TestSave(System.IO.Path.Combine(folder, "p4_smaller.png"));
+            System.IO.File.AppendAllText(System.IO.Path.Combine(folder, "pin.txt"), $" · depois de diminuir: {pin.Width:0}x{pin.Height:0} (era {w0:0}x{h0:0})");
+            double right = pin.Left + pin.Width, bottom = pin.Top + pin.Height;
+            pin.TestResize(3, new Vector(80, 0)); // the bottom-left corner, inward
+            await Task.Delay(300);
+            System.IO.File.AppendAllText(System.IO.Path.Combine(folder, "pin.txt"),
+                $"{Environment.NewLine}canto esquerdo: {pin.Width:0}x{pin.Height:0} · borda direita {right:0} → {pin.Left + pin.Width:0} · topo {pin.Top:0}");
+            var sweep = pin.TestSweep();
+            double jump = sweep.Zip(sweep.Skip(1), (a, b) => Math.Abs(b - a)).Max();
+            System.IO.File.AppendAllText(System.IO.Path.Combine(folder, "pin.txt"), $"{Environment.NewLine}arrasto: {string.Join(" ", sweep)} · maior passo {jump:0.0}");
+            pin.TestResetZoom();
+            await Task.Delay(120);
+            System.IO.File.AppendAllText(System.IO.Path.Combine(folder, "pin.txt"), $"{Environment.NewLine}voltando: {pin.TestZoomState}");
+            await Task.Delay(400);
+            System.IO.File.AppendAllText(System.IO.Path.Combine(folder, "pin.txt"), $"{Environment.NewLine}clique no %: {pin.TestZoomState}");
+            pin.TestSave(System.IO.Path.Combine(folder, "p5_reset.png"));
+            pin.Close();
+            Application.Current.Shutdown();
+            return;
+        }
+        // only the news of this version (quick): each highlight card with its little picture, then the full list
+        if (Environment.GetEnvironmentVariable("NOTCHY_NEWSTEST") == "1")
+        {
+            await Task.Delay(4000);
+            ShowWhatsNew();
+            await Task.Delay(1000);
+            _newsManual = true;
+            for (int i = 0; i < WhatsNew.Highlights.Length; i++)
+            {
+                ShowNewsCard(i, animate: false);
+                await ShotAsync(folder, $"n{i}_{WhatsNew.Highlights[i].Art}_a", 900);
+                await ShotAsync(folder, $"n{i}_{WhatsNew.Highlights[i].Art}_b", 700);
+            }
+            ToggleNewsList();
+            await ShotAsync(folder, "n9_list", 700);
+            Application.Current.Shutdown();
+            return;
+        }
+        // only the glass (quick): the real island over a colourful window, the same spot without it, and the bar's
+        // glass made from that for several blur strengths; the closest one wins (mean difference per channel)
+        if (Environment.GetEnvironmentVariable("NOTCHY_GLASSTEST") == "1")
+        {
+            await Task.Delay(4000);
+            var log = System.IO.Path.Combine(folder, "vidro.txt");
+            var dpiNow = VisualTreeHelper.GetDpi(this);
+            var a = Island.PointToScreen(new Point(0, _topHidden));
+            var b = Island.PointToScreen(new Point(Island.ActualWidth, Island.ActualHeight));
+            const int Pad = 320;
+            var rect = new System.Drawing.Rectangle((int)a.X - Pad, (int)a.Y, (int)(b.X - a.X) + 2 * Pad, (int)(b.Y - a.Y) + 360);
+            var colours = new Window
+            {
+                WindowStyle = WindowStyle.None, ResizeMode = ResizeMode.NoResize, ShowInTaskbar = false,
+                Left = rect.Left / dpiNow.DpiScaleX - 60, Top = 0, Width = rect.Width / dpiNow.DpiScaleX + 120, Height = rect.Bottom / dpiNow.DpiScaleY + 60
+            };
+            bool dark = Environment.GetEnvironmentVariable("NOTCHY_GLASSDARK") == "1";
+            var canvas = new Canvas { Background = dark
+                ? new LinearGradientBrush(new GradientStopCollection { new(Color.FromRgb(0x10, 0x14, 0x30), 0), new(Color.FromRgb(0x3A, 0x10, 0x40), 0.5), new(Color.FromRgb(0x08, 0x30, 0x28), 1) }, 0)
+                : new LinearGradientBrush(new GradientStopCollection { new(Color.FromRgb(0xFF, 0x5A, 0x5F), 0), new(Color.FromRgb(0xFF, 0xD1, 0x66), 0.25),
+                new(Color.FromRgb(0x6E, 0xE7, 0xC4), 0.5), new(Color.FromRgb(0x7F, 0xD0, 0xFF), 0.75), new(Color.FromRgb(0xB9, 0xA6, 0xFF), 1) }, 0) };
+            var rnd = new Random(4);
+            for (int i = 0; i < 160; i++)
+            {
+                var e = new System.Windows.Shapes.Ellipse { Width = 10 + rnd.Next(40), Height = 10 + rnd.Next(40), Fill = new SolidColorBrush(Color.FromRgb((byte)rnd.Next(256), (byte)rnd.Next(256), (byte)rnd.Next(256))) };
+                Canvas.SetLeft(e, rnd.Next((int)colours.Width));
+                Canvas.SetTop(e, rnd.Next((int)colours.Height));
+                canvas.Children.Add(e);
+            }
+            colours.Content = canvas;
+            colours.Show();
+            colours.Activate();
+            Activate();
+            await Task.Delay(1200);
+            System.Drawing.Bitmap Grab()
+            {
+                var bmp = new System.Drawing.Bitmap(rect.Width, rect.Height);
+                using var g = System.Drawing.Graphics.FromImage(bmp);
+                g.CopyFromScreen(rect.Left, rect.Top, 0, 0, bmp.Size);
+                return bmp;
+            }
+            using var withIsland = Grab();
+            withIsland.Save(System.IO.Path.Combine(folder, "g_real.png"));
+            Opacity = 0; // (the glass goes with it)
+            await Task.Delay(500);
+            using var behind = Grab();
+            behind.Save(System.IO.Path.Combine(folder, "g_behind.png"));
+            Opacity = 1;
+            colours.Close();
+            var behindSrc = new System.Windows.Media.Imaging.BitmapImage();
+            behindSrc.BeginInit();
+            behindSrc.UriSource = new Uri(System.IO.Path.Combine(folder, "g_behind.png"));
+            behindSrc.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+            behindSrc.EndInit();
+            // only the inside of the island counts (no text: a strip below the middle, away from the edges)
+            int x0 = Pad + 60, x1 = rect.Width - Pad - 60, y0 = (int)((b.Y - a.Y) * 0.55), y1 = (int)((b.Y - a.Y) * 0.85);
+            double Diff(System.Drawing.Bitmap mine)
+            {
+                double sum = 0;
+                int n = 0;
+                for (int y = y0; y < y1; y += 2)
+                    for (int x = x0; x < x1; x += 2)
+                    {
+                        var p = withIsland.GetPixel(x, y);
+                        var q = mine.GetPixel(x, y);
+                        sum += Math.Abs(p.R - q.R) + Math.Abs(p.G - q.G) + Math.Abs(p.B - q.B);
+                        n += 3;
+                    }
+                return sum / Math.Max(1, n);
+            }
+            System.IO.File.AppendAllText(log, $"desfoque {S.BlurIntensity}% · escurecimento {S.BlurTint}% · sem vidro (só a tela): {Diff(behind):0.0}{Environment.NewLine}");
+            var best = (diff: double.MaxValue, scale: 0.0, radius: 0.0);
+            foreach (var scale in new[] { 1.0 / 8, 1.0 / 16 })
+                foreach (var radius in new[] { 3.0, 5.0, 7.0, 9.0, 12.0 })
+                {
+                    var glass = CaptureWindow.TestGlassOver(behindSrc, scale, radius);
+                    var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                    enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(glass));
+                    string file = System.IO.Path.Combine(folder, $"g_{1 / scale:0}_{radius:0}.png");
+                    using (var f = System.IO.File.Create(file)) enc.Save(f);
+                    using var mine = new System.Drawing.Bitmap(file);
+                    double d = Diff(mine);
+                    System.IO.File.AppendAllText(log, $"1/{1 / scale:0} raio {radius:0}: {d:0.0}{Environment.NewLine}");
+                    if (d < best.diff) best = (d, scale, radius);
+                }
+            System.IO.File.AppendAllText(log, $"melhor: 1/{1 / best.scale:0} raio {best.radius:0} ({best.diff:0.0}){Environment.NewLine}");
+            Application.Current.Shutdown();
+            return;
+        }
+        // only the screen capture (quick): Print Screen opens it, an area with marks, the colours, the trip to the island, the notice
+        if (Environment.GetEnvironmentVariable("NOTCHY_CAPTURETEST") == "1")
+        {
+            [System.Runtime.InteropServices.DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+            var log = System.IO.Path.Combine(folder, "captura.txt");
+            void Note(string line) => System.IO.File.AppendAllText(log, line + Environment.NewLine);
+            await Task.Delay(4000); // (the hello wave first)
+            keybd_event(0x2C, 0, 0, UIntPtr.Zero);
+            keybd_event(0x2C, 0, 2, UIntPtr.Zero);
+            await Task.Delay(900);
+            var cw = _capture;
+            Note($"Print Screen abriu: {cw?.IsVisible == true} · ilha escondida: {Opacity:0}");
+            if (cw == null)
+            {
+                Application.Current.Shutdown();
+                return;
+            }
+            var isl = cw.TestIsland;
+            Note($"ilha em {isl.X:0},{isl.Y:0}");
+            cw.TestHover(new Point(isl.X - 300, 300));
+            await Task.Delay(300);
+            cw.TestSave(System.IO.Path.Combine(folder, "k1_hover.png"));
+            var area = new Rect(isl.X - 380, 220, 620, 360);
+            cw.TestDrag(area);
+            await Task.Delay(200);
+            cw.TestSave(System.IO.Path.Combine(folder, "k2_drag.png"));
+            cw.TestHoldBar();
+            cw.TestSelect(area);
+            await Task.Delay(100);
+            // the toolbar's entrance, moment by moment (the island down to the area)
+            var film = new Rect(area.X - 80, 0, Math.Max(area.Width + 160, 760), area.Bottom + 110);
+            int frame = 0;
+            foreach (var t in new[] { 0.0, 0.04, 0.08, 0.12, 0.18, 0.24, 0.3, 0.36, 0.42, 0.46, 0.5, 0.54, 0.58, 0.62, 0.66, 0.72, 0.8, 0.9 })
+            {
+                cw.TestBarAt(t);
+                await Task.Delay(30);
+                cw.TestSaveRegion(System.IO.Path.Combine(folder, $"b{frame++:00}_{t:0.00}.png"), film);
+            }
+            await Task.Delay(300);
+            cw.TestMark("Arrow", new Point(area.X + 60, area.Y + 60), new Point(area.X + 220, area.Y + 140));
+            cw.TestMark("Rect", new Point(area.X + 260, area.Y + 40), new Point(area.X + 420, area.Y + 200));
+            cw.TestColor(3);
+            cw.TestMark("Pen", new Point(area.X + 60, area.Y + 260), new Point(area.X + 300, area.Y + 300));
+            cw.TestColor(2);
+            cw.TestMark("Marker", new Point(area.X + 330, area.Y + 290), new Point(area.X + 560, area.Y + 290));
+            cw.TestMark("Blur", new Point(area.X + 450, area.Y + 60), new Point(area.X + 590, area.Y + 150));
+            cw.TestColor(0);
+            cw.TestText(new Point(area.X + 70, area.Y + 200), "olha aqui!");
+            await Task.Delay(300);
+            cw.TestSave(System.IO.Path.Combine(folder, "k3_edit.png"));
+            cw.TestPop(true);
+            await Task.Delay(350);
+            cw.TestSave(System.IO.Path.Combine(folder, "k4_colors.png"));
+            cw.TestPop(false);
+            cw.TestHoldFly();
+            var fly = cw.TestFinish(CaptureAction.Copy);
+            await Task.Delay(50);
+            // the trip to the island, moment by moment (the top of the screen, where it arrives)
+            // the real screen around the island (the live island is over the capture now, and takes the picture in)
+            var islandMid = Island.PointToScreen(new Point(Island.ActualWidth / 2, _topHidden));
+            var grabRect = new System.Drawing.Rectangle((int)islandMid.X - 330, (int)islandMid.Y - 4, 660, 150);
+            void GrabScreen(string name)
+            {
+                using var bmp = new System.Drawing.Bitmap(grabRect.Width, grabRect.Height);
+                using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(grabRect.Left, grabRect.Top, 0, 0, bmp.Size);
+                bmp.Save(System.IO.Path.Combine(folder, name + ".png"));
+            }
+            double oldW = Island.ActualWidth;
+            int f2 = 0;
+            foreach (var t in new[] { 0.3, 0.5, 0.62, 0.68 })
+            {
+                cw.TestFlyAt(t);
+                await Task.Delay(60);
+                GrabScreen($"h{f2++:00}_{t:0.00}");
+            }
+            // from the arrival on, in real time: the island opens while the capture fades over it
+            var real = System.Diagnostics.Stopwatch.StartNew();
+            while (real.Elapsed.TotalSeconds < 0.7)
+            {
+                double t = 0.72 + real.Elapsed.TotalSeconds;
+                cw.TestFlyAt(t);
+                await Task.Delay(45);
+                GrabScreen($"h{f2++:00}_{t:0.00}");
+                System.IO.File.AppendAllText(log, $"{t:0.00}: {_state} {_compactMode} ilha {Island.ActualWidth:0}x{Island.ActualHeight:0} vis {Island.Visibility} janela {Opacity:0.0} compacto {CompactPanel.Opacity:0.00} aviso {_shotPanel.Opacity:0.00} topo {_topHidden:0} captura {cw.IsVisible} · luz {FocusLight.Visibility} {FocusLight.Opacity:0.00} {(FocusLight.Stroke as SolidColorBrush)?.Color} {FocusLight.Width:0}x{FocusLight.Height:0} trilho {FocusTrack.Opacity:0.00}{Environment.NewLine}");
+            }
+            cw.TestFlyAt(2);
+            await Task.Delay(100);
+            // which window draws what: the island, then its glass, left out of the picture
+            GrabScreen("x0_tudo");
+            // who still has the old width (and shows)?
+            void Walk(DependencyObject d, int depth)
+            {
+                for (int i = 0; i < VisualTreeHelper.GetChildrenCount(d); i++)
+                {
+                    var c = VisualTreeHelper.GetChild(d, i);
+                    if (c is FrameworkElement fe && fe.IsVisible && fe.Opacity > 0.01 && Math.Abs(fe.ActualWidth - oldW) < 8)
+                        System.IO.File.AppendAllText(log, $"largura antiga ({oldW:0}): {fe.GetType().Name} '{fe.Name}' {fe.ActualWidth:0}x{fe.ActualHeight:0} opac {fe.Opacity:0.00} pai '{(VisualTreeHelper.GetParent(fe) as FrameworkElement)?.Name}'{Environment.NewLine}");
+                    Walk(c, depth + 1);
+                }
+            }
+            Walk(this, 0);
+            SetWindowDisplayAffinity(_hwnd, 0x11);
+            await Task.Delay(80);
+            GrabScreen("x1_sem_ilha");
+            SetWindowDisplayAffinity(_hwnd, 0);
+            if (_backdrop != null) SetWindowDisplayAffinity(_backdrop.Hwnd, 0x11);
+            await Task.Delay(80);
+            GrabScreen("x2_sem_vidro");
+            if (_backdrop != null) SetWindowDisplayAffinity(_backdrop.Hwnd, 0);
+            await fly;
+            await Task.Delay(400);
+            Note($"copiado: {Clipboard.ContainsImage()} · aviso: {_compactMode} · ilha visível: {Opacity:0}");
+            await ShotAsync(folder, "k6_notice", 200);
+            await ShotAsync(folder, "k7_notice_later", 1200);
+            if (_shotPicture != null) Note($"imagem {_shotPicture.PixelWidth}x{_shotPicture.PixelHeight} · arquivo {_shotFile}");
+            Application.Current.Shutdown();
+            return;
+        }
+        // only the shelf's sideways scroll (quick): many files, the wheel walks along them and the thin bar shows
+        if (Environment.GetEnvironmentVariable("NOTCHY_SHELFSCROLLTEST") == "1")
+        {
+            var saved = _shelf.ToList();
+            _shelf.Clear();
+            for (int i = 1; i <= 10; i++)
+            {
+                var p = System.IO.Path.Combine(folder, $"arquivo {i}.txt");
+                System.IO.File.WriteAllText(p, "x");
+                _shelf.Add(p);
+            }
+            RenderShelf();
+            await Task.Delay(4000); // (the hello wave first)
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            await Task.Delay(900);
+            SelectTab(Tab.Shelf, false);
+            await ShotAsync(folder, "h1_start", 1200);
+            _shelfSel.SetMode(true);
+            _shelfSel.MarkAll();
+            await ShotAsync(folder, "h1_marked", 500);
+            var wheel = new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, -360) { RoutedEvent = UIElement.MouseWheelEvent };
+            ShelfScroll.RaiseEvent(wheel);
+            await ShotAsync(folder, "h2a_gliding", 60);
+            await ShotAsync(folder, "h2_wheel", 600);
+            ShelfScroll.ScrollToRightEnd();
+            await ShotAsync(folder, "h3_end", 400);
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "result.txt"), $"tratado {wheel.Handled} rolável {ShelfScroll.ScrollableWidth:0} posição {ShelfScroll.HorizontalOffset:0}");
+            // a vertical list too: the news
+            _shelfSel.SetMode(false);
+            ShowWhatsNew();
+            await Task.Delay(1000);
+            ToggleNewsList();
+            await ShotAsync(folder, "v1_top", 700);
+            if (_newsScroll != null)
+            {
+                var trail = new System.Text.StringBuilder($" | antes {_newsScroll.VerticalOffset:0}:");
+                _newsScroll.RaiseEvent(new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, -240) { RoutedEvent = UIElement.MouseWheelEvent });
+                for (int i = 0; i < 12; i++)
+                {
+                    await Task.Delay(30);
+                    trail.Append($" {_newsScroll.VerticalOffset:0}");
+                }
+                System.IO.File.AppendAllText(System.IO.Path.Combine(folder, "result.txt"), trail.ToString());
+                await ShotAsync(folder, "v2_gliding", 60);
+                await ShotAsync(folder, "v3_middle", 600);
+                System.IO.File.AppendAllText(System.IO.Path.Combine(folder, "result.txt"), $" | novidades {_newsScroll.VerticalOffset:0} de {_newsScroll.ScrollableHeight:0}");
+            }
+            _shelf.Clear();
+            _shelf.AddRange(saved);
+            SaveShelf();
+            Application.Current.Shutdown();
+            return;
+        }
+        // only Limpar on the shelf (quick): the files pop, the box swallows the sparks. Puts the saved shelf back after.
+        if (Environment.GetEnvironmentVariable("NOTCHY_CLEARTEST") == "1")
+        {
+            var saved = _shelf.ToList();
+            var files = new[] { "foto-praia.png", "relatório.pdf", "músicas.zip" }.Select(n =>
+            {
+                var p = System.IO.Path.Combine(folder, n);
+                System.IO.File.WriteAllText(p, "x");
+                return p;
+            }).ToList();
+            _shelf.Clear();
+            _shelf.AddRange(files);
+            RenderShelf();
+            await Task.Delay(4000); // (the hello wave first)
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            await Task.Delay(900);
+            SelectTab(Tab.Shelf, false);
+            await Task.Delay(1200);
+            ShelfClear_Click(this, new RoutedEventArgs());
+            foreach (var (name, ms) in new[] { ("c1_pop", 120), ("c2_hang", 250), ("c3_box", 300), ("c4_pull", 350), ("c5_pull", 200), ("c6_closed", 300), ("c7_rest", 1200) })
+                await ShotAsync(folder, name, ms);
+            _shelf.Clear();
+            _shelf.AddRange(saved);
+            SaveShelf();
+            Application.Current.Shutdown();
+            return;
+        }
+        // only the first files caught by the shelf box (quick); the saved shelf file is left alone
+        if (Environment.GetEnvironmentVariable("NOTCHY_SHELFTEST") == "1")
+        {
+            var files = new[] { "foto-praia.png", "relatório.pdf", "músicas.zip", "notas.txt" }.Select(n =>
+            {
+                var p = System.IO.Path.Combine(folder, n);
+                System.IO.File.WriteAllText(p, "x");
+                return p;
+            }).ToList();
+            _shelf.Clear();
+            RenderShelf();
+            await Task.Delay(4000); // (the hello wave first)
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            await Task.Delay(900);
+            SelectTab(Tab.Shelf, false);
+            await Task.Delay(1200);
+            _dragOver = true;
+            _dragLast = DateTime.Now.AddSeconds(10);
+            _shelfDragPos = new Point(34, -6);
+            await ShotAsync(folder, "s1_drag", 600);
+            _dragOver = false;
+            _shelf.AddRange(files.Take(3));
+            ShelfStored(true);
+            await ShotAsync(folder, "s2_jump", 150);
+            await ShotAsync(folder, "s3_sparks", 150);
+            await ShotAsync(folder, "s4_vanish", 250);
+            await ShotAsync(folder, "s5_spread", 250);
+            await ShotAsync(folder, "s5b_spread", 200);
+            await ShotAsync(folder, "s6_done", 900);
+            _shelf.Add(files[3]);
+            ShelfStored(false);
+            await ShotAsync(folder, "s7_next", 120);
+            await ShotAsync(folder, "s8_next_done", 600);
+            Application.Current.Shutdown();
+            return;
+        }
         if (Environment.GetEnvironmentVariable("NOTCHY_PASTETEST") == "1")
         {
             await PasteTestAsync(folder);
@@ -3826,6 +4242,7 @@ public partial class MainWindow : Window
         sw.ScrollPageTo(140);
         await Task.Delay(300);
         RenderSettings("look_scrolled");
+        System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "mask.txt"), sw.TestScrollMask());
         sw.ShowPage("calendar");
         await Task.Delay(500);
         sw.TestExtWizard("google");

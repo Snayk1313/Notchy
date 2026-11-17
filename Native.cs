@@ -38,6 +38,9 @@ internal static class Native
         SetWindowLongPtr(hwnd, GWL_EXSTYLE, new IntPtr(ex));
     }
 
+    /// <summary>Brings a topmost window in front of the other topmost ones, without activating it.</summary>
+    public static void BringTopmost(IntPtr hwnd) => SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+
     /// <summary>Puts <paramref name="hwnd"/> right below <paramref name="above"/> in z-order.</summary>
     public static void PlaceBelow(IntPtr hwnd, IntPtr above) =>
         SetWindowPos(hwnd, above, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -169,6 +172,9 @@ internal static class Native
         IntPtr fg = GetForegroundWindow();
         if (fg == IntPtr.Zero || fg == own || fg == GetShellWindow() || fg == GetDesktopWindow())
             return false;
+        // Notchy's own windows are never a game (the screen capture covers the whole screen, a maximised Settings too)
+        GetWindowThreadProcessId(fg, out uint pid);
+        if (pid == (uint)Environment.ProcessId) return false;
 
         var sb = new StringBuilder(64);
         GetClassName(fg, sb, sb.Capacity);

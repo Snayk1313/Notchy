@@ -413,14 +413,38 @@ public partial class MainWindow
     /// <summary>
     /// A vertical scroller with a thin bar on the right (like the alarms' one, standing): it shows where you are,
     /// and appears while the mouse is on the list or while it scrolls; it hides when there's nothing to scroll.
+    /// <paramref name="horizontal"/>: the same thin bar lying along the bottom, and the wheel scrolls sideways.
     /// </summary>
-    private Grid Scroller(FrameworkElement content, double? height = null, double? maxHeight = null)
+    private Grid Scroller(FrameworkElement content, double? height = null, double? maxHeight = null, bool horizontal = false)
     {
-        var sv = new ScrollViewer { Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Hidden, Focusable = false, Margin = new Thickness(0, 0, 8, 0) };
+        var sv = new GlideScrollViewer
+        {
+            Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Hidden, Focusable = false, Margin = new Thickness(0, 0, 8, 0),
+            Horizontal = horizontal,
+            Snap = horizontal, // a row of items moves one item per notch, so the first one you see is whole (a cut one shows its selection frame cut)
+            Step = horizontal ? () => (content as Panel)?.Children.OfType<FrameworkElement>().FirstOrDefault() is { ActualWidth: > 0 } first
+                ? first.ActualWidth + first.Margin.Left + first.Margin.Right
+                : 60 : null
+        };
         var thumb = new Border { Width = 3, CornerRadius = new CornerRadius(1.5), Background = White(0xCC), VerticalAlignment = VerticalAlignment.Top,
             Effect = new DropShadowEffect { Color = Colors.White, BlurRadius = 6, ShadowDepth = 0, Opacity = 0.5 } };
         var track = new Border { Width = 3, CornerRadius = new CornerRadius(1.5), Background = White(0x14), HorizontalAlignment = HorizontalAlignment.Right,
             Margin = new Thickness(0, 2, 1, 2), Opacity = 0, IsHitTestVisible = false, Child = thumb };
+        if (horizontal)
+        {
+            sv.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
+            sv.HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden;
+            sv.Margin = new Thickness(0, 0, 0, 6);
+            thumb.Width = double.NaN;
+            thumb.Height = 3;
+            thumb.VerticalAlignment = VerticalAlignment.Stretch;
+            thumb.HorizontalAlignment = HorizontalAlignment.Left;
+            track.Width = double.NaN;
+            track.Height = 3;
+            track.HorizontalAlignment = HorizontalAlignment.Stretch;
+            track.VerticalAlignment = VerticalAlignment.Bottom;
+            track.Margin = new Thickness(2, 0, 2, 1);
+        }
         var host = new Grid { Background = Brushes.Transparent };
         if (height is double h) host.Height = h;
         if (maxHeight is double mh) host.MaxHeight = mh;
@@ -429,11 +453,21 @@ public partial class MainWindow
 
         bool hover = false;
         double shownUntil = 0;
-        bool Scrollable() => sv.ScrollableHeight > 1;
+        bool Scrollable() => horizontal ? sv.ScrollableWidth > 1 : sv.ScrollableHeight > 1;
         void Place()
         {
-            if (!Scrollable() || track.ActualHeight < 1) return;
+            if (!Scrollable()) return;
+            if (horizontal)
+            {
+                double trackW = track.ActualWidth;
+                if (trackW < 1) return;
+                double thumbW = Math.Max(24, trackW * sv.ViewportWidth / Math.Max(1, sv.ExtentWidth));
+                thumb.Width = thumbW;
+                thumb.Margin = new Thickness((trackW - thumbW) * (sv.HorizontalOffset / sv.ScrollableWidth), 0, 0, 0);
+                return;
+            }
             double trackH = track.ActualHeight;
+            if (trackH < 1) return;
             double thumbH = Math.Max(18, trackH * sv.ViewportHeight / Math.Max(1, sv.ExtentHeight));
             thumb.Height = thumbH;
             thumb.Margin = new Thickness(0, (trackH - thumbH) * (sv.VerticalOffset / sv.ScrollableHeight), 0, 0);
@@ -443,6 +477,7 @@ public partial class MainWindow
             on &= Scrollable();
             track.BeginAnimation(OpacityProperty, new DoubleAnimation(on ? 1 : 0, TimeSpan.FromMilliseconds(Dur(on ? 160 : 260))));
         }
+        ScrollPolish.Fade(sv, horizontal); // (like the alarms' row: transparent at an edge with more behind it)
         sv.ScrollChanged += (_, _) =>
         {
             Place();

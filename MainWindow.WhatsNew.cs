@@ -536,6 +536,132 @@ public partial class MainWindow
                 _newsArtFrames.Add(t => arc.Data = ArcGeometry(36, 33, t % 6 / 6));
                 break;
             }
+            case "capture":
+            {
+                // an area picked on a little window, a flash, then the picture flying up into the island, which lights up
+                static double Sm(double a, double b, double x) { double u = Math.Clamp((x - a) / (b - a), 0, 1); return u * u * (3 - 2 * u); }
+                var win = new Rectangle { Width = 56, Height = 36, RadiusX = 5, RadiusY = 5, Fill = new SolidColorBrush(Color.FromArgb(0xE6, 255, 255, 255)) };
+                Canvas.SetLeft(win, 12); Canvas.SetTop(win, 40); c.Children.Add(win);
+                foreach (var (x, hh, col) in new[] { (20.0, 8.0, 0xFF7AA2), (30.0, 15.0, 0xFFD166), (40.0, 11.0, 0x6EE7C4), (50.0, 18.0, 0x7FD0FF) })
+                {
+                    var b = new Rectangle { Width = 7, Height = hh, Fill = new SolidColorBrush(Color.FromRgb((byte)(col >> 16), (byte)(col >> 8), (byte)col)) };
+                    Canvas.SetLeft(b, x); Canvas.SetTop(b, 70 - hh); c.Children.Add(b);
+                }
+                var area = new Rectangle { Stroke = Brushes.White, StrokeThickness = 1.2, Fill = Brushes.Transparent };
+                Canvas.SetLeft(area, 16); Canvas.SetTop(area, 44); c.Children.Add(area);
+                var isl = Pill(46, 2, 48, 18, Brushes.Black);
+                isl.Stroke = new SolidColorBrush(color);
+                isl.Effect = glow;
+                Eyes(70, 11, Colors.White, 4, 7);
+                var shot = new Rectangle { Width = 48, Height = 28, RadiusX = 3, RadiusY = 3, Fill = new SolidColorBrush(Color.FromArgb(0xEE, 255, 255, 255)), RenderTransformOrigin = new Point(0.5, 0.5) };
+                var shotScale = new ScaleTransform();
+                var shotMove = new TranslateTransform();
+                shot.RenderTransform = new TransformGroup { Children = { shotScale, shotMove } };
+                Canvas.SetLeft(shot, 16); Canvas.SetTop(shot, 44); c.Children.Add(shot);
+                _newsArtFrames.Add(t =>
+                {
+                    double p = t % 3.4;
+                    double g = Sm(0.2, 0.8, p);
+                    area.Width = Math.Max(1, 48 * g);
+                    area.Height = Math.Max(1, 28 * g);
+                    area.Opacity = p < 1.0 ? 1 : 0;
+                    area.Fill = new SolidColorBrush(Color.FromArgb((byte)(p is > 0.85 and < 1.1 ? 200 * (1 - Sm(0.85, 1.1, p)) : 0), 255, 255, 255));
+                    double u = Sm(1.0, 1.6, p);
+                    shot.Opacity = p is > 0.95 and < 1.65 ? 1 - Sm(1.45, 1.62, p) : 0;
+                    shotMove.X = (70 - 40) * u;
+                    shotMove.Y = (11 - 58) * u;
+                    shotScale.ScaleX = shotScale.ScaleY = 1 - 0.85 * u;
+                    isl.StrokeThickness = p is > 1.55 and < 2.4 ? 1.8 * (1 - Sm(1.9, 2.4, p)) + 0.01 : 0.01;
+                });
+                break;
+            }
+            case "pin":
+            {
+                // a picture pinned over a window: its corner pulled out, then back
+                var back = new Rectangle { Width = 92, Height = 58, RadiusX = 6, RadiusY = 6, Fill = new SolidColorBrush(Color.FromArgb(0x22, 255, 255, 255)) };
+                Canvas.SetLeft(back, 6); Canvas.SetTop(back, 18); c.Children.Add(back);
+                for (int i = 0; i < 3; i++) Pill(14, 28 + i * 9, 50 - i * 12, 4, new SolidColorBrush(Color.FromArgb(0x55, 255, 255, 255)));
+                var pic = new Rectangle { RadiusX = 5, RadiusY = 5, Fill = new LinearGradientBrush(Color.FromRgb(0xFF, 0xD1, 0x66), Color.FromRgb(0x7F, 0xD0, 0xFF), 30),
+                    Effect = new DropShadowEffect { ShadowDepth = 3, BlurRadius = 10, Opacity = 0.6 } };
+                Canvas.SetLeft(pic, 58); Canvas.SetTop(pic, 6); c.Children.Add(pic);
+                var corner = new Ellipse { Width = 6, Height = 6, Fill = Brushes.White };
+                c.Children.Add(corner);
+                _newsArtFrames.Add(t =>
+                {
+                    double k = 0.5 - 0.5 * Math.Cos(t % 3.0 / 3.0 * Math.PI * 2);
+                    double w = 52 + 22 * k, hh = w / 1.6;
+                    pic.Width = w;
+                    pic.Height = hh;
+                    Canvas.SetLeft(corner, 58 + w - 3); Canvas.SetTop(corner, 6 + hh - 3);
+                });
+                break;
+            }
+            case "shelf":
+            {
+                // the little box jumps to catch the files, sparks fly, the files spread out
+                static double Sm(double a, double b, double x) { double u = Math.Clamp((x - a) / (b - a), 0, 1); return u * u * (3 - 2 * u); }
+                var zone = new Rectangle { Width = 124, Height = 58, RadiusX = 10, RadiusY = 10, Stroke = new SolidColorBrush(Color.FromArgb(0x55, 255, 255, 255)), StrokeDashArray = new DoubleCollection { 3, 3 } };
+                Canvas.SetLeft(zone, 8); Canvas.SetTop(zone, 14); c.Children.Add(zone);
+                var boxMove = new TranslateTransform();
+                var box = new Path { Data = Geometry.Parse("M0,6 V18 A2,2 0 0 0 2,20 H20 A2,2 0 0 0 22,18 V6 M-2,1 H24 V6 H-2 Z"), Stroke = new SolidColorBrush(Color.FromArgb(0xAA, 255, 255, 255)), StrokeThickness = 1.6, RenderTransform = boxMove };
+                Canvas.SetLeft(box, 59); Canvas.SetTop(box, 30); c.Children.Add(box);
+                Eyes(70, 42, color, 2.5, 5);
+                var sparks = new List<Ellipse>();
+                for (int i = 0; i < 8; i++) { var e = new Ellipse { Width = 3, Height = 3, Fill = new SolidColorBrush(color), Effect = glow }; c.Children.Add(e); sparks.Add(e); }
+                var files = new List<(Rectangle r, TranslateTransform m)>();
+                foreach (var (x, col) in new[] { (22.0, 0x7FD0FF), (62.0, 0xE5484D), (102.0, 0xD9A13A) })
+                {
+                    var m = new TranslateTransform();
+                    var r = new Rectangle { Width = 18, Height = 18, RadiusX = 4, RadiusY = 4, Fill = new SolidColorBrush(Color.FromRgb((byte)(col >> 16), (byte)(col >> 8), (byte)col)), RenderTransform = m, Opacity = 0 };
+                    Canvas.SetLeft(r, x); Canvas.SetTop(r, 34); c.Children.Add(r);
+                    files.Add((r, m));
+                }
+                _newsArtFrames.Add(t =>
+                {
+                    double p = t % 3.6;
+                    boxMove.Y = p < 0.5 ? -8 * Math.Sin(p / 0.5 * Math.PI) : 0;
+                    box.Opacity = 1 - Sm(0.9, 1.1, p) + Sm(3.2, 3.5, p);
+                    double u = Sm(0.35, 0.9, p);
+                    for (int i = 0; i < sparks.Count; i++)
+                    {
+                        double a = i * Math.PI / 4;
+                        Canvas.SetLeft(sparks[i], 69 + Math.Cos(a) * 26 * u); Canvas.SetTop(sparks[i], 40 + Math.Sin(a) * 16 * u);
+                        sparks[i].Opacity = p is > 0.35 and < 0.95 ? 1 - u : 0;
+                    }
+                    for (int i = 0; i < files.Count; i++)
+                    {
+                        double v = Sm(1.0 + i * 0.08, 1.5 + i * 0.08, p);
+                        files[i].r.Opacity = v * (1 - Sm(3.0, 3.3, p));
+                        files[i].m.X = (62 - Canvas.GetLeft(files[i].r)) * (1 - v);
+                    }
+                });
+                break;
+            }
+            case "scroll":
+            {
+                // a list gliding up and down, transparent at the edge that has more
+                var host = new Canvas { Width = 104, Height = 64, ClipToBounds = true,
+                    OpacityMask = new LinearGradientBrush(new GradientStopCollection { new(Colors.Transparent, 0), new(Colors.Black, 0.25), new(Colors.Black, 0.75), new(Colors.Transparent, 1) }, 90) };
+                Canvas.SetLeft(host, 18); Canvas.SetTop(host, 10); c.Children.Add(host);
+                var move = new TranslateTransform();
+                var list = new Canvas { RenderTransform = move };
+                for (int i = 0; i < 9; i++)
+                {
+                    var dot = new Rectangle { Width = 10, Height = 10, RadiusX = 3, RadiusY = 3, Fill = new SolidColorBrush(Color.FromArgb(0x70, 255, 255, 255)) };
+                    Canvas.SetLeft(dot, 4); Canvas.SetTop(dot, i * 16); list.Children.Add(dot);
+                    var line = new Rectangle { Width = 62 - i % 3 * 12, Height = 5, RadiusX = 2.5, RadiusY = 2.5, Fill = new SolidColorBrush(Color.FromArgb(0x99, 255, 255, 255)) };
+                    Canvas.SetLeft(line, 20); Canvas.SetTop(line, i * 16 + 2.5); list.Children.Add(line);
+                }
+                host.Children.Add(list);
+                var thumb = Pill(126, 14, 3, 18, new SolidColorBrush(Color.FromArgb(0xCC, 255, 255, 255)));
+                _newsArtFrames.Add(t =>
+                {
+                    double k = 0.5 - 0.5 * Math.Cos(t % 4.0 / 4.0 * Math.PI * 2);
+                    move.Y = -80 * k;
+                    Canvas.SetTop(thumb, 14 + 38 * k);
+                });
+                break;
+            }
             case "icons":
             {
                 // the menu with its icons alive: ✻ turning, the download arrow breathing, the focus ring ticking

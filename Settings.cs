@@ -96,6 +96,10 @@ public sealed class AppSettings
     public string ClipHotkey { get; set; } = "Win+Alt+V";
     /// <summary>Process names whose copies are never kept (password managers by default).</summary>
     public List<string> ClipIgnoredApps { get; set; } = new() { "1Password", "Bitwarden", "KeePass", "KeePassXC", "LastPass", "Dashlane", "Enpass", "NordPass", "ProtonPass", "RoboForm" };
+    /// <summary>The screen capture's shortcut: "Snapshot" (the Print Screen key alone), a combination like "Ctrl+Shift+S", or "" (none).</summary>
+    public string CaptureHotkey { get; set; } = "Snapshot";
+    /// <summary>Where Salvar puts the captures ("" = Pictures\Notchy).</summary>
+    public string CaptureFolder { get; set; } = "";
     public bool TransferProgress { get; set; } = true;
     public bool BatteryAlerts { get; set; } = true;
     public int BatteryLowPercent { get; set; } = 20;

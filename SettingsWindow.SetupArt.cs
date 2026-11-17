@@ -146,6 +146,7 @@ public sealed partial class SettingsWindow
             "look" => LookArt(island),
             "notif" => NoticeArt(island),
             "clip" => ClipArt(stage, island),
+            "capture" => CaptureArt(stage, island),
             "extras" => DayArt(island),
             "claude" => ClaudeArt(stage, island),
             _ => TourArt(island)
@@ -275,6 +276,131 @@ public sealed partial class SettingsWindow
             chip.Opacity = seen;
             slide.Y = -9 * (1 - seen);
             isl.Happy = Joy;
+            isl.Update(dt);
+        };
+    }
+
+    private static readonly Color ArtIce = Color.FromRgb(0x9A, 0xD7, 0xFF);
+
+    /// <summary>
+    /// Captura de tela: an area is picked on the "desktop" (it grows from a corner, its size beside it), a flash,
+    /// then the picture flies up into the island with a little trail; the island lights up, smiles and opens a
+    /// moment with the picture in it.
+    /// </summary>
+    private Action<double, double> CaptureArt(Grid stage, MiniIsland isl)
+    {
+        // (everything is placed from the strip's middle, where the island sits on top)
+        const double AreaX = -120, AreaTop = 30, AreaW = 84, AreaH = 48, IslandY = 13; // (the strip is ~480 wide: all of it stays inside)
+        FrameworkElement At(FrameworkElement e, double top)
+        {
+            e.HorizontalAlignment = HorizontalAlignment.Center;
+            e.VerticalAlignment = VerticalAlignment.Top;
+            e.Margin = new Thickness(0, top, 0, 0);
+            return e;
+        }
+
+        // a window on the "desktop", with something worth a picture in it
+        var chart = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Bottom, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 0, 0, 7) };
+        foreach (var (h, c) in new[] { (12.0, 0xFF7AA2), (24.0, 0xFFD166), (17.0, 0x6EE7C4), (28.0, 0x7FD0FF) })
+            chart.Children.Add(new Border { Width = 10, Height = h, CornerRadius = new CornerRadius(2, 2, 0, 0), Margin = new Thickness(2, 0, 2, 0), VerticalAlignment = VerticalAlignment.Bottom,
+                Background = new SolidColorBrush(Color.FromRgb((byte)(c >> 16), (byte)(c >> 8), (byte)c)) });
+        var window = At(new Border { Width = 104, Height = 56, CornerRadius = new CornerRadius(6), Background = ArtWhite(0xE6), Child = chart,
+            RenderTransform = new TranslateTransform(AreaX, 0) }, AreaTop - 4);
+        stage.Children.Insert(0, window);
+
+        // the area being picked (from its top-left corner), its size, the flash
+        var areaMove = new TranslateTransform();
+        var flash = new Border { Background = Brushes.White, Opacity = 0 };
+        var area = At(new Border { BorderBrush = Brushes.White, BorderThickness = new Thickness(1.2), Child = flash, Opacity = 0, RenderTransform = areaMove }, AreaTop);
+        var sizeMove = new TranslateTransform();
+        var size = At(new Border { CornerRadius = new CornerRadius(4), Background = new SolidColorBrush(Color.FromArgb(0xCC, 0, 0, 0)), Padding = new Thickness(4, 0, 4, 1), Opacity = 0,
+            RenderTransform = sizeMove, Child = new TextBlock { Text = "640 × 360", FontSize = 8.5, Foreground = Brushes.White } }, AreaTop);
+
+        // the picture on its way up, and a little trail of light behind it
+        var flyMove = new TranslateTransform();
+        var flyScale = new ScaleTransform(1, 1);
+        var picture = At(new Border
+        {
+            Width = AreaW, Height = AreaH, CornerRadius = new CornerRadius(3), Background = ArtWhite(0xE6), Opacity = 0, RenderTransformOrigin = new Point(0.5, 0.5),
+            RenderTransform = new TransformGroup { Children = { flyScale, flyMove } },
+            Child = new Border { Height = 16, Margin = new Thickness(12, 0, 12, 7), VerticalAlignment = VerticalAlignment.Bottom, CornerRadius = new CornerRadius(2),
+                Background = new LinearGradientBrush(Color.FromRgb(0xFF, 0xD1, 0x66), Color.FromRgb(0x7F, 0xD0, 0xFF), 0) }
+        }, 0);
+        var trail = new List<(Ellipse dot, TranslateTransform move)>();
+        for (int i = 0; i < 6; i++)
+        {
+            var move = new TranslateTransform();
+            var dot = (Ellipse)At(new Ellipse { Width = 6 - i * 0.7, Height = 6 - i * 0.7, Fill = Brushes.White, Opacity = 0, RenderTransform = move,
+                Effect = new DropShadowEffect { ShadowDepth = 0, BlurRadius = 6, Color = ArtIce, Opacity = 1 } }, 0);
+            trail.Add((dot, move));
+        }
+        foreach (var (dot, _) in trail) stage.Children.Insert(1, dot);
+        foreach (var e in new UIElement[] { area, size, picture }) stage.Children.Insert(1, e);
+
+        // the picture inside the open island
+        var thumb = new Border
+        {
+            Width = 26, Height = 16, CornerRadius = new CornerRadius(3), Background = ArtWhite(0xE6), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(48, 0, 0, 0), Opacity = 0, RenderTransformOrigin = new Point(0.5, 0.5), RenderTransform = new ScaleTransform(1, 1),
+            Child = new Border { Height = 5, Margin = new Thickness(4, 0, 4, 3), VerticalAlignment = VerticalAlignment.Bottom, CornerRadius = new CornerRadius(1),
+                Background = new LinearGradientBrush(Color.FromRgb(0xFF, 0xD1, 0x66), Color.FromRgb(0x7F, 0xD0, 0xFF), 0) }
+        };
+        isl.Inside.Children.Add(thumb);
+
+        static double Smooth(double a, double b, double x)
+        {
+            double u = Math.Clamp((x - a) / (b - a), 0, 1);
+            return u * u * (3 - 2 * u);
+        }
+        // the trip: from the area's middle up to the island, along a curve that rises first
+        (double x, double y) Trip(double u)
+        {
+            double k = u < 0.5 ? 4 * u * u * u : 1 - Math.Pow(-2 * u + 2, 3) / 2;
+            double x0 = AreaX, y0 = AreaTop + AreaH / 2, cx = AreaX * 0.15, cy = IslandY + 4;
+            return ((1 - k) * (1 - k) * x0 + 2 * (1 - k) * k * cx, (1 - k) * (1 - k) * y0 + 2 * (1 - k) * k * cy + k * k * IslandY);
+        }
+        double seenThumb = 0;
+        return (t, dt) =>
+        {
+            bool on = S.CaptureHotkey.Length > 0;
+            double p = on ? t % 5.0 : 0;
+            // the area grows from its corner, with its size beside it
+            double grow = Smooth(0.3, 0.95, p), w = Math.Max(1, AreaW * grow), h = Math.Max(1, AreaH * grow);
+            area.Width = w;
+            area.Height = h;
+            areaMove.X = AreaX - AreaW / 2 + w / 2;
+            area.Opacity = p is > 0.25 and < 1.2 ? 1 : 0;
+            sizeMove.X = AreaX - AreaW / 2 + w + 24;
+            sizeMove.Y = h + 3;
+            size.Opacity = p is > 0.35 and < 1.0 ? 0.95 : 0;
+            flash.Opacity = p is > 0.98 and < 1.3 ? 0.85 * (1 - Smooth(0.98, 1.3, p)) : 0;
+            // up into the island, shrinking, with the trail behind
+            double u = Smooth(1.1, 1.85, p);
+            var (fx, fy) = Trip(u);
+            flyMove.X = fx;
+            flyMove.Y = fy - AreaH / 2;
+            flyScale.ScaleX = flyScale.ScaleY = 1 - 0.88 * u;
+            picture.Opacity = p is > 1.05 and < 1.9 ? 1 - Smooth(1.7, 1.88, p) : 0;
+            for (int i = 0; i < trail.Count; i++)
+            {
+                var (dot, move) = trail[i];
+                double ui = Smooth(1.1, 1.85, p - (i + 1) * 0.035);
+                var (tx, ty) = Trip(ui);
+                move.X = tx;
+                move.Y = ty - dot.Height / 2;
+                dot.Opacity = (1 - i / 6.0) * 0.9 * Smooth(1.15, 1.25, p - i * 0.035) * (1 - Smooth(1.8, 1.95, p - i * 0.035));
+            }
+            // the island takes it in: it lights up, smiles and opens a moment with the picture
+            bool holding = on && p is > 1.85 and < 3.6;
+            isl.LightColor = ArtIce;
+            isl.Light = on && p is > 1.8 and < 2.7 ? 1 : 0;
+            isl.Happy = holding || Joy;
+            isl.W = holding ? 150 : 98;
+            isl.H = holding ? 30 : 26;
+            isl.EyeX = holding ? -44 : 0;
+            Ease(ref seenThumb, holding && p > 1.98 ? 1 : 0, dt, 0.09);
+            thumb.Opacity = seenThumb;
+            ((ScaleTransform)thumb.RenderTransform).ScaleX = ((ScaleTransform)thumb.RenderTransform).ScaleY = 0.4 + 0.6 * seenThumb;
             isl.Update(dt);
         };
     }

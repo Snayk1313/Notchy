@@ -27,6 +27,7 @@ public sealed partial class SettingsWindow
         ("look", Color.FromRgb(0xA7, 0x8B, 0xFA), "M12,3 A9,9 0 1 0 12,21 C13.6,21 14,19.8 13.4,18.8 C12.7,17.6 13.5,16 15,16 L18,16 A3,3 0 0 0 21,13 C21,7.5 17,3 12,3 Z M8,11 L8.01,11 M12,7.5 L12.01,7.5 M16.3,10 L16.31,10"),
         ("notif", Color.FromRgb(0xFF, 0x7E, 0xB6), "M6,16 L6,11 A6,6 0 1 1 18,11 L18,16 L20,18 L4,18 Z M10,21 L14,21"),
         ("clip", Color.FromRgb(0x8F, 0xB8, 0xFF), "M9,4 L15,4 L15,7 L9,7 Z M9,5.5 L7,5.5 A2,2 0 0 0 5,7.5 L5,19 A2,2 0 0 0 7,21 L17,21 A2,2 0 0 0 19,19 L19,7.5 A2,2 0 0 0 17,5.5 L15,5.5 M9,12 L15,12 M9,16 L13,16"),
+        ("capture", Color.FromRgb(0x9A, 0xD7, 0xFF), "M4,8 L4,6 A2,2 0 0 1 6,4 L8,4 M16,4 L18,4 A2,2 0 0 1 20,6 L20,8 M20,16 L20,18 A2,2 0 0 1 18,20 L16,20 M8,20 L6,20 A2,2 0 0 1 4,18 L4,16 M9,9 L15,9 L15,15 L9,15 Z"),
         ("extras", Color.FromRgb(0x5E, 0xD6, 0x7D), "M7,5 L17,5 A3,3 0 0 1 20,8 L20,18 A3,3 0 0 1 17,21 L7,21 A3,3 0 0 1 4,18 L4,8 A3,3 0 0 1 7,5 Z M4,10 L20,10 M9,3 L9,7 M15,3 L15,7"),
         ("claude", Color.FromRgb(0xE8, 0x82, 0x5F), "M12,3 L12,21 M4.2,7.5 L19.8,16.5 M4.2,16.5 L19.8,7.5"),
         ("tour", Color.FromRgb(0xFF, 0xD3, 0x6B), "M12,3 L14.6,8.8 L21,9.5 L16.2,13.8 L17.5,20 L12,16.8 L6.5,20 L7.8,13.8 L3,9.5 L9.4,8.8 Z"),
@@ -129,6 +130,14 @@ public sealed partial class SettingsWindow
         GoSetup(3);
         await Task.Delay(1050);
         Save("art_clip_glow");
+        // the capture's little story, moment by moment
+        GoSetup(Array.FindIndex(SetupSteps, x => x.Key == "capture"));
+        var capClock = System.Diagnostics.Stopwatch.StartNew();
+        foreach (var at in new[] { 0.6, 0.9, 1.2, 1.4, 1.6, 1.8, 2.2, 2.9 })
+        {
+            await Task.Delay(Math.Max(0, (int)((at - capClock.Elapsed.TotalSeconds) * 1000)));
+            Save($"art_capture_{at:0.0}");
+        }
         GoSetup(4);
         await Task.Delay(900);
         _scroll.ScrollToEnd();
@@ -376,6 +385,7 @@ public sealed partial class SettingsWindow
             case "look": LookRows(built); break;
             case "notif": NoticeRows(built); break;
             case "clip": ClipSetupRows(built); break;
+            case "capture": CaptureSetupRows(built); break;
             case "extras": ExtrasRows(built); break;
             case "claude": ClaudeRows(built); break;
             default: TourRows(built); break;
@@ -383,11 +393,11 @@ public sealed partial class SettingsWindow
 
         var parts = new List<FrameworkElement> { header, SetupArt(key) };
         var cards = WrapRows(built);
-        if (key is "notif" or "clip")
+        if (key is "notif" or "clip" or "capture")
         {
             // the rest only matters while the first switch is on: it folds away with it
             parts.Add(cards[0]);
-            parts.Add(Fold(cards.Skip(1), key == "notif" ? S.NotifyEnabled : S.ClipEnabled));
+            parts.Add(Fold(cards.Skip(1), key switch { "notif" => S.NotifyEnabled, "clip" => S.ClipEnabled, _ => S.CaptureHotkey.Length > 0 }));
         }
         else parts.AddRange(cards);
         foreach (var part in parts)
@@ -641,6 +651,70 @@ public sealed partial class SettingsWindow
         note.Children.Add(caps);
         note.Children.Add(words);
         card.Children.Add(note);
+    }
+
+    /// <summary>
+    /// Captura de tela: one switch (Print Screen opens Notchy's capture), then what it's good for, in four small
+    /// cards (each with its little coloured icon, like the step's own), folding away when the switch is off.
+    /// </summary>
+    private void CaptureSetupRows(StackPanel card)
+    {
+        // the same field as in Configurações: Print Screen already there; Gravar picks another key or combination,
+        // Remover switches the capture off (and what it's good for folds away)
+        ShortcutRow(card, CaptureShortcut(v => AnimateFold(v.Length > 0)), stacked: true);
+
+        var perks = new System.Windows.Controls.Primitives.UniformGrid { Columns = 2, Margin = new Thickness(0, 0, 0, 0) };
+        foreach (var (icon, title, text) in new[]
+                 {
+                     ("M3,4 L3,3 L4,3 M8,3 L10,3 M14,3 L15,3 L15,4 M15,8 L15,10 M15,14 L15,15 L14,15 M10,15 L8,15 M4,15 L3,15 L3,14 M3,10 L3,8", "setup.cap.p1", "setup.cap.p1.d"),
+                     ("M3,15 L4,11 L12,3 L15,6 L7,14 Z", "setup.cap.p2", "setup.cap.p2.d"),
+                     ("M6,6 L13,6 A2,2 0 0 1 15,8 L15,14 A2,2 0 0 1 13,16 L6,16 A2,2 0 0 1 4,14 L4,8 A2,2 0 0 1 6,6 Z M11,6 L11,4 A1,1 0 0 0 10,3 L4,3 A1,1 0 0 0 3,4 L3,10", "setup.cap.p3", "setup.cap.p3.d"),
+                     ("M9,3 L9,11 M5.5,7.5 L9,11 L12.5,7.5 M3,15 L15,15", "setup.cap.p4", "setup.cap.p4.d")
+                 })
+            perks.Children.Add(Perk(icon, Loc.T(title), Loc.T(text)));
+        card.Children.Add(perks);
+
+        // a word on the Windows keys
+        card.Children.Add(new TextBlock { Text = Loc.T("setup.cap.note"), FontSize = 11.5, Foreground = Dim(0x99), TextWrapping = TextWrapping.Wrap, LineHeight = 16, Margin = new Thickness(8, 3, 8, 0) });
+    }
+
+    /// <summary>One thing the capture is good for: a little tile in the step's colour, a title and a line.</summary>
+    private Border Perk(string icon, string title, string text)
+    {
+        var glyph = new Path
+        {
+            Data = Geometry.Parse(icon), Stroke = new SolidColorBrush(Ink), StrokeThickness = 1.7, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round,
+            StrokeLineJoin = PenLineJoin.Round, Width = 18, Height = 18, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
+        };
+        var tile = new Border { Width = 30, Height = 30, CornerRadius = new CornerRadius(9), Background = new SolidColorBrush(_accent), Child = glyph, VerticalAlignment = VerticalAlignment.Top,
+            Effect = new DropShadowEffect { ShadowDepth = 0, BlurRadius = 12, Opacity = 0.35, Color = _accent } };
+        var words = new StackPanel { Margin = new Thickness(11, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+        words.Children.Add(new TextBlock { Text = title, FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, TextWrapping = TextWrapping.Wrap });
+        words.Children.Add(new TextBlock { Text = text, FontSize = 11.5, Foreground = Dim(0x99), TextWrapping = TextWrapping.Wrap, LineHeight = 16, Margin = new Thickness(0, 2, 0, 0) });
+        var row = new DockPanel();
+        DockPanel.SetDock(tile, Dock.Left);
+        row.Children.Add(tile);
+        row.Children.Add(words);
+        var background = new SolidColorBrush(Color.FromArgb(0x09, 255, 255, 255));
+        var edge = new SolidColorBrush(Color.FromArgb(0x0F, 255, 255, 255));
+        var move = new TranslateTransform();
+        var perk = new Border { CornerRadius = new CornerRadius(13), Margin = new Thickness(0, 0, 7, 7), Padding = new Thickness(13, 12, 13, 12), Background = background, BorderBrush = edge,
+            BorderThickness = new Thickness(1), Child = row, RenderTransform = move };
+        var accent = _accent;
+        // (the same lift and tint as the other cards of the assistant)
+        perk.MouseEnter += (_, _) =>
+        {
+            move.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(-2, Ms(220)) { EasingFunction = Spring });
+            Tint(background, Color.FromArgb(0x0F, 255, 255, 255), true, 180);
+            Tint(edge, Color.FromArgb(0x66, accent.R, accent.G, accent.B), true, 180);
+        };
+        perk.MouseLeave += (_, _) =>
+        {
+            move.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(0, Ms(260)) { EasingFunction = Spring });
+            Tint(background, Color.FromArgb(0x09, 255, 255, 255), true, 220);
+            Tint(edge, Color.FromArgb(0x0F, 255, 255, 255), true, 220);
+        };
+        return perk;
     }
 
     /// <summary>The keys of the shortcut that opens Copiados (none when it's switched off).</summary>

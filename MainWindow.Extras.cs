@@ -153,7 +153,7 @@ public partial class MainWindow
         _backdrop.SetBounds(new Int32Rect((int)Math.Round(Left * dpi.DpiScaleX), (int)Math.Round(Top * dpi.DpiScaleY),
             (int)Math.Round(Width * dpi.DpiScaleX), (int)Math.Round(Height * dpi.DpiScaleY)), _hwnd);
         if (++_blurSyncCount % 240 == 0) _backdrop.KeepBelow(_hwnd);
-        bool islandShown = Island.Visibility == Visibility.Visible; // (also true for a notification card over a full-screen game)
+        bool islandShown = Island.Visibility == Visibility.Visible && Opacity > 0.01; // (also true for a notification card over a full-screen game; not while the capture has the island step aside)
         bool show = !_hiddenForFullscreen && islandShown;
 
         (Rect r, double radius) Px(FrameworkElement el, double cornerRadius)
@@ -618,6 +618,7 @@ public partial class MainWindow
         }
         e.Effects = DragDropEffects.Copy;
         _dragLast = DateTime.Now;
+        _shelfDragPos = e.GetPosition(ShelfFace);
         if (_dragOver) return;
 
         _dragOver = true;
@@ -657,19 +658,6 @@ public partial class MainWindow
         _hoverTimer.Interval = TimeSpan.FromMilliseconds(2500);
         _hoverTimer.Start();
         UpdateState();
-    }
-
-    private void ShelfClear_Click(object sender, RoutedEventArgs e)
-    {
-        if (_shelfSel.Mode) // while selecting, this button is "Marcar todos"
-        {
-            SoundService.Play(Sfx.Click);
-            _shelfSel.MarkAll();
-            return;
-        }
-        _shelf.Clear();
-        SaveShelf();
-        RenderShelf();
     }
 
     private void LoadShelf()
@@ -713,6 +701,7 @@ public partial class MainWindow
         ShelfHint.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
         foreach (var path in _shelf) ShelfItems.Children.Add(ShelfItem(path));
         _shelfSel.Sync();
+        if (_shelfSpread) Dispatcher.BeginInvoke(SpreadShelf, System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
     private static readonly string[] ImageExt = { ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff", ".ico" };
@@ -822,7 +811,9 @@ public partial class MainWindow
             RenderTransform = new ScaleTransform(1, 1)
         };
         // a file that just landed pops in (the ones already there stay still when the shelf is drawn again)
-        if (_shelfShown.Add(path))
+        bool fresh = _shelfShown.Add(path);
+        if (fresh && _shelfSpread) card.Opacity = 0; // (SpreadShelf brings it in from the middle)
+        else if (fresh)
         {
             var pop = new DoubleAnimation(0.6, 1, TimeSpan.FromMilliseconds(Dur(320))) { EasingFunction = new BackEase { Amplitude = 0.5, EasingMode = EasingMode.EaseOut } };
             ((ScaleTransform)card.RenderTransform).BeginAnimation(ScaleTransform.ScaleXProperty, pop);

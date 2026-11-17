@@ -54,10 +54,22 @@ public partial class SettingsWindow
 
     // ---------------------------------------------------------------- the shortcut: a field that records it
 
-    private KeyboardHook? _recHook;
+    /// <summary>What a shortcut field records and how it's told to the app.</summary>
+    private sealed record ShortcutSpec(string Label, Func<string> Get, Action<string> Set, Action<string> Apply, Func<bool> Taken, Action Pause,
+        Func<string, string[], string> Describe, string OffText, string NeedModText, bool KeyAlone);
 
-    private void ShortcutRow(StackPanel sec)
+    private void ShortcutRow(StackPanel sec) => ShortcutRow(sec, new ShortcutSpec(Loc.T("s.cl.key"),
+        () => S.ClipHotkey, v => S.ClipHotkey = v, v => Island?.ClipHistory.SetHotkey(v, force: true), () => Island?.ClipHistory.HotkeyTaken == true,
+        () => Island?.ClipHistory.PauseHotkey(),
+        (name, labels) => KeyboardHook.Normalize(name) == "Win+V" ? Loc.T("s.cl.key.winv") : Loc.F("s.cl.key.set", string.Join(" + ", labels)),
+        Loc.T("s.cl.key.off"), Loc.T("s.cl.key.needmod"), false));
+
+    /// <summary>The keys of a saved shortcut ("Snapshot" is the Print Screen key alone).</summary>
+    private static string[] ShortcutLabels(string name) => KeyboardHook.Labels(name);
+
+    private void ShortcutRow(StackPanel sec, ShortcutSpec spec, bool stacked = false)
     {
+        KeyboardHook? recHook = null; // (each field records on its own: two pages' fields must not share one)
         var keys = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         var dot = new System.Windows.Shapes.Ellipse { Width = 7, Height = 7, Fill = new SolidColorBrush(Color.FromRgb(0xFF, 0x6B, 0x6B)), Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed };
         var inner = new StackPanel { Orientation = Orientation.Horizontal };
@@ -94,39 +106,38 @@ public partial class SettingsWindow
             dot.Visibility = Visibility.Collapsed;
             field.BorderBrush = edge;
             field.Background = new SolidColorBrush(Color.FromArgb(0x30, 0, 0, 0));
-            var labels = KeyboardHook.Labels(S.ClipHotkey);
+            var labels = ShortcutLabels(spec.Get());
             Show(labels, false);
             if (record.Content is TextBlock t) t.Text = Loc.T("s.cl.key.rec");
             remove.IsEnabled = labels.Length > 0;
-            bool taken = Island?.ClipHistory.HotkeyTaken == true;
+            bool taken = spec.Taken();
             if (taken) Text(Loc.T("s.cl.key.taken"), bad);
-            else if (labels.Length == 0) Text(Loc.T("s.cl.key.off"));
-            else if (KeyboardHook.Normalize(S.ClipHotkey) == "Win+V") Text(Loc.T("s.cl.key.winv"));
-            else Text(Loc.F("s.cl.key.set", string.Join(" + ", labels)));
+            else if (labels.Length == 0) Text(spec.OffText);
+            else Text(spec.Describe(spec.Get(), labels));
         }
         void Stop()
         {
-            _recHook?.Dispose();
-            _recHook = null;
+            recHook?.Dispose();
+            recHook = null;
         }
         void Finish(string? name)
         {
             Stop();
-            string before = S.ClipHotkey;
+            string before = spec.Get();
             if (name != null)
             {
-                S.ClipHotkey = name;
+                spec.Set(name);
                 AppSettings.Commit();
             }
-            Island?.ClipHistory.SetHotkey(S.ClipHotkey, force: true);
-            if (name != null && Island?.ClipHistory.HotkeyTaken == true)
+            spec.Apply(spec.Get());
+            if (name != null && spec.Taken())
             {
                 // someone else has it: the one before stays
-                S.ClipHotkey = before;
+                spec.Set(before);
                 AppSettings.Commit();
-                Island?.ClipHistory.SetHotkey(before, force: true);
+                spec.Apply(before);
                 Idle();
-                Text(Loc.F("s.cl.key.busy", string.Join(" + ", KeyboardHook.Labels(name))), bad);
+                Text(Loc.F("s.cl.key.busy", string.Join(" + ", ShortcutLabels(name))), bad);
                 field.BorderBrush = new SolidColorBrush(bad);
                 return;
             }
@@ -135,12 +146,12 @@ public partial class SettingsWindow
         }
         void Record()
         {
-            if (_recHook != null)
+            if (recHook != null)
             {
                 Finish(null); // (Cancelar)
                 return;
             }
-            Island?.ClipHistory.PauseHotkey(); // (pressing the old one now must not open the island)
+            spec.Pause(); // (pressing the old one now must not open the island)
             uint held = 0;
             dot.Visibility = Visibility.Visible;
             field.BorderBrush = new SolidColorBrush(accent);
@@ -149,12 +160,12 @@ public partial class SettingsWindow
             Show(Array.Empty<string>(), true);
             Text(Loc.T("s.cl.key.recording"));
             IEnumerable<string> HeldLabels() => KeyboardHook.Labels(KeyboardHook.Format(held, 0x41)).SkipLast(1);
-            _recHook = new KeyboardHook((vk, down) =>
+            recHook = new KeyboardHook((vk, down) =>
             {
                 uint mod = KeyboardHook.ModOf(vk);
                 Dispatcher.BeginInvoke(() =>
                 {
-                    if (_recHook == null) return;
+                    if (recHook == null) return;
                     if (mod != 0)
                     {
                         held = down ? held | mod : held & ~mod;
@@ -167,33 +178,38 @@ public partial class SettingsWindow
                         Finish(null); // Esc
                         return;
                     }
+                    if (held == 0 && spec.KeyAlone && KeyboardHook.IsBareKey(vk))
+                    {
+                        Finish(KeyboardHook.FormatBare(vk));
+                        return;
+                    }
                     if (held == 0)
                     {
-                        Text(Loc.T("s.cl.key.needmod"), bad);
+                        Text(spec.NeedModText, bad);
                         return;
                     }
                     Finish(KeyboardHook.Format(held, vk));
                 });
                 return true; // (nothing reaches Windows or the apps while recording)
             });
-            if (!_recHook.Active) Finish(null);
+            if (!recHook.Active) Finish(null);
         }
 
         record = ActionButton(Loc.T("s.cl.key.rec"), Record, primary: true);
         remove = ActionButton(Loc.T("s.cl.key.remove"), () =>
         {
             Stop();
-            S.ClipHotkey = "";
+            spec.Set("");
             AppSettings.Commit();
-            Island?.ClipHistory.SetHotkey("", force: true);
+            spec.Apply("");
             Idle();
         });
         record.Margin = new Thickness(8, 0, 0, 0);
         controls.Children.Add(record);
         controls.Children.Add(remove);
-        desc = Row(sec, Loc.T("s.cl.key"), " ", controls);
+        desc = Row(sec, spec.Label, " ", controls, below: stacked);
         Idle();
-        Deactivated += (_, _) => { if (_recHook != null) Finish(null); };
+        Deactivated += (_, _) => { if (recHook != null) Finish(null); };
         Closed += (_, _) => Stop();
     }
 }

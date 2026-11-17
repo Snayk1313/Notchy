@@ -909,10 +909,17 @@
                                     </Border.BorderBrush>
                                     <Grid>
                                         <StackPanel x:Name="ShelfEmpty" HorizontalAlignment="Center" VerticalAlignment="Center">
-                                            <Canvas x:Name="ShelfFace" Width="28" Height="26" HorizontalAlignment="Center">
+                                            <Canvas x:Name="ShelfFace" Width="28" Height="26" HorizontalAlignment="Center" RenderTransformOrigin="0.5,1">
                                                 <Canvas.LayoutTransform>
                                                     <ScaleTransform ScaleX="1.25" ScaleY="1.25" />
                                                 </Canvas.LayoutTransform>
+                                                <!-- the box jumps to catch the first files -->
+                                                <Canvas.RenderTransform>
+                                                    <TransformGroup>
+                                                        <ScaleTransform x:Name="ShelfBoxScale" />
+                                                        <TranslateTransform x:Name="ShelfBoxY" />
+                                                    </TransformGroup>
+                                                </Canvas.RenderTransform>
                                                 <!-- a little file that falls into the box (hidden once it's inside) -->
                                                 <Canvas>
                                                     <Canvas.Clip>
@@ -981,6 +988,12 @@
                                         <DropShadowEffect ShadowDepth="0" BlurRadius="12" Opacity="0.9" Color="#6EE7C4" />
                                     </Border.Effect>
                                 </Border>
+                                <!-- sparks of the files popped by Limpar, on their way into the box -->
+                                <Canvas x:Name="ShelfFx" IsHitTestVisible="False" ClipToBounds="True">
+                                    <Canvas.Effect>
+                                        <DropShadowEffect ShadowDepth="0" BlurRadius="5" Opacity="0.9" Color="#6EE7C4" />
+                                    </Canvas.Effect>
+                                </Canvas>
                                 <Grid Grid.Row="1">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition />

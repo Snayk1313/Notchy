@@ -535,8 +535,10 @@ public partial class MainWindow
         var buds = _state == IslandState.Compact ? BudsLight() : null; // Bluetooth earbuds: the battery level
         bool cal = _compactMode == CompactMode.CalNotice; // a calendar notice: all the way round, in the event's colour
         bool noticeNow = _compactMode == CompactMode.Notice; // a notification: a soft line all the way round, in the app's colour
-        bool show = _state == IslandState.Compact && (_compactMode == CompactMode.Focus || timer || cal || noticeNow || buds != null) && !_introActive && !_islandMorphing && !IslandLightsOff;
-        if (show) _lightIsNotice = noticeNow; // (while fading out it keeps the look it had: no flash of another style)
+        bool shot = _compactMode == CompactMode.Shot && AnimNow - _shotLightAt < 1.2; // a capture just arrived: all the way round, ice blue, then off
+        bool show = _state == IslandState.Compact && (_compactMode == CompactMode.Focus || timer || cal || noticeNow || shot || buds != null) && !_introActive && !_islandMorphing && !IslandLightsOff;
+        if (show) _lightIsNotice = noticeNow; // (a capture arriving lights the edge bright, like the focus light)
+        // (while fading out it keeps the look it had: no flash of another style)
         bool notice = _lightIsNotice;
         double k = Ease(Math.Clamp(0.14 / Math.Max(0.3, S.SpeedFactor), 0.05, 0.5));
         _focusLightOpacity += ((show ? 1 : 0) - _focusLightOpacity) * k;
@@ -560,7 +562,7 @@ public partial class MainWindow
         FocusLight.Margin = FocusTrack.Margin = Island.Margin;
         FocusLight.RenderTransform = FocusTrack.RenderTransform = Island.RenderTransform;
 
-        var color = cal ? _calColor : notice ? _noticeAccent : buds?.color ?? (timer ? TimerColor : FocusModeColor);
+        var color = cal ? _calColor : _compactMode == CompactMode.Shot ? ShotIce : notice ? _noticeAccent : buds?.color ?? (timer ? TimerColor : FocusModeColor);
         if (color != _focusLightColor)
         {
             _focusLightColor = color;
@@ -578,7 +580,7 @@ public partial class MainWindow
         FocusLight.StrokeThickness = notice ? NoticeLineThickness : _focusLightThickness;
         FocusLight.Opacity = _focusLightOpacity * pulse * (notice ? NoticeLineOpacity : 1);
         FocusTrack.Opacity = notice ? 0 : _focusLightOpacity * (ringing || budsLow ? 0.15 + 0.45 * pulse : 0.22);
-        double p = Math.Clamp(cal || notice ? 1 : buds?.share ?? (ringing ? 1 : timer ? _clock.Soonest?.LeftShare ?? 0 : _focus.Progress), 0, 1);
+        double p = Math.Clamp(cal || notice || _compactMode == CompactMode.Shot ? 1 : buds?.share ?? (ringing ? 1 : timer ? _clock.Soonest?.LeftShare ?? 0 : _focus.Progress), 0, 1);
         if (_focusDrawn < 0 || Math.Abs(p - _focusDrawn) > 0.0004)
         {
             _focusDrawn = p;

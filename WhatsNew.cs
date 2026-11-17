@@ -10,7 +10,7 @@ namespace Notchy;
 public static class WhatsNew
 {
     /// <summary>The version these notes are for (major.minor).</summary>
-    public const string Version = "2.3";
+    public const string Version = "2.4";
 
     public sealed record Highlight(string Art, Color Color, string TagPt, string TagEn, string TitlePt, string TitleEn, string TextPt, string TextEn)
     {
@@ -27,116 +27,92 @@ public static class WhatsNew
 
     public static readonly Highlight[] Highlights =
     {
-        new("clip", Color.FromRgb(0x8F, 0xB8, 0xFF), "Novo", "New", "Histórico de cópias", "Clipboard history",
-            "Tudo o que você copia fica numa aba da ilha. Win + Alt + V abre de qualquer lugar e Enter cola onde você estava.",
-            "Everything you copy stays in a tab on the island. Win + Alt + V opens it from anywhere and Enter pastes where you were."),
-        new("calendar", Color.FromRgb(0x7C, 0xC8, 0xFF), "Novo", "New", "Agendas conectadas", "Connected calendars",
-            "Os eventos do Google Agenda, Outlook ou iCloud aparecem no calendário da ilha, com a cor de cada agenda.",
-            "Events from Google Calendar, Outlook or iCloud show on the island's calendar, in each calendar's colour."),
-        new("notices", Color.FromRgb(0xFF, 0x7E, 0xB6), "Melhor", "Better", "Notificações por conversa", "Notifications by conversation",
-            "Mensagens da mesma pessoa ficam numa pilha. Limpe um app, uma conversa ou uma por uma.",
-            "Messages from the same person stack up. Clear an app, a conversation or one at a time."),
-        new("level", Color.FromRgb(0xFF, 0xFF, 0xFF), "Melhor", "Better", "Volume em tela cheia", "Volume in full screen",
-            "Em jogos e vídeos, a barra de volume e brilho desce sozinha do topo, sem mostrar a ilha.",
-            "In games and videos, the volume and brightness bar drops down on its own, without showing the island."),
+        new("capture", Color.FromRgb(0x9A, 0xD7, 0xFF), "Novo", "New", "Captura de tela", "Screen capture",
+            "Print Screen abre a captura do Notchy: escolha a área, desenhe por cima e o print sobe até a ilha.",
+            "Print Screen opens Notchy's capture: pick the area, draw on it and the picture flies up to the island."),
+        new("pin", Color.FromRgb(0x9A, 0xD7, 0xFF), "Novo", "New", "Print fixado na tela", "Pinned capture",
+            "Deixe um print por cima das janelas. Redimensione pelos cantos e dê zoom com a rodinha.",
+            "Keep a capture over your windows. Resize it by the corners and zoom with the wheel."),
+        new("shelf", Color.FromRgb(0x6E, 0xE7, 0xC4), "Melhor", "Better", "Prateleira animada", "Livelier shelf",
+            "A caixinha pega os primeiros arquivos no ar, e o Limpar estoura tudo em faíscas que ela recolhe.",
+            "The little box catches the first files mid-air, and Clear pops them into sparks it gathers back."),
+        new("scroll", Color.FromRgb(0xFF, 0xFF, 0xFF), "Melhor", "Better", "Listas mais suaves", "Smoother lists",
+            "Todas as listas deslizam com a rodinha e esmaecem na borda que ainda tem mais para ver.",
+            "Every list glides with the wheel and fades at the edge that has more to see."),
     };
 
     public static readonly Section[] Sections =
     {
-        new("Histórico de cópias (novo)", "Clipboard history (new)",
+        new("Captura de tela (nova)", "Screen capture (new)",
             new[]
             {
-                "Uma aba nova com textos, links, cores, imagens e arquivos que você copiou. Busque, filtre por tipo, fixe no topo e copie de novo com um clique.",
-                "Win + Alt + V abre o histórico de qualquer lugar: escolha com as setas e aperte Enter para colar no app que você estava usando.",
-                "O texto das imagens copiadas é lido, então dá para achar um print pela busca.",
-                "Nada é guardado de gerenciadores de senha, janelas anônimas e do que o Windows marca para não guardar. Dá para pausar e escolher apps ignorados.",
-                "Com a ilha fechada, o contorno brilha um instante quando você copia algo."
+                "O Print Screen abre a captura do Notchy no lugar da do Windows. A tela congela, e a ilha sai no print como em qualquer app.",
+                "Arraste uma área ou clique numa janela, que acende quando o mouse passa por ela. A lupa ajuda a acertar o pixel e as medidas ficam ao lado do cursor.",
+                "A ilha se solta e desce até a área virando a barra de ferramentas, com o mesmo vidro da sua ilha e os olhinhos espiando.",
+                "Caneta, seta, retângulo, marca-texto, texto e pixelar para esconder dados, com cores, espessura e Ctrl + Z.",
+                "Copie (Enter ou Ctrl + C), salve escolhendo a pasta (ela lembra a última), fixe na tela ou copie o texto da imagem.",
+                "O print sobe até a ilha com um rastro de luz e ela se abre mostrando a miniatura, com só o que falta: salvar, copiar ou editar de novo.",
+                "Print fixado: fica por cima das janelas, redimensiona pelos cantos, a rodinha dá zoom, Espaço + arrastar move a imagem e um clique na porcentagem volta para 100%.",
+                "Escolha o atalho em Configurações → Arquivos: Print Screen, uma combinação ou uma tecla sozinha como Pause ou F1 a F24."
             },
             new[]
             {
-                "A new tab with the texts, links, colours, images and files you copied. Search, filter by kind, pin to the top and copy again with a click.",
-                "Win + Alt + V opens the history from anywhere: choose with the arrows and press Enter to paste into the app you were using.",
-                "The text in copied images is read, so you can find a screenshot by searching.",
-                "Nothing is kept from password managers, private windows or what Windows marks as not to keep. You can pause it and choose apps to ignore.",
-                "With the island closed, its outline glows for a moment when you copy something."
+                "Print Screen opens Notchy's capture instead of the Windows one. The screen freezes, and the island shows in the picture like in any capture app.",
+                "Drag an area or click a window, which lights up under the mouse. The magnifier helps you hit the pixel and the size follows the cursor.",
+                "The island lets go and comes down to the area as the toolbar, with your island's own glass and its eyes peeking out.",
+                "Pen, arrow, rectangle, highlighter, text and pixelate to hide data, with colours, size and Ctrl + Z.",
+                "Copy (Enter or Ctrl + C), save choosing the folder (it remembers the last one), pin it on screen or copy the text in it.",
+                "The picture flies up to the island with a trail of light and it opens showing the thumbnail, with only what's left: save, copy or edit again.",
+                "Pinned capture: stays over your windows, resizes by the corners, the wheel zooms, Space + drag moves the picture and a click on the percentage goes back to 100%.",
+                "Pick the shortcut in Settings → Files: Print Screen, a combination or a key alone like Pause or F1 to F24."
             }),
-        new("Calendário", "Calendar",
+        new("Prateleira", "Shelf",
             new[]
             {
-                "Conecte o Google Agenda, Outlook ou iCloud em Configurações → Calendário e clima, com um passo a passo para cada um.",
-                "Os eventos de fora aparecem com a cor e o nome da agenda, e os avisos podem ser ligados ou desligados por agenda.",
-                "Mude o dia de um evento pelo mini calendário do editor ou arrastando o evento para outro dia."
+                "Arrastando arquivos, os olhos da caixinha se arregalam e seguem. Ao soltar os primeiros, ela pula para pegá-los, solta faíscas e os arquivos se espalham do centro.",
+                "O Limpar estoura os arquivos em faíscas, e a caixinha aparece para recolhê-las.",
+                "Com muitos arquivos, a prateleira ganhou barra de rolagem e a rodinha anda um arquivo por vez."
             },
             new[]
             {
-                "Connect Google Calendar, Outlook or iCloud in Settings → Calendar and weather, with step-by-step help for each.",
-                "Their events show in the calendar's colour and with its name, and reminders can be turned on or off per calendar.",
-                "Change an event's day with the editor's mini calendar or by dragging the event to another day."
+                "Dragging files, the little box's eyes go wide and follow them. Dropping the first ones, it jumps to catch them, throws sparks and the files spread out from the middle.",
+                "Clear pops the files into sparks, and the little box comes to gather them.",
+                "With many files, the shelf got a scroll bar and the wheel walks one file at a time."
             }),
-        new("Notificações", "Notifications",
+        new("Listas e rolagem", "Lists and scrolling",
             new[]
             {
-                "Mensagens da mesma conversa ficam numa pilha com o número delas, e os apps aparecem com o próprio ícone.",
-                "Limpe um app inteiro, uma conversa ou uma notificação arrastando para o lado, sempre com Desfazer.",
-                "A lista ganhou barra de rolagem quando fica comprida."
+                "Todas as listas da ilha e das Configurações deslizam suavemente com a rodinha, como a fileira dos alarmes.",
+                "Os itens ficam transparentes na borda que ainda tem mais para rolar."
             },
             new[]
             {
-                "Messages from the same conversation stack up with their count, and apps show their own icon.",
-                "Clear a whole app, a conversation or one notification by swiping it away, always with Undo.",
-                "The list got a scroll bar when it gets long."
+                "Every list on the island and in Settings glides smoothly with the wheel, like the alarms' row.",
+                "Items fade at the edge that still has more to scroll."
             }),
-        new("Volume e tela cheia", "Volume and full screen",
+        new("Primeira abertura", "First run",
             new[]
             {
-                "A barra de volume e brilho desce sozinha do topo e sobe de volta, sem mostrar a ilha.",
-                "Com a ilha aberta, segure Shift e gire a roda do mouse para mudar o volume.",
-                "Nova opção em Geral para mostrar alarmes e timers tocando mesmo em tela cheia."
+                "O assistente ganhou a etapa Captura de tela, com o atalho para escolher na hora.",
+                "A dica do volume no tour agora explica o Shift com a ilha aberta."
             },
             new[]
             {
-                "The volume and brightness bar drops down from the top and goes back up, without showing the island.",
-                "With the island open, hold Shift and turn the mouse wheel to change the volume.",
-                "A new option in General to show ringing alarms and timers even in full screen."
-            }),
-        new("Animações", "Animations",
-            new[]
-            {
-                "Ao fechar a ilha com uma página aberta, ela esmaece como as abas. Volte em até 3 segundos e ela está no mesmo lugar.",
-                "Uma página aberta de dentro de outra desliza, itens novos entram suavemente nas listas e as opções das Configurações abrem e recolhem sem pular.",
-                "A troca de música, o play e pause, os olhos virando sorriso, a troca de abas, os menus e o sininho agora se movem em vez de trocar de uma vez."
-            },
-            new[]
-            {
-                "Closing the island with a page open, it fades like the tabs. Come back within 3 seconds and it's still there.",
-                "A page opened from another slides in, new items glide into lists and options in Settings open and close without jumping.",
-                "Changing songs, play and pause, the eyes turning into a smile, switching tabs, the menus and the bell now move instead of switching at once."
-            }),
-        new("Configurações e primeira abertura", "Settings and first run",
-            new[]
-            {
-                "Páginas novas Copiados e Relógio, sons do Notchy numa seção só, Spotify mais limpo depois de conectar e a barra lateral em grupos.",
-                "O assistente da primeira abertura ganhou os olhinhos, um quadro animado em cada passo, os passos de Copiados e agendas e um tour mostrado na própria ilha."
-            },
-            new[]
-            {
-                "New Clipboard and Clock pages, Notchy's sounds in one section, a cleaner Spotify once connected and the sidebar in groups.",
-                "The first-run assistant got the little eyes, an animated picture on each step, the Clipboard and calendars steps and a tour shown on the island itself."
+                "The assistant got a Screen capture step, with the shortcut to pick right there.",
+                "The volume tip in the tour now explains Shift on the open island."
             }),
         new("Correções", "Fixes",
             new[]
             {
-                "O contorno do Claude não fica mais na tela quando a barra de volume some em tela cheia.",
-                "A ilha não aparece mais por alguns segundos ao entrar em tela cheia, nem ao parar um alarme em tela cheia.",
-                "Os olhos não ficam mais por cima do nome da música.",
-                "Os botões das Configurações não ficam mais por baixo do conteúdo ao rolar."
+                "A ilha não some mais quando uma janela do próprio Notchy ocupa a tela toda, como as Configurações maximizadas.",
+                "O brilho de \u201ccopiado\u201d acompanha a ilha se ela muda de tamanho enquanto ele está aceso.",
+                "A borda dos arquivos marcados na prateleira não fica mais cortada."
             },
             new[]
             {
-                "Claude's outline no longer stays on screen when the volume bar goes away in full screen.",
-                "The island no longer shows for a few seconds when entering full screen, nor when stopping an alarm in full screen.",
-                "The eyes no longer sit over the song's name.",
-                "Settings' buttons no longer end up under the content when scrolling."
+                "The island no longer disappears when one of Notchy's own windows fills the screen, like a maximised Settings.",
+                "The \u201ccopied\u201d glow follows the island if it changes size while it's on.",
+                "The frame of marked files on the shelf is no longer cut."
             }),
     };
 }
