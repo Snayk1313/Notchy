@@ -148,7 +148,7 @@ public partial class MainWindow
         var t = new TextBlock { Text = text, FontSize = 10.5, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(Color.FromArgb(0xAA, 255, 255, 255)) };
         var chip = new Border
         {
-            Child = t, CornerRadius = new CornerRadius(7), Padding = new Thickness(8, 2, 8, 2), Margin = new Thickness(0, 0, 4, 0),
+            Child = t, CornerRadius = new CornerRadius(7), Padding = new Thickness(7, 0.7, 7, 0.7), Margin = new Thickness(0, 0, 4, 0),
             Background = new SolidColorBrush(Color.FromArgb(0x10, 255, 255, 255)), Cursor = Cursors.Hand,
             BorderThickness = new Thickness(1.3), BorderBrush = Brushes.Transparent
         };

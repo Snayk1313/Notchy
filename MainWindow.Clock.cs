@@ -163,8 +163,8 @@ public partial class MainWindow
         Grid.SetColumn(mid, 1);
         var nameGrid = new Grid { Width = 142 };
         _clockName = new TextBox { Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = Brushes.White, CaretBrush = Brushes.White,
-            FontSize = 12, Padding = new Thickness(0, 3, 0, 3), FocusVisualStyle = null, MaxLength = 40, SelectionBrush = Br(TimerColor) };
-        _clockNameHint = new TextBlock { FontSize = 12, Foreground = White(0x66), Margin = new Thickness(2, 3, 0, 0), IsHitTestVisible = false };
+            FontSize = 12, Padding = new Thickness(0, 1.7, 0, 1.7), FocusVisualStyle = null, MaxLength = 40, SelectionBrush = Br(TimerColor) };
+        _clockNameHint = new TextBlock { FontSize = 12, Foreground = White(0x66), Margin = new Thickness(2, 1.7, 0, 0), IsHitTestVisible = false };
         nameGrid.Children.Add(_clockName);
         nameGrid.Children.Add(_clockNameHint);
         MakeTypable(_clockName, () =>
@@ -302,8 +302,8 @@ public partial class MainWindow
         Grid.SetColumn(right, 1);
         var nameGrid = new Grid { Width = 132 };
         _edName = new TextBox { Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = Brushes.White, CaretBrush = Brushes.White,
-            FontSize = 12, Padding = new Thickness(0, 2, 0, 2), FocusVisualStyle = null, MaxLength = 30, SelectionBrush = Br(TimerColor) };
-        _edNameHint = new TextBlock { FontSize = 12, Foreground = White(0x66), Margin = new Thickness(2, 2, 0, 0), IsHitTestVisible = false };
+            FontSize = 12, Padding = new Thickness(0, 1, 0, 1), FocusVisualStyle = null, MaxLength = 30, SelectionBrush = Br(TimerColor) };
+        _edNameHint = new TextBlock { FontSize = 12, Foreground = White(0x66), Margin = new Thickness(2, 1, 0, 0), IsHitTestVisible = false };
         nameGrid.Children.Add(_edName);
         nameGrid.Children.Add(_edNameHint);
         MakeTypable(_edName, null);

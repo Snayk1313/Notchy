@@ -1241,7 +1241,7 @@ public partial class MainWindow
     /// </summary>
     private static Border NameBox(UIElement content, TextBox box, Color accent)
     {
-        var b = new Border { Child = content, Background = White(0x0E), CornerRadius = new CornerRadius(8), Padding = new Thickness(8, 1, 8, 1),
+        var b = new Border { Child = content, Background = White(0x0E), CornerRadius = new CornerRadius(8), Padding = new Thickness(8, 0, 8, 0),
             BorderThickness = new Thickness(1.3), BorderBrush = Brushes.Transparent, HorizontalAlignment = HorizontalAlignment.Left };
         box.GotKeyboardFocus += (_, _) => b.BorderBrush = Br(accent);
         box.LostKeyboardFocus += (_, _) => b.BorderBrush = Brushes.Transparent;
