@@ -2409,6 +2409,26 @@ public partial class MainWindow : Window
             Application.Current.Shutdown();
             return;
         }
+        // only copying back from Copiados (quick): the item the user saw fail, a few times
+        if (Environment.GetEnvironmentVariable("NOTCHY_COPYBACKTEST") == "1")
+        {
+            var log = System.IO.Path.Combine(folder, "copiar.txt");
+            await Task.Delay(2000);
+            var item = _clip.Items.FirstOrDefault(i => i.Text.Contains("Never Met")) ?? _clip.Items.FirstOrDefault(i => i.Kind == ClipKind.Text);
+            System.IO.File.AppendAllText(log, $"item: {(item == null ? "nenhum" : $"{item.Kind} '{item.Text}' de {item.App}")}{Environment.NewLine}");
+            if (item != null)
+                for (int i = 0; i < 4; i++)
+                {
+                    var clock = System.Diagnostics.Stopwatch.StartNew();
+                    bool ok = await _clip.CopyBack(item);
+                    string now = "";
+                    try { now = Clipboard.GetText(); } catch (Exception ex) { now = "erro ao ler: " + ex.GetType().Name; }
+                    System.IO.File.AppendAllText(log, $"vez {i + 1}: {(ok ? "copiou" : "FALHOU")} em {clock.ElapsedMilliseconds} ms · área de transferência: '{now}'{Environment.NewLine}");
+                    await Task.Delay(400);
+                }
+            Application.Current.Shutdown();
+            return;
+        }
         // only the lyrics (quick): straight to LRCLIB for a few songs, how long and whether it found them
         if (Environment.GetEnvironmentVariable("NOTCHY_LYRICSTEST") == "1")
         {

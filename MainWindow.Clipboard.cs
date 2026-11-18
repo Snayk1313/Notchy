@@ -356,7 +356,7 @@ public partial class MainWindow
                 FaceReact(Mood.Happy, 0.6);
                 FlashClipCopied(); // (the list is drawn again with it on top)
             }
-            else sub.Text = Loc.T("clip.gone");
+            else sub.Text = Loc.T(_clip.LastFailGone ? "clip.gone" : "clip.busy");
         };
         SwipeToClear(row, () => new[] { row }, () => ClearClip(new List<ClipItem> { x }, Loc.T("clip.deleted"), slide: false));
         return row;
@@ -640,7 +640,7 @@ public partial class MainWindow
         finally { _clipPasting = false; }
         if (!copied)
         {
-            if (_clipRows.FirstOrDefault(r => r.item == item).row?.Child is Grid { Children: [_, StackPanel { Children: [_, TextBlock sub] }, ..] }) sub.Text = Loc.T("clip.gone");
+            if (_clipRows.FirstOrDefault(r => r.item == item).row?.Child is Grid { Children: [_, StackPanel { Children: [_, TextBlock sub] }, ..] }) sub.Text = Loc.T(_clip.LastFailGone ? "clip.gone" : "clip.busy");
             return;
         }
         if (!_clipKeys || _clipTarget != target) return; // (closed meanwhile: Esc or the shortcut again)

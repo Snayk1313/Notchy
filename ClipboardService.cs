@@ -364,10 +364,32 @@ public sealed class ClipboardService
     // ---------------------------------------------------------------- actions
 
     /// <summary>Puts the item back on the clipboard (and on top of the list).</summary>
+    /// <summary>Why the last <see cref="CopyBack"/> failed: true = its picture or files are gone; false = the clipboard was busy.</summary>
+    public bool LastFailGone { get; private set; }
+
     public async Task<bool> CopyBack(ClipItem item)
     {
         var took = System.Diagnostics.Stopwatch.StartNew();
-        string holder = "";
+        string holder = "", lastError = "";
+        LastFailGone = false;
+        // text, links and colours: straight to the clipboard, opened, written and closed in one go. (WPF checked that it
+        // was free, let go, and opened it again itself: another app slipped in between and the copy failed for seconds)
+        if (item.Kind is not (ClipKind.Image or ClipKind.Files))
+        {
+            while (took.ElapsedMilliseconds < 3000)
+            {
+                _ignoreUntil = DateTime.UtcNow.AddSeconds(1); // (not taken again as a new copy)
+                if (SetText(item.Text))
+                {
+                    Moved(item);
+                    return true;
+                }
+                holder = ProcessOf(GetOpenClipboardWindow());
+                await Task.Delay(15);
+            }
+            App.Log(new TimeoutException($"Copiados: não deu para devolver em {took.ElapsedMilliseconds} ms (área de transferência com {holder})"));
+            return false;
+        }
         for (int i = 0; i < 5; i++)
         {
             // another app has the clipboard open: wait here, not inside WPF (its retries sleep the island's thread,
@@ -388,29 +410,31 @@ public sealed class ClipboardService
                 switch (item.Kind)
                 {
                     case ClipKind.Image:
-                        if (LoadImage(item.ImagePath) is not BitmapSource img) return false;
+                        if (LoadImage(item.ImagePath) is not BitmapSource img)
+                        {
+                            LastFailGone = true;
+                            return false;
+                        }
                         Clipboard.SetImage(img);
                         break;
-                    case ClipKind.Files:
+                    default:
                         var list = new StringCollection();
                         list.AddRange(item.Files.Where(f => File.Exists(f) || Directory.Exists(f)).ToArray());
-                        if (list.Count == 0) return false;
+                        if (list.Count == 0)
+                        {
+                            LastFailGone = true;
+                            return false;
+                        }
                         Clipboard.SetFileDropList(list);
                         break;
-                    default:
-                        Clipboard.SetDataObject(new DataObject(DataFormats.UnicodeText, item.Text), true);
-                        break;
                 }
-                Items.Remove(item);
-                item.Time = DateTime.Now;
-                Items.Insert(0, item);
-                Save();
-                Changed?.Invoke();
+                Moved(item);
                 if (took.ElapsedMilliseconds > 300) App.Log(new TimeoutException($"Copiados: devolver levou {took.ElapsedMilliseconds} ms (área de transferência com {holder})"));
                 return true;
             }
-            catch (COMException)
+            catch (COMException ex)
             {
+                lastError = $"{ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}";
                 await Task.Delay(40);
             }
             catch (Exception ex)
@@ -419,9 +443,50 @@ public sealed class ClipboardService
                 return false;
             }
         }
-        App.Log(new TimeoutException($"Copiados: não deu para devolver em {took.ElapsedMilliseconds} ms (área de transferência com {holder})"));
+        App.Log(new TimeoutException($"Copiados: não deu para devolver em {took.ElapsedMilliseconds} ms (área de transferência com {holder}; {lastError})"));
         return false;
     }
+
+    /// <summary>Copied again: to the top of the list.</summary>
+    private void Moved(ClipItem item)
+    {
+        Items.Remove(item);
+        item.Time = DateTime.Now;
+        Items.Insert(0, item);
+        Save();
+        Changed?.Invoke();
+    }
+
+    /// <summary>The text on the clipboard as plain Unicode text; false if another app has it open right now.</summary>
+    private bool SetText(string text)
+    {
+        if (_listener == null || !OpenClipboard(_listener.Handle)) return false; // (an owner window: SetClipboardData needs one)
+        try
+        {
+            if (!EmptyClipboard()) return false;
+            int bytes = (text.Length + 1) * 2;
+            IntPtr mem = GlobalAlloc(0x0002 /* GMEM_MOVEABLE */, (UIntPtr)bytes);
+            if (mem == IntPtr.Zero) return false;
+            IntPtr at = GlobalLock(mem);
+            Marshal.Copy(text.ToCharArray(), 0, at, text.Length);
+            Marshal.WriteInt16(at, text.Length * 2, 0);
+            GlobalUnlock(mem);
+            if (SetClipboardData(13 /* CF_UNICODETEXT */, mem) != IntPtr.Zero) return true; // (the clipboard owns the memory now)
+            GlobalFree(mem);
+            return false;
+        }
+        finally
+        {
+            CloseClipboard();
+        }
+    }
+
+    [DllImport("user32.dll")] private static extern bool EmptyClipboard();
+    [DllImport("user32.dll")] private static extern IntPtr SetClipboardData(uint format, IntPtr mem);
+    [DllImport("kernel32.dll")] private static extern IntPtr GlobalAlloc(uint flags, UIntPtr bytes);
+    [DllImport("kernel32.dll")] private static extern IntPtr GlobalLock(IntPtr mem);
+    [DllImport("kernel32.dll")] private static extern bool GlobalUnlock(IntPtr mem);
+    [DllImport("kernel32.dll")] private static extern IntPtr GlobalFree(IntPtr mem);
 
     private static string ProcessOf(IntPtr hwnd)
     {
