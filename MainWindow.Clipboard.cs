@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -21,6 +21,7 @@ public partial class MainWindow
 {
     private static readonly Color ClipColor = Color.FromRgb(0x8F, 0xB8, 0xFF);
     private const double ClipTabHeight = 240, ClipListHeight = 180;
+    private FrameworkElement? _clipScroller;
 
     private readonly ClipboardService _clip = new();
     private string _clipQuery = "";
@@ -96,7 +97,7 @@ public partial class MainWindow
         grid.Children.Add(_clipChips);
 
         _clipList = new StackPanel();
-        var scroller = Scroller(_clipList, height: ClipListHeight);
+        var scroller = _clipScroller = Scroller(_clipList, height: ClipListHeight);
         Grid.SetRow(scroller, 2);
         grid.Children.Add(scroller);
 
@@ -460,7 +461,7 @@ public partial class MainWindow
     {
         if (_state is not (IslandState.Idle or IslandState.Compact) || IslandLightsOff || _hiddenForFullscreen || _introActive) return;
         // a capture copied it: its own light comes with the picture into the island
-        if (_capturing || DateTime.UtcNow < _quietClipUntil || _transient == CompactMode.Shot) return;
+        if (_capturing || DateTime.UtcNow < _quietClipUntil || ShotShown != null) return;
         var color = item.Kind == ClipKind.Color ? ClipColorOf(item.Text) : ClipColor;
         GlowOutline(color);
         BlinkOnce();
@@ -481,11 +482,11 @@ public partial class MainWindow
             var parent = (Panel)TransferLight.Parent;
             parent.Children.Insert(parent.Children.IndexOf(TransferLight) + 1, _clipLight);
         }
-        _clipOutline.Build(W, H, _topHidden);
+        _clipOutline.Build(W, H, _topHidden, OutlineTurn);
         _clipLight.Width = W;
         _clipLight.Height = H + _topHidden;
         _clipLight.Data = _clipOutline.Segment(0, _clipOutline.Length);
-        _clipLight.Margin = Island.Margin;
+        HangLikeIsland(_clipLight); // (wherever the island is: the top, or a side)
         _clipLight.RenderTransform = Island.RenderTransform;
         _clipLight.Stroke = new SolidColorBrush(color);
         ((DropShadowEffect)_clipLight.Effect).Color = color;
@@ -503,11 +504,11 @@ public partial class MainWindow
     {
         if (_clipLight == null || _clipLight.Opacity < 0.01) return;
         double W = Island.ActualWidth, H = Island.ActualHeight - _topHidden;
-        if (W < 2 || H < 2 || !_clipOutline.Build(W, H, _topHidden)) return;
+        if (W < 2 || H < 2 || !_clipOutline.Build(W, H, _topHidden, OutlineTurn)) return;
         _clipLight.Width = W;
         _clipLight.Height = H + _topHidden;
         _clipLight.Data = _clipOutline.Segment(0, _clipOutline.Length);
-        _clipLight.Margin = Island.Margin;
+        HangLikeIsland(_clipLight); // (wherever the island is: the top, or a side)
     }
 
     private void BlinkOnce()

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
@@ -82,7 +82,12 @@ public sealed class GeminiRunner : IChatRunner
 
     // stable models first (the newest one, behind the "latest" name, often hangs); that name is for when these retire
     private static readonly string[] Models = { "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-flash-latest" };
-    private const int MaxHistoryMessages = 12, PushEveryMs = 50, AnswerTimeoutSeconds = 120, CheckTimeoutSeconds = 12, FirstWordsTimeoutSeconds = 15;
+    /// <summary>The light model: a spelling fix or a translation in under a second, as right as the bigger one.</summary>
+    private const string QuickModel = "gemini-3.5-flash-lite";
+
+    /// <summary>A quick job (spelling, translation): the light model goes first.</summary>
+    public bool Quick { get; set; }
+    private const int MaxHistoryMessages = 12, PushEveryMs = 50, AnswerTimeoutSeconds = 120, CheckTimeoutSeconds = 12, FirstWordsTimeoutSeconds = 8, SlowModelMinutes = 30;
 
     private static string BaseUrl =>
 #if DEBUG
@@ -91,6 +96,8 @@ public sealed class GeminiRunner : IChatRunner
         "https://generativelanguage.googleapis.com";
 
     private static readonly HttpClient Http = FastHttp.Client(Timeout.InfiniteTimeSpan);
+    /// <summary>Models that gave no first words in time, and until when they wait at the end of the line.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> SlowUntil = new();
 
     private readonly Dispatcher _ui;
     private readonly List<JsonObject> _history = new();
@@ -129,33 +136,56 @@ public sealed class GeminiRunner : IChatRunner
     }
 
 #if DEBUG
-    /// <summary>Test: what Google answers to a tiny question, model by model (never writes the key).</summary>
+    /// <summary>
+    /// Test: how long a spelling fix takes, model by model, with and without thinking first: the first words and
+    /// the whole answer (never writes the key).
+    /// </summary>
     public static async Task DiagnoseAsync(string file)
     {
         var log = new StringBuilder();
         string? key = GeminiKey.Load();
         log.AppendLine($"chave salva: {!string.IsNullOrEmpty(key)}");
-        const string body = "{\"systemInstruction\":{\"parts\":[{\"text\":\"Responda curto.\"}]},\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"Diga oi.\"}]}]}";
-        for (int round = 1; round <= 3; round++)
-            foreach (string model in new[] { "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-flash-latest" })
-            {
-                var clock = System.Diagnostics.Stopwatch.StartNew();
-                try
+        const string system = "Fix the spelling and grammar of the user's text. Answer with only the corrected text, in the same language.";
+        const string text = "But I can send you the cuts I've alredy made, did you finis the other video yet? I think we shuold talk tomorow.";
+        string Body(string? thinking) =>
+            "{\"systemInstruction\":{\"parts\":[{\"text\":\"" + system + "\"}]},\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"" + text.Replace("'", "\\u0027") + "\"}]}]" +
+            (thinking == null ? "" : ",\"generationConfig\":{\"thinkingConfig\":" + thinking + "}") + "}";
+        var variants = new (string name, string? cfg)[] { ("padrao", null), ("level-minimal", "{\"thinkingLevel\":\"minimal\"}"), ("level-low", "{\"thinkingLevel\":\"low\"}"), ("budget-0", "{\"thinkingBudget\":0}") };
+        for (int round = 1; round <= 2; round++)
+            foreach (string model in Models)
+                foreach (var (name, cfg) in variants)
                 {
-                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                    using var request = Request(HttpMethod.Post, $"/v1beta/models/{model}:streamGenerateContent?alt=sse", key ?? "");
-                    request.Content = new StringContent(body, Encoding.UTF8, "application/json");
-                    using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
-                    long headers = clock.ElapsedMilliseconds;
-                    string text = await response.Content.ReadAsStringAsync(cts.Token);
-                    log.AppendLine($"rodada {round} {model}: {(int)response.StatusCode} cabecalho={headers}ms total={clock.ElapsedMilliseconds}ms");
-                    if (!response.IsSuccessStatusCode) log.AppendLine(text.Length > 300 ? text[..300] : text);
+                    var clock = System.Diagnostics.Stopwatch.StartNew();
+                    try
+                    {
+                        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                        using var request = Request(HttpMethod.Post, $"/v1beta/models/{model}:streamGenerateContent?alt=sse", key ?? "");
+                        request.Content = new StringContent(Body(cfg), Encoding.UTF8, "application/json");
+                        using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+                        long headers = clock.ElapsedMilliseconds, first = -1;
+                        var answer = new StringBuilder();
+                        if (!response.IsSuccessStatusCode)
+                        {
+                            string err = await response.Content.ReadAsStringAsync(cts.Token);
+                            log.AppendLine($"r{round} {model} {name}: {(int)response.StatusCode} {(err.Length > 160 ? err[..160] : err).Replace("\n", " ")}");
+                            continue;
+                        }
+                        using var reader = new StreamReader(await response.Content.ReadAsStreamAsync(cts.Token), Encoding.UTF8);
+                        string? line;
+                        while ((line = await reader.ReadLineAsync(cts.Token)) != null)
+                        {
+                            if (!line.StartsWith("data:", StringComparison.Ordinal)) continue;
+                            int before = answer.Length;
+                            AppendText(line[5..], answer);
+                            if (first < 0 && answer.Length > before) first = clock.ElapsedMilliseconds;
+                        }
+                        log.AppendLine($"r{round} {model} {name}: cabecalho={headers}ms primeiras-palavras={first}ms total={clock.ElapsedMilliseconds}ms · {answer.ToString().Trim()}");
+                    }
+                    catch (Exception ex)
+                    {
+                        log.AppendLine($"r{round} {model} {name}: excecao {ex.GetType().Name} apos {clock.ElapsedMilliseconds}ms");
+                    }
                 }
-                catch (Exception ex)
-                {
-                    log.AppendLine($"rodada {round} {model}: excecao {ex.GetType().Name} apos {clock.ElapsedMilliseconds}ms {ex.InnerException?.Message}");
-                }
-            }
         File.WriteAllText(file, log.ToString());
     }
 #endif
@@ -196,7 +226,8 @@ public sealed class GeminiRunner : IChatRunner
 
         var cts = new CancellationTokenSource(TimeSpan.FromSeconds(AnswerTimeoutSeconds));
         _cts = cts;
-        _ = Task.Run(() => StreamAsync(id, key, json, question, cts));
+        bool quick = Quick;
+        _ = Task.Run(() => StreamAsync(id, key, json, question, cts, quick));
     }
 
     private static JsonArray PartsFor(string prompt, string? imagePath)
@@ -211,15 +242,19 @@ public sealed class GeminiRunner : IChatRunner
         return parts;
     }
 
-    private async Task StreamAsync(int id, string key, string json, JsonObject question, CancellationTokenSource cts)
+    private async Task StreamAsync(int id, string key, string json, JsonObject question, CancellationTokenSource cts, bool quick)
     {
         var text = new StringBuilder();
         string? error = null;
         try
         {
-            foreach (string model in Models)
+            // a model that hung lately goes to the end of the line (Google's newest one sometimes stalls for a while)
+            var order = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.ThenBy(
+                System.Linq.Enumerable.OrderBy(Models, m => SlowUntil.TryGetValue(m, out var until) && until > DateTime.UtcNow),
+                m => quick && m == QuickModel ? 0 : 1));
+            foreach (string model in order)
             {
-                bool last = model == Models[^1];
+                bool last = model == order[^1];
                 using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
                 attempt.CancelAfter(TimeSpan.FromSeconds(FirstWordsTimeoutSeconds)); // no first words in time: the other model gets a chance
                 try
@@ -256,6 +291,7 @@ public sealed class GeminiRunner : IChatRunner
                     if (id != _runId) return;
                     if (text.Length > 0) break; // keep what already arrived
                     App.Log(new Exception($"Gemini {model}: {ex.GetType().Name}"));
+                    if (!cts.IsCancellationRequested) SlowUntil[model] = DateTime.UtcNow.AddMinutes(SlowModelMinutes);
                     if (last || cts.IsCancellationRequested) error = Loc.T("chat.err.gnet");
                     if (cts.IsCancellationRequested) break;
                 }

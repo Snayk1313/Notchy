@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -81,9 +81,57 @@ public partial class MainWindow
             if (_state == IslandState.Expanded && _tab == Tab.Downloads) UpdateDownloadsTab(force: true);
         }
         if (_dlPodShown) _dlPodMoodUntil = (DateTime.UtcNow.AddSeconds(2.4), true);
+        bool alone = DecideCompactWithoutTransfer() == CompactMode.None;
+        // a download: its card under the island, in line with the notifications (the island stays free to open);
         // alone on the island: happy eyes ^ ^ (with music/Claude, the bubble smiles)
-        if (DecideCompactWithoutTransfer() == CompactMode.None)
-            ShowTransient(CompactMode.TransferDone, "", "", 2.6);
+        if (kind == TransferKind.Download && path != null)
+        {
+            if (alone) Happy();
+            ShowDownloadCard(path);
+        }
+        else if (alone) ShowTransient(CompactMode.TransferDone, "", "", 2.6);
+    }
+
+    // ---- the download's card: its picture or icon, "Downloads · agora", the file, Abrir · Mostrar na pasta
+
+    /// <summary>A finished download's card: the file.</summary>
+    private sealed record DownloadCard(string Path);
+
+    private StackPanel? _dlButtons;
+
+    private void ShowDownloadCard(string path)
+    {
+        var icon = Thumb(path) as System.Windows.Media.Imaging.BitmapSource;
+        var n = new Notice(0, Loc.T("tab.downloads"), "", Path.GetFileName(path), Loc.T("dl.finished"), DateTime.Now, icon, false)
+        {
+            Accent = DoneGreen,
+            Local = new DownloadCard(path)
+        };
+        _noticeQueue.Enqueue(n);
+        if (_noticeShown == null) ShowNextNotice();
+        else UpdateNoticeCount();
+    }
+
+    private void ShowDownloadCardNow(Notice n, DownloadCard dl)
+    {
+        if (_dlButtons == null)
+        {
+            _dlButtons = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
+            _dlButtons.Children.Add(ShotButton("M9,2.5 H13.5 V7 M13.5,2.5 L7.5,8.5 M11.5,9.5 V13.5 H2.5 V4.5 H6.5", Loc.T("dl.open"), () => OpenDownloadCard(false)));
+            _dlButtons.Children.Add(ShotButton("M2.5,4.5 A1,1 0 0 1 3.5,3.5 H6.5 L8,5 H12.5 A1,1 0 0 1 13.5,6 V12.5 A1,1 0 0 1 12.5,13.5 H3.5 A1,1 0 0 1 2.5,12.5 Z", Loc.T("dl.folder"), () => OpenDownloadCard(true)));
+            Grid.SetColumn(_dlButtons, 2);
+            _pillRow.Children.Add(_dlButtons);
+        }
+        _dlButtons.Visibility = Visibility.Visible;
+        ShowNoticePill(n);
+    }
+
+    private void OpenDownloadCard(bool folder)
+    {
+        if (_noticeShown?.Local is not DownloadCard dl) return;
+        DismissNotice();
+        if (folder) ShowInFolder(dl.Path);
+        else OpenFile(dl.Path);
     }
 
     private void OnTransferFailed()
@@ -291,7 +339,7 @@ public partial class MainWindow
         // follow the island exactly (it animates its size)
         double W = Island.ActualWidth, H = Island.ActualHeight - _topHidden;
         if (W < 2 || H < 2) return;
-        if (_transferOutline.Build(W, H, _topHidden))
+        if (_transferOutline.Build(W, H, _topHidden, OutlineTurn))
         {
             TransferLight.Width = TransferTrack.Width = W;
             TransferLight.Height = TransferTrack.Height = H + _topHidden;
@@ -361,7 +409,11 @@ public partial class MainWindow
                 if (_transferRig != null && _dlPodRig != null) _transferRig.Pose = _dlPodRig.Pose;
                 _dlPodShown = false;
                 _dlPodMorphing = true;
-                MorphPodIntoIsland(DownloadPod, DlPodX, DlPodSlide, TransferWidth, TransferPanel, () => _transferOpacity = 1,
+                MorphPodIntoIsland(DownloadPod, DlPodX, DlPodSlide, TransferWidth, TransferPanel, () =>
+                    {
+                        _transferOpacity = 1;
+                        CopyPose(_dlPodRig, _transferRig); // the island's eyes start where the bubble's were, then go their way
+                    },
                     () => _dlPodMorphing = false, () => _state == IslandState.Compact && IsTransferMode(_compactMode), () =>
                     {
                         _dlPodShown = true;
@@ -380,11 +432,11 @@ public partial class MainWindow
         if (!_dlPodShown) return;
 
         // same size/place rules as the island and the Claude pod (which sits on the other side)
-        DownloadPod.Height = 34 + _topHidden;
+        DownloadPod.Height = OnSide ? SidePodThickness : 34 + _topHidden; // (on a side, turned: its thickness)
         DownloadPod.Margin = Island.Margin;
         DlPodContent.Margin = new Thickness(0, _topHidden, 0, 0);
         double scale = S.SizeScale;
-        if (!_dlPodMorphing) DlPodX.X = Island.ActualWidth * scale / 2 + 8 * scale + 70 * scale / 2;
+        if (!_dlPodMorphing) DlPodX.X = IslandSpan * scale / 2 + 8 * scale + 70 * scale / 2;
 
         bool mood = DateTime.UtcNow < _dlPodMoodUntil.until;
         bool happy = mood && _dlPodMoodUntil.happy;
@@ -395,7 +447,9 @@ public partial class MainWindow
             FlipEyes(happy, DlEyeL, DlEyeR, DlHappyL, DlHappyR);
         }
         double prog = happy ? 1 : t?.Progress ?? -1;
-        ApplyPose(_dlPodRig, happy ? EyePose.Rest : TransferPose(t, prog >= 0 ? prog : 0.5, sad, time), Ease(0.2));
+        // (turning into the island, the bubble's eyes are the island's: copied above, not its own)
+        if (!(_dlPodMorphing && _state == IslandState.Compact && IsTransferMode(_compactMode)))
+            ApplyPose(_dlPodRig, happy ? EyePose.Rest : TransferPose(t, prog >= 0 ? prog : 0.5, sad, time), Ease(0.2));
         UpdateDownloadPodInfo(happy, sad, prog);
         DrawDownloadPod(prog);
         DlPodArc.Opacity = sad ? 0.25 : 1;
@@ -441,7 +495,7 @@ public partial class MainWindow
         _dlPodShown = true;
         _dlPodMorphing = true;
         _dlPodHappyShown = !_dlPodHappyShown; // force refresh
-        DownloadPod.Height = 34 + _topHidden;
+        DownloadPod.Height = OnSide ? SidePodThickness : 34 + _topHidden; // (on a side, turned: its thickness)
         DownloadPod.Margin = Island.Margin;
         DlPodContent.Margin = new Thickness(0, _topHidden, 0, 0);
         CopyPose(_transferRig, _dlPodRig); // the bubble's eyes start where the island's are
@@ -454,7 +508,7 @@ public partial class MainWindow
         DrawDownloadPod(t?.Progress ?? -1);
 
         double s = S.SizeScale;
-        double toX = TargetSize(_state).Width * s / 2 + 8 * s + 70 * s / 2;
+        double toX = SpanOf(TargetSize(_state)) * s / 2 + 8 * s + 70 * s / 2;
         MorphIslandIntoPod(DownloadPod, DlPodScale, DlPodX, DlPodSlide, TransferWidth, toX, () => _dlPodMorphing = false);
     }
 

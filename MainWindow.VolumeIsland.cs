@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -173,10 +173,11 @@ public partial class MainWindow
         UpdateState();
     }
 
-    private void SetLevelFromMouse(double x)
+    private void SetLevelFromMouse(double x) => SetLevel(Math.Clamp(x / Math.Max(1, _levelPill.ActualWidth), 0, 1));
+
+    /// <summary>The level picked on the bar (lying at the top, or standing on a side), 0..1.</summary>
+    private void SetLevel(double v)
     {
-        double w = Math.Max(1, _levelPill.ActualWidth);
-        double v = Math.Clamp(x / w, 0, 1);
         _levelTarget = _levelShown = v;
         _levelMuted = false;
         if (_levelKind == LevelKind.Brightness) _brightness.Set((int)Math.Round(v * 100));
@@ -213,9 +214,16 @@ public partial class MainWindow
         VolumePanel.Opacity = 1;
     }
 
-    /// <summary>How far right of the bar's eyes the empty island's eyes sit.</summary>
+    /// <summary>How far along the bar (right at the top; up, standing on a side) the empty island's eyes sit from the bar's eyes.</summary>
     private double IdleEyesOffset()
     {
+        if (OnSide)
+        {
+            // standing: the bar runs bottom → top, its length is its own width; the island's eyes sit in its middle
+            double idleUp = Island.ActualHeight / 2 - IdleEyes.TranslatePoint(new Point(0, IdleEyes.ActualHeight / 2), Island).Y;
+            double length = VolumePanel.ActualWidth > 1 ? VolumePanel.ActualWidth : LevelPillHeight;
+            return idleUp - (-length / 2 + 16 + (6 + 5 + 6) / 2.0);
+        }
         double idleCenter = IdleEyes.TranslatePoint(new Point(IdleEyes.ActualWidth / 2, 0), Island).X - Island.ActualWidth / 2;
         return idleCenter - (-LevelWidth / 2 + 16 + (6 + 5 + 6) / 2.0);
     }
@@ -261,7 +269,7 @@ public partial class MainWindow
         SetIslandSizeNow(size.Width, size.Height + _topHidden);
         VolumePanel.Width = size.Width;
         VolumePanel.Height = size.Height;
-        foreach (var p in new UIElement[] { IdlePanel, CompactPanel, _budsPanel, _noticePanel, _calPanel, _shotPanel, _ringPanel, WhatsNewPanel, ClaudePanel, TransferPanel, ExpandedPanel, AccentGlow })
+        foreach (var p in new UIElement[] { IdlePanel, CompactPanel, _budsPanel, _noticePanel, _calPanel, _ringPanel, WhatsNewPanel, ClaudePanel, TransferPanel, ExpandedPanel, AccentGlow })
         {
             p.BeginAnimation(OpacityProperty, null);
             p.Opacity = 0;
@@ -311,6 +319,14 @@ public partial class MainWindow
         if (open == _devListOpen) return;
         _devListOpen = open;
         _devList.BeginAnimation(OpacityProperty, new DoubleAnimation(open ? 1 : 0, TimeSpan.FromMilliseconds(Dur(open ? 260 : 120))) { BeginTime = TimeSpan.FromMilliseconds(open ? Dur(120) : 0) });
+        if (OnSide && _sideDevHost != null)
+        {
+            // beside the standing bar: the island widens into the screen for it
+            _sideDevHost.IsHitTestVisible = open;
+            _sideDevHost.BeginAnimation(OpacityProperty, new DoubleAnimation(open ? 1 : 0, TimeSpan.FromMilliseconds(Dur(open ? 260 : 120))) { BeginTime = TimeSpan.FromMilliseconds(open ? Dur(120) : 0) });
+            if (_state == IslandState.Volume) AnimateIslandSize(TargetSize(IslandState.Volume), bigMove: true);
+            return;
+        }
         if (_state == IslandState.Volume)
         {
             var size = LevelSize();

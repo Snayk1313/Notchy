@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
@@ -137,7 +137,9 @@ public partial class MainWindow
         foreach (var card in new[] { HomeClaudeCard, HomeMusicCard, HomeFocusCard, HomeWeatherCard })
         {
             if (card.Parent is not Button button) continue;
-            var halo = new Border { CornerRadius = card.CornerRadius, IsHitTestVisible = false, Height = card.Height };
+            var halo = new Border { CornerRadius = card.CornerRadius, IsHitTestVisible = false };
+            // as tall as the card, whatever it is (taller standing on a side): not the height it had at start
+            BindingOperations.SetBinding(halo, HeightProperty, new Binding(nameof(Height)) { Source = card });
             button.Content = null;
             var layers = new Grid();
             layers.Children.Add(halo);

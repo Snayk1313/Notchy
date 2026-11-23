@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -53,6 +53,8 @@ public sealed class TransferWatcher
     private static readonly string[] Browsers = { "msedge", "chrome", "opera", "brave", "vivaldi", "arc", "yandex" };
     private static readonly Regex Percent = new(@"(\d{1,3}(?:[.,]\d+)?)\s*%", RegexOptions.Compiled);
     private static readonly Regex SizeOfSize = new(@"([\d.,]+)\s*(B|KB|MB|GB|TB)\s+\S{1,4}\s+([\d.,]+)\s*(B|KB|MB|GB|TB)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    /// <summary>Zen/Firefox's temp while the "save as" window is open: "Y8zjonVI.wav.part".</summary>
+    private static readonly Regex SaveAsTemp = new(@"^[A-Za-z0-9_-]{8}(\.[^.]+)?\.part$", RegexOptions.Compiled);
     private static readonly Regex Size = new(@"([\d.,]+)\s*(bytes|B|KB|MB|GB|TB)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private sealed class Growing
@@ -70,8 +72,8 @@ public sealed class TransferWatcher
     private string _lastPath = "", _lastName = "";
 
     private const int WatcherSettleMs = 200, MaxRecentFiles = 400, MaxMoves = 200, ActiveSeconds = 20;
-    private static readonly TimeSpan RecentFileWindow = TimeSpan.FromSeconds(15);
-    private readonly List<(string path, Growing file)> _vanished = new();
+    private static readonly TimeSpan RecentFileWindow = TimeSpan.FromSeconds(15), SaveAsWindow = TimeSpan.FromSeconds(30);
+    private readonly List<(string path, Growing file, DateTime gone)> _vanished = new();
     private readonly HashSet<string> _reported = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> _moved = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentQueue<(string path, DateTime when)> _recent = new();
@@ -122,12 +124,21 @@ public sealed class TransferWatcher
             return;
         }
         System.Threading.Thread.Sleep(WatcherSettleMs); // (Windows tells us about a rename a moment after it happens)
-        foreach (var (path, file) in _vanished)
+        foreach (var v in _vanished.ToList())
         {
+            var (path, file, gone) = v;
             if (FinishedFile(path, file.Size, file.Final) is string finalPath) Report(finalPath);
-            else if (!RenamedStillDownloading(path) && (now - file.Changed).TotalSeconds < ActiveSeconds) ReportFailed(CleanName(path));
+            // Zen/Firefox "save as": still being copied to the folder picked (a slow disk takes seconds); its end
+            // is reported through the final file, so the temp itself never counts as canceled
+            else if (SaveAsTemp.IsMatch(Path.GetFileName(path)))
+            {
+                if (now - gone < SaveAsWindow) continue;
+            }
+            else if (!RenamedStillDownloading(path) && (now - file.Changed).TotalSeconds < ActiveSeconds &&
+                     !LastDirFiles(".part").Any()) // (moved there unfinished: still going)
+                ReportFailed(CleanName(path));
+            _vanished.Remove(v);
         }
-        _vanished.Clear();
     }
 
     /// <summary>Chrome renames "Unconfirmed 123.crdownload" to "name.crdownload" a moment in: the same download, going on.</summary>
@@ -173,7 +184,8 @@ public sealed class TransferWatcher
                 .Where(f => !PartialExtensions.Contains(f.Extension, StringComparer.OrdinalIgnoreCase) && !_reported.Contains(f.FullName) &&
                             (DateTime.Now - f.LastWriteTime).TotalSeconds < 15 && f.Length >= bytes * 0.9)
                 .OrderByDescending(f => f.LastWriteTime).FirstOrDefault();
-            return fresh?.FullName ?? CreatedElsewhere(bytes);
+            return fresh?.FullName ?? CreatedElsewhere(bytes) ??
+                   LastDirFiles(Path.GetExtension(StripPartial(partial))).FirstOrDefault(f => f.Length == bytes && !_reported.Contains(f.FullName))?.FullName;
         }
         catch
         {
@@ -191,6 +203,32 @@ public sealed class TransferWatcher
             if (!IsPartial(path)) return File.Exists(path) ? path : null;
         }
         return null;
+    }
+
+    /// <summary>
+    /// Zen/Firefox "save as": the download goes to a random-named temp ("Y8zjonVI.wav.part") until a folder is picked,
+    /// then is moved there. Replacing a file that already exists raises no "created" notice (and the copy keeps the
+    /// temp's date), so look in the folder the browser remembers as the last one picked (prefs.js "browser.download.lastDir").
+    /// </summary>
+    private IEnumerable<FileInfo> LastDirFiles(string ext)
+    {
+        const string key = "user_pref(\"browser.download.lastDir\", \"";
+        foreach (var json in _ffFiles ?? new List<string>())
+        {
+            List<FileInfo> files;
+            try
+            {
+                string? line = File.ReadLines(Path.Combine(Path.GetDirectoryName(json)!, "prefs.js")).FirstOrDefault(l => l.StartsWith(key));
+                if (line == null || !line.EndsWith("\");")) continue;
+                files = new DirectoryInfo(Regex.Unescape(line[key.Length..^3])).EnumerateFiles("*" + ext)
+                    .Where(f => ext != ".part" || (DateTime.Now - f.LastWriteTime).TotalSeconds < 15).ToList();
+            }
+            catch
+            {
+                continue; // no prefs / folder gone
+            }
+            foreach (var f in files) yield return f;
+        }
     }
 
     /// <summary>Saved on another disk there's no rename, just a new file there: the one that appeared just now with exactly the download's size.</summary>
@@ -249,7 +287,7 @@ public sealed class TransferWatcher
         _primed = true;
         foreach (var gone in _files.Keys.Where(k => !seen.Contains(k)).ToList())
         {
-            if (_files[gone].Changed != DateTime.MinValue) _vanished.Add((gone, _files[gone])); // (never grew while we watched: not one of ours)
+            if (_files[gone].Changed != DateTime.MinValue) _vanished.Add((gone, _files[gone], now)); // (never grew while we watched: not one of ours)
             _files.Remove(gone);
         }
 

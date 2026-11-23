@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -21,7 +21,6 @@ public partial class MainWindow
     // the coloured line: the same on the pill and around the minimized island
     private const double NoticeLineThickness = 1.5, NoticeLineOpacity = 0.45, NoticeGlowBlur = 8, NoticeGlowOpacity = 0.6;
     private static readonly Color NoticeNoAccent = Color.FromRgb(0xE6, 0xE6, 0xEE);
-    private static readonly Brush PillNoGlass = new SolidColorBrush(Color.FromArgb(0xE6, 0, 0, 0));
 
     private Grid _noticePill = null!;
     private readonly Grid _pillRow = new();
@@ -47,6 +46,7 @@ public partial class MainWindow
         var row = _pillRow;
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         row.ColumnDefinitions.Add(new ColumnDefinition());
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // (a screenshot's buttons)
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         _pillAvatar = new Border { Width = 40, Height = 40, CornerRadius = new CornerRadius(20), Margin = new Thickness(0, 0, 12, 0), VerticalAlignment = VerticalAlignment.Center };
@@ -61,11 +61,11 @@ public partial class MainWindow
         texts.Children.Add(_pillText);
         row.Children.Add(texts);
         _pillMore = new TextBlock { FontSize = 10, FontWeight = FontWeights.Bold, Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0), Visibility = Visibility.Collapsed };
-        Grid.SetColumn(_pillMore, 2);
+        Grid.SetColumn(_pillMore, 3);
         row.Children.Add(_pillMore);
         var close = NoticeCloseButton();
         close.Margin = new Thickness(8, 0, 0, 0);
-        Grid.SetColumn(close, 3);
+        Grid.SetColumn(close, 4);
         row.Children.Add(close);
         _pillBody.Child = row;
 
@@ -181,7 +181,7 @@ public partial class MainWindow
     /// <summary>The activity over the pill ended (after a moment, so the gap between two songs doesn't count): it goes up and carries on as the card.</summary>
     private void CheckPillStillNeeded()
     {
-        if (_state == IslandState.Expanded || IslandBusy || _noticePill.IsMouseOver || _noticeSwiping)
+        if (_noticeShown?.Local != null || _state == IslandState.Expanded || IslandBusy || _noticePill.IsMouseOver || _noticeSwiping)
         {
             _pillIdleSince = null;
             return;
@@ -304,6 +304,7 @@ public partial class MainWindow
         _noticePill.BeginAnimation(OpacityProperty, null);
         _noticePill.Opacity = 1;
         _noticePill.Visibility = Visibility.Visible;
+        _pillCenter = _pillTop = double.NaN; // (a new pill starts in its place, no glide from the last one's)
         var (y, height, contentTop) = PillShapeOfCard();
         _pillRow.Margin = new Thickness(0, contentTop, 0, 0);
         _pillMove.Y = y;
@@ -332,8 +333,19 @@ public partial class MainWindow
         _pillTitle.Text = n.Title;
         _pillText.Text = n.Body;
         _pillText.Visibility = n.Body.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-        _pillAvatar.CornerRadius = new CornerRadius(n.IsPhoto ? 20 : 11);
-        _pillAvatar.Background = n.Avatar != null ? new ImageBrush(n.Avatar) { Stretch = Stretch.UniformToFill } : White(0x14);
+        // a screenshot: its picture, bigger, and its buttons
+        bool shot = n.Local is ShotCard;
+        _pillAvatar.Width = shot ? ShotThumbWidth : 40;
+        _pillAvatar.Height = shot ? ShotThumbHeight : 40;
+        _pillAvatar.BorderBrush = shot ? White(0x22) : null;
+        _pillAvatar.BorderThickness = new Thickness(shot ? 1 : 0);
+        _pillAvatar.RenderTransform = Transform.Identity;
+        if (!shot) _shotButtons.Visibility = Visibility.Collapsed;
+        if (_dlButtons != null && n.Local is not DownloadCard) _dlButtons.Visibility = Visibility.Collapsed;
+        _pillAvatar.CornerRadius = new CornerRadius(shot ? 9 : n.IsPhoto ? 20 : 11);
+        // (a download that isn't a picture: its file icon, whole)
+        bool icon = n.Local is DownloadCard d && Array.IndexOf(ImageExt, System.IO.Path.GetExtension(d.Path).ToLowerInvariant()) < 0;
+        _pillAvatar.Background = n.Avatar != null ? new ImageBrush(n.Avatar) { Stretch = icon ? Stretch.Uniform : Stretch.UniformToFill } : White(0x14);
         _pillBody.Background = Island.Background;
         _pillGlow.BorderBrush = new SolidColorBrush(_noticeAccent);
         _pillGlowEffect.Color = _noticeAccent;
@@ -347,6 +359,7 @@ public partial class MainWindow
         _pillUntil = DateTime.UtcNow.AddSeconds(NoticeSeconds);
         FillNoticePill(n);
         _noticePill.Visibility = Visibility.Visible;
+        _pillCenter = _pillTop = double.NaN; // (a new pill starts in its place, no glide from the last one's)
         _noticePill.IsHitTestVisible = true;
         PlaceNoticePill();
         var time = TimeSpan.FromMilliseconds(Dur(360));
@@ -370,14 +383,57 @@ public partial class MainWindow
     {
         if (_noticePill.Visibility != Visibility.Visible || _pillFrozen) return;
         var island = Island.TransformToAncestor(this).TransformBounds(new Rect(0, 0, Island.ActualWidth, Island.ActualHeight));
-        _noticePill.Margin = new Thickness(0, island.Bottom + PillGap * S.SizeScale, 0, 0);
+        double gap = PillGap * S.SizeScale, top = island.Bottom + gap;
+        if (!OnSide)
+        {
+            _noticePill.HorizontalAlignment = HorizontalAlignment.Center;
+            _noticePill.Margin = new Thickness(0, top, 0, 0);
+            if (_pillBody.Padding != PillPadding) _pillBody.Padding = PillPadding;
+            return;
+        }
+        // On a side: under the open island, centred on it; under the minimized one (a narrow pill glued to the edge), glued
+        // to the edge too, below the bubbles hanging under it. Glued, it runs past the edge by its corner radius (like the
+        // island, its rounded corners there are out of sight), so going from one place to the other is just a slide, timed
+        // with the island opening or closing.
+        bool open = _state == IslandState.Expanded;
+        double sc = S.SizeScale, half = PillWidth * sc / 2, into = PillRadius * sc;
+        double want = open ? (island.Left + island.Right) / 2 : PlaceRight ? ActualWidth - half + into : half - into;
+        if (!open)
+            foreach (var pod in new FrameworkElement[] { DownloadPod, ClaudePod })
+            {
+                if (pod.Visibility != Visibility.Visible || pod.Opacity < 0.05) continue;
+                var b = pod.TransformToAncestor(this).TransformBounds(new Rect(0, 0, pod.ActualWidth, pod.ActualHeight));
+                if (b.Top > island.Top + island.Height / 2) top = Math.Max(top, b.Bottom + gap); // (one below the island)
+            }
+        if (double.IsNaN(_pillCenter)) (_pillCenter, _pillFrom, _pillOpen) = (want, want, open);
+        if (open != _pillOpen)
+        {
+            _pillOpen = open;
+            _pillFrom = _pillCenter;
+            _pillSlideAt = AnimNow;
+        }
+        double k = Math.Clamp((AnimNow - _pillSlideAt) / Math.Max(0.05, PillSlideSeconds * S.SpeedFactor), 0, 1);
+        double e = k < 0.5 ? 4 * k * k * k : 1 - Math.Pow(-2 * k + 2, 3) / 2; // (ease in-out)
+        _pillCenter = _pillFrom + (want - _pillFrom) * e;
+        _pillTop = double.IsNaN(_pillTop) ? top : _pillTop + (top - _pillTop) * Ease(0.35);
+        _noticePill.HorizontalAlignment = HorizontalAlignment.Left;
+        _noticePill.Margin = new Thickness(_pillCenter - PillWidth / 2, _pillTop, 0, 0);
+        // what runs past the edge is out of sight: the text keeps clear of it (gradually, as it slides in)
+        double g = (open ? 1 - e : e) * PillRadius;
+        var pad = new Thickness(20 + (PlaceRight ? 0 : g), 0, 16 + (PlaceRight ? g : 0), 0);
+        if (_pillBody.Padding != pad) _pillBody.Padding = pad;
     }
+
+    private static readonly Thickness PillPadding = new(20, 0, 16, 0);
+    private const double PillSlideSeconds = 0.46; // (the island's own opening / closing)
+    private double _pillCenter = double.NaN, _pillTop = double.NaN, _pillFrom, _pillSlideAt = -100;
+    private bool _pillOpen;
 
     /// <summary>The island closed under a pill: the same notification carries on as the card, for the time it had left.</summary>
     private void TurnPillIntoCard()
     {
         if (!_noticeInPill || _noticeShown == null) return;
-        if (IslandBusy) return; // what's on the island stays there, the pill under it
+        if (IslandBusy || _noticeShown.Local != null) return; // (Notchy's own cards stay under the island) // what's on the island stays there, the pill under it
         double left = Math.Max(PillMinSecondsOnCard, (_pillUntil - DateTime.UtcNow).TotalSeconds);
         HideNoticePill();
         ShowTransient(CompactMode.Notice, "", "", left);
@@ -387,7 +443,9 @@ public partial class MainWindow
     {
         if (_noticeShown is not { } n) return;
         DismissNotice();
-        OpenNoticeApp(n);
+        if (n.Local is ShotCard shot) OpenShot(shot);
+        else if (n.Local is DownloadCard dl) OpenFile(dl.Path);
+        else OpenNoticeApp(n);
     }
 
     /// <summary>Done with this one (it stays in the bell's history): the next one in line, if any.</summary>

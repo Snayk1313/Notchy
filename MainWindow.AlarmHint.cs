@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -66,11 +66,15 @@ public partial class MainWindow
     {
         get
         {
+            if (OnSide) return SidePillWidth; // (standing: the alarm's time takes the bell's place, the pill keeps its size)
             if (_alarmSoon == null || _idleSoon == null) return 120;
             double hint = IdleHintEdge + AlarmBellSize + AlarmTimeGap + MeasureText(_idleSoon, _alarmSoon);
             return Math.Max(120, Math.Ceiling(2 * (21 + hint)));
         }
     }
+
+    /// <summary>Standing on a side: the resting pill.</summary>
+    private double IdlePillHeight => SidePillHeight;
 
     /// <summary>The room the bell (and the time) take beside the music's visualizer.</summary>
     private double CompactAlarmExtra
@@ -114,7 +118,10 @@ public partial class MainWindow
         _alarmSoon = soon;
 
         var fade = TimeSpan.FromMilliseconds(Dur(220));
-        _idleBell.BeginAnimation(OpacityProperty, new DoubleAnimation(has ? 1 : 0, fade));
+        // (standing on a side, the alarm's time takes the bell's place for its 15 seconds)
+        bool bellOut = OnSide && soon != null;
+        _idleBell.BeginAnimation(OpacityProperty, new DoubleAnimation(has && !bellOut ? 1 : 0, fade));
+        _idleBell.Visibility = bellOut ? Visibility.Collapsed : Visibility.Visible;
         _musicBell.BeginAnimation(OpacityProperty, new DoubleAnimation(has && _compactMode == CompactMode.Music ? 1 : 0, fade));
         foreach (var t in new[] { _idleSoon, _musicSoon })
         {
@@ -124,6 +131,7 @@ public partial class MainWindow
         _musicBell.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
         CompactAlarm.Visibility = (has || _calSign != null) && _compactMode == CompactMode.Music ? Visibility.Visible : Visibility.Collapsed;
         IdlePanel.Width = IdleWidth;
+        if (OnSide) IdlePanel.Height = IdlePillHeight;
         if (!changed) return;
         if (_state == IslandState.Idle) AnimateIslandSize(TargetSize(IslandState.Idle), bigMove: false);
         if (_compactMode == CompactMode.Music) FitCompactText();

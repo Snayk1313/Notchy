@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Windows;
 using System.Windows.Media;
 
@@ -112,13 +112,12 @@ public partial class MainWindow
             }
         }
 
-        // the faint glow along the screen's top edge, from one bubble to the other
+        // the faint glow along the screen's edge (the top one, or the side one the island stands on), from one bubble to the other
         double scale = S.SizeScale;
-        double side = Island.ActualWidth * scale / 2 + 8 * scale + 70 * scale / 2;
+        double side = IslandSpan * scale / 2 + 8 * scale + 70 * scale / 2;
         double run = TripSmooth(TripSeg(s, 0.28, 0.68));
         double from = _tripForward ? -side : side, to = -from;
-        EyeTripGlowX.X = from + (to - from) * run;
-        EyeTripGlow.Margin = new Thickness(0, Island.Margin.Top + _topHidden - 1.3, 0, 0);
+        PlaceTripGlow(from + (to - from) * run);
         double k = _tripForward ? run : 1 - run;
         var color = Color.FromRgb(
             (byte)(TripOrange.R + (TripGreen.R - TripOrange.R) * k),
@@ -127,5 +126,20 @@ public partial class MainWindow
         SetBrushColor(EyeTripGlow, System.Windows.Controls.Border.BackgroundProperty, color);
         EyeTripGlowShadow.Color = color;
         EyeTripGlow.Opacity = Math.Sin(Math.PI * Math.Clamp((s - 0.26) / 0.44, 0, 1)) * 0.95;
+    }
+
+    /// <summary>The trip's glow at that distance along the edge from the island's middle: lying along the top edge, or standing along a side one.</summary>
+    private void PlaceTripGlow(double along)
+    {
+        const double length = 34, thickness = 2.6;
+        EyeTripGlow.HorizontalAlignment = OnSide ? Island.HorizontalAlignment : HorizontalAlignment.Center;
+        EyeTripGlow.VerticalAlignment = OnSide ? VerticalAlignment.Center : VerticalAlignment.Top;
+        EyeTripGlow.Width = OnSide ? thickness : length;
+        EyeTripGlow.Height = OnSide ? length : thickness;
+        EyeTripGlow.Margin = OnSide
+            ? (PlaceRight ? new Thickness(0, 0, -1.3, 0) : new Thickness(-1.3, 0, 0, 0))
+            : new Thickness(0, Island.Margin.Top + _topHidden - 1.3, 0, 0);
+        EyeTripGlowX.X = OnSide ? 0 : along;
+        EyeTripGlowX.Y = OnSide ? along : 0;
     }
 }

@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System;
 using System.IO;
 using System.Text.Json;
@@ -8,7 +8,20 @@ namespace Notchy;
 
 public enum IslandSize { Compact, Normal, Large }
 public enum IslandStyle { Attached, Floating }
+public enum IslandPlace { Top, Left, Right }
 public enum OpenMode { Hover, Click }
+/// <summary>A place rule's condition: the app in front, or filling the screen (maximized or full screen).</summary>
+public enum PlaceWhen { Fullscreen, Front }
+
+/// <summary>"Quando [app] estiver [em tela cheia], a ilha vai para a [direita]".</summary>
+public sealed class PlaceRule
+{
+    public string Process { get; set; } = "";   // the process name ("zen", "chrome"): how it's recognised
+    public string Name { get; set; } = "";      // the app's name, to show
+    public PlaceWhen When { get; set; } = PlaceWhen.Fullscreen;
+    public IslandPlace Place { get; set; } = IslandPlace.Right;
+    public bool On { get; set; } = true;
+}
 public enum ClockMode { Auto, H12, H24 }
 public enum AnimSpeed { Fast, Normal, Smooth }
 
@@ -46,6 +59,12 @@ public sealed class AppSettings
     // Island
     public IslandSize Size { get; set; } = IslandSize.Normal;
     public IslandStyle Style { get; set; } = IslandStyle.Attached;
+    /// <summary>Where the island normally sits: at the top, or standing on the left / right edge of the screen.</summary>
+    public IslandPlace Place { get; set; } = IslandPlace.Top;
+    /// <summary>Hold the island and drag it to the top or a side (it snaps into the spot near it).</summary>
+    public bool PlaceDrag { get; set; } = true;
+    /// <summary>Configurações → Posição: the island moves on its own while an app is in front or full screen.</summary>
+    public List<PlaceRule> PlaceRules { get; set; } = new();
     public int SeeThrough { get; set; } = 0;        // 0..60 %
     public bool MusicColor { get; set; } = true;     // tint the expanded island with the album colour
     public OpenMode Open { get; set; } = OpenMode.Hover;

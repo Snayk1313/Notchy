@@ -1,4 +1,4 @@
-<Window x:Class="Notchy.MainWindow"
+﻿<Window x:Class="Notchy.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:Notchy"
@@ -977,7 +977,7 @@
                                         </StackPanel>
                                         <ScrollViewer x:Name="ShelfScroll" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
                                                       Margin="6,4">
-                                            <StackPanel x:Name="ShelfItems" Orientation="Horizontal" VerticalAlignment="Center" />
+                                            <WrapPanel x:Name="ShelfItems" Orientation="Horizontal" VerticalAlignment="Center" />
                                         </ScrollViewer>
                                     </Grid>
                                 </Border>

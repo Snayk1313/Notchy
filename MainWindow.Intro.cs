@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Windows;
@@ -28,6 +28,8 @@ public partial class MainWindow
     private const double LookStart = 3.35, IntroEnd = 3.85;
 
     private System.Windows.Shapes.Path? _introHand;
+    private const double HandBelow = 17; // (on a side: how far under the eyes' row the hand pops up)
+    private TranslateTransform? _handShift;
     private RotateTransform? _handTurn;
     private ScaleTransform? _handPop;
     private bool _waveSound, _introHappy;
@@ -84,9 +86,10 @@ public partial class MainWindow
         if (_introClock == null) return;
         double t = _introClock.Elapsed.TotalSeconds / Math.Max(0.2, S.SpeedFactor);
         var final = TargetSize(IslandState.Idle);
-        double W = final.Width, H = final.Height;
+        // along the edge it comes from, and into the screen (the top edge: width and height; a side edge: the other way)
+        double W = OnSide ? final.Height : final.Width, H = OnSide ? final.Width : final.Height;
 
-        // 1) the drop: drips down narrow, then spreads sideways with a little squash and bounce
+        // 1) the drop: drips out of the edge narrow, then spreads along it with a little squash and bounce
         double w, h;
         const double dripW = 22, dripH = 36;
         if (t < DripEnd)
@@ -111,16 +114,16 @@ public partial class MainWindow
             w = W;
             h = H;
         }
-        Island.Width = Math.Max(0, w);
-        Island.Height = Math.Max(0, h) + _topHidden;
+        Island.Width = Math.Max(0, OnSide ? h : w);
+        Island.Height = Math.Max(0, OnSide ? w : h) + _topHidden;
 
-        // 2) the light: two heads leave the top and meet at the bottom, then the outline glows and fades
+        // 2) the light: two heads leave the edge and meet across from it, then the outline glows and fades
         if (t >= LightStart)
         {
-            if (_introOutline.Build(W, H, _topHidden))
+            if (_introOutline.Build(final.Width, final.Height, _topHidden, OutlineTurn))
             {
-                IntroLight.Width = W;
-                IntroLight.Height = H + _topHidden;
+                IntroLight.Width = final.Width;
+                IntroLight.Height = final.Height + _topHidden;
             }
             double len = _introOutline.Length;
             double p = Math.Min(1, (t - LightStart) / LightRun);
@@ -182,7 +185,11 @@ public partial class MainWindow
 
         double room = t < HandIn ? 0 : t < WaveEnd ? EaseOutCubic((t - HandIn) / 0.25) : 1 - EaseInOutCubic((t - WaveEnd) / 0.3);
         double look = t >= LookStart && t < IntroEnd ? -3.2 * Math.Sin(2 * Math.PI * (t - LookStart) / (IntroEnd - LookStart)) : 0;
-        EyesLook.X = -6 * Math.Clamp(room, 0, 1) + look;
+        // the hand pops up beside the eyes at the top; under them in the narrow standing pill (they move up for it)
+        _introHand.Margin = OnSide ? new Thickness(0) : new Thickness(36, 0, 0, 0);
+        _handShift!.Y = OnSide ? HandBelow : 0;
+        EyesLook.X = (OnSide ? 0 : -6 * Math.Clamp(room, 0, 1)) + look;
+        EyesLook.Y = OnSide ? -8 * Math.Clamp(room, 0, 1) : 0;
 
         if (t >= IntroEnd) FinishIntro();
     }
@@ -204,6 +211,7 @@ public partial class MainWindow
 
         _handTurn = new RotateTransform();
         _handPop = new ScaleTransform(0, 0);
+        _handShift = new TranslateTransform();
         _introHand = new System.Windows.Shapes.Path
         {
             Data = g,
@@ -215,7 +223,7 @@ public partial class MainWindow
             Margin = new Thickness(36, 0, 0, 0), // to the right of the eyes
             IsHitTestVisible = false,
             RenderTransformOrigin = new Point(0.5, 0.95), // waves from the wrist
-            RenderTransform = new TransformGroup { Children = { _handPop, _handTurn } },
+            RenderTransform = new TransformGroup { Children = { _handPop, _handTurn, _handShift } },
             Effect = new System.Windows.Media.Effects.DropShadowEffect { ShadowDepth = 0, BlurRadius = 9, Opacity = 0.9 },
             Visibility = Visibility.Collapsed
         };

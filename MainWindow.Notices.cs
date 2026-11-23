@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -80,10 +80,21 @@ public partial class MainWindow
         _notices.Arrived += OnNotice;
         _notices.HistoryChanged += () => { if (_subOpen && _subTitle.Text == Loc.T("notif.title")) RefreshSubPage(NoticesPage); };
         _notices.Start();
+        // how to open each app from its notification, found ahead of time (the first click doesn't wait for it)
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(15000);
+            NotificationOpener.Warm();
+        });
     }
 
 #if DEBUG
-    internal void SendNoticeTest() => _notices.SendTest();
+    /// <summary>Settings' test button: 2 s later, time to move the mouse off the settings window and onto the island (or away).</summary>
+    internal async void SendNoticeTest()
+    {
+        await System.Threading.Tasks.Task.Delay(2000);
+        _notices.SendTest();
+    }
 #endif
 
     /// <summary>"Só no Notchy" only applies once Notchy is known to be able to read notifications: otherwise they'd show nowhere.</summary>
@@ -175,6 +186,7 @@ public partial class MainWindow
             S.Save();
         }
         if (!S.NotifyEnabled || S.NotifyMuted.Contains(n.App)) return;
+        _ = Task.Run(NotificationOpener.Warm); // (the shortcuts read before the click: once, a no-op after that)
         _noticeUnseen++;
         UpdateBell();
         // focusing with "Não perturbe", or a game/video full screen (unless the card may show there): kept in the history, not shown
@@ -207,6 +219,16 @@ public partial class MainWindow
         _noticeAvatar.Background = n.Avatar != null ? new ImageBrush(n.Avatar) { Stretch = Stretch.UniformToFill } : White(0x14);
         _noticeAccent = n.Accent ?? NoticeNoAccent;
         UpdateNoticeCount();
+        if (n.Local is ShotCard shot)
+        {
+            ShowShotCard(n, shot);
+            return;
+        }
+        if (n.Local is DownloadCard dl)
+        {
+            ShowDownloadCardNow(n, dl);
+            return;
+        }
         ApplyFullscreenHide();
         SoundService.Play(Sfx.Notice);
         // the island in use isn't disturbed: under it, as a pill
@@ -632,6 +654,8 @@ public partial class MainWindow
     /// bring another app to the front (Discord would get the request but stay hidden in the tray); so Notchy takes the
     /// focus for a moment and lets the app come forward.
     /// </summary>
+    private const double LeftForAppMs = 1200;
+
     private async void OpenNoticeApp(Notice n)
     {
         string appId = n.AppId;
@@ -647,6 +671,11 @@ public partial class MainWindow
             Native.FocusWindow(_hwnd);
         }
         Native.AllowSetForegroundWindow(-1); // ASFW_ANY: whoever opens next may come to the front
+        // it closes once and stays closed: the mouse still on the shrinking island (or the app taking the front a
+        // moment later) isn't a reason to open it again
+        _hoverTimer.Stop();
+        _hoverRequested = false;
+        _ignoreHoverUntil = DateTime.UtcNow.AddMilliseconds(LeftForAppMs);
         // like a click on Windows' own pop-up: the app's activator goes to that chat; otherwise just the app
         Collapse();
         // (tray programs have nothing Windows can open: the search below brings their window, if they have one)

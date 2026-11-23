@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -36,6 +36,12 @@ public partial class MainWindow
         shelfHost.Margin = new Thickness(6, 2, 6, 2); // (the cards are 76 tall: with the bar below, a marked one's frame must still fit)
         ShelfScroll = (ScrollViewer)shelfHost.Children[0];
         shelfParent.Children.Add(shelfHost);
+        // on a side the shelf is tall: the same files in a grid, scrolling down (they move to this one there)
+        _shelfRowHost = shelfHost;
+        _shelfGridHost = Scroller(new Border());
+        _shelfGridHost.Margin = new Thickness(6, 4, 2, 4);
+        _shelfGridHost.Visibility = Visibility.Collapsed;
+        shelfParent.Children.Add(_shelfGridHost);
         _shelfSel = new FileSelector(this, ShelfDropZone, ShelfItems, ShelfScroll, ShelfTab, ShelfColor);
         DownloadsTab.Children.Remove(DownloadsScroll);
         DownloadsScroll.Content = null;
@@ -213,7 +219,10 @@ public partial class MainWindow
     {
         private readonly MainWindow _w;
         private readonly FrameworkElement _region, _content;
-        private readonly ScrollViewer _viewer;
+        private ScrollViewer _viewer;
+
+        /// <summary>The list moved to another scroller (the shelf: a row at the top, a grid on a side).</summary>
+        public ScrollViewer Viewer { set => _viewer = value; }
         private readonly Canvas _overlay = new() { IsHitTestVisible = false, ClipToBounds = true };
         private readonly Border _lasso;
         private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(16) };

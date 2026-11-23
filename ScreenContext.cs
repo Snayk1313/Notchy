@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -116,26 +116,47 @@ public static class ScreenContext
 
             // 0) dropped on a text box you can type in (Discord / WhatsApp message box...)?
             //    The point usually hits a text piece inside it, so look a few levels up.
+            CapturedText? FromBox(AutomationElement editBox)
+            {
+                string? sel = null, all = null;
+                if (editBox.TryGetCurrentPattern(TextPattern.Pattern, out object btp))
+                {
+                    try { sel = string.Join("\n", ((TextPattern)btp).GetSelection().Select(r => r.GetText(MaxChars))).Trim(); } catch { }
+                    try { all = ((TextPattern)btp).DocumentRange.GetText(MaxChars).Trim(); } catch { }
+                }
+                if (string.IsNullOrEmpty(all) && editBox.TryGetCurrentPattern(ValuePattern.Pattern, out object bvp))
+                    all = (((ValuePattern)bvp).Current.Value ?? "").Trim();
+                if (!string.IsNullOrEmpty(sel) && sel!.Length > 1 && sel != all)
+                    return new CapturedText(Clip(sel), app, root, true, true, editBox);
+                if (!string.IsNullOrEmpty(all) && all!.Length > 1)
+                    return new CapturedText(Clip(all!), app, root, false, true, editBox);
+                return null;
+            }
             AutomationElement? editBox = el;
+            bool boxFound = false;
             for (int i = 0; editBox != null && i < 6; i++)
             {
                 if (IsEditable(editBox))
                 {
-                    string? sel = null, all = null;
-                    if (editBox.TryGetCurrentPattern(TextPattern.Pattern, out object btp))
-                    {
-                        try { sel = string.Join("\n", ((TextPattern)btp).GetSelection().Select(r => r.GetText(MaxChars))).Trim(); } catch { }
-                        try { all = ((TextPattern)btp).DocumentRange.GetText(MaxChars).Trim(); } catch { }
-                    }
-                    if (string.IsNullOrEmpty(all) && editBox.TryGetCurrentPattern(ValuePattern.Pattern, out object bvp))
-                        all = (((ValuePattern)bvp).Current.Value ?? "").Trim();
-                    if (!string.IsNullOrEmpty(sel) && sel!.Length > 1 && sel != all)
-                        return new CapturedText(Clip(sel), app, root, true, true, editBox);
-                    if (!string.IsNullOrEmpty(all) && all!.Length > 1)
-                        return new CapturedText(Clip(all!), app, root, false, true, editBox);
+                    boxFound = true;
+                    if (FromBox(editBox) is { } t) return t;
                     break;
                 }
                 editBox = walker.GetParent(editBox);
+            }
+            // Chromium apps (Discord...) sometimes answer the point with a piece that doesn't lead up to the box
+            // around it: an editable box of this window whose area holds the point is the one you dropped on
+            if (!boxFound && root != IntPtr.Zero)
+            {
+                var edits = AutomationElement.FromHandle(root).FindAll(TreeScope.Descendants,
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
+                foreach (AutomationElement editable in edits)
+                {
+                    var area = editable.Current.BoundingRectangle;
+                    if (area.IsEmpty || !area.Contains(pt) || !IsEditable(editable)) continue;
+                    if (FromBox(editable) is { } t) return t;
+                    break;
+                }
             }
 
             // 1) selection / paragraph from the nearest element that exposes text

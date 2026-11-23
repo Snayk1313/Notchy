@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -27,6 +27,8 @@ public sealed record Notice(uint Id, string App, string AppId, string Title, str
     public CalType? CalendarType { get; init; }
     /// <summary>The colour of the app that sent it (its icon's), for the card's outline.</summary>
     public System.Windows.Media.Color? Accent { get; init; }
+    /// <summary>Set on Notchy's own cards (a screenshot): not an app's notification, it shows under the island and stays out of the history.</summary>
+    public object? Local { get; init; }
 }
 
 /// <summary>

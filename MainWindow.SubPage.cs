@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
@@ -187,6 +187,7 @@ public partial class MainWindow
             RememberKeepOpenArea();
             AnimateIslandSize(TargetSize(IslandState.Expanded), bigMove: false);
         }
+        FitCalendarToSide();
     }
 
     /// <summary>The open sub-page's content changed size (a list grew): the island follows.</summary>

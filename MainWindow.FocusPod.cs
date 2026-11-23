@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -139,10 +139,12 @@ public partial class MainWindow
         {
             // growing into the island (or shrinking out of it): the eyes glide to where the island keeps them,
             // on its left (16 px in, 17 px wide), so nothing jumps when the island takes over
-            double islandW = CompactWidth(CompactMode.Focus);
+            double islandW = OnSide ? _podMorphSpan : CompactWidth(CompactMode.Focus);
             double w = ClaudePod.ActualWidth > 1 ? ClaudePod.ActualWidth : 70;
-            double u = Math.Clamp((w - 70) / (islandW - 70), 0, 1);
-            pose.X = (16 + 8.5 - islandW / 2) * u;
+            double u = Math.Clamp((w - 70) / Math.Max(1, islandW - 70), 0, 1);
+            // (on a side the island keeps them on its top end instead: up, not left)
+            if (OnSide) pose.Y = FocusEyesFromMiddle() * u;
+            else pose.X = (16 + 8.5 - islandW / 2) * u;
             ApplyPose(_podRig, pose, 1);
             return;
         }
@@ -188,7 +190,7 @@ public partial class MainWindow
         DrawClaudePod(AnimNow);
 
         double s = S.SizeScale;
-        double toX = -(TargetSize(_state).Width * s / 2 + 8 * s + 70 * s / 2);
+        double toX = -(SpanOf(TargetSize(_state)) * s / 2 + 8 * s + 70 * s / 2);
         MorphIslandIntoPod(ClaudePod, PodScale, PodX, _podSlide, CompactWidth(CompactMode.Focus), toX, () =>
         {
             _podMorphing = false;

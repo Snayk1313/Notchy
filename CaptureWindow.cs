@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using Path = System.Windows.Shapes.Path;
@@ -1216,28 +1216,49 @@ public sealed class CaptureWindow : Window
     /// </summary>
     private async Task Fly(BitmapSource picture, Action arrived)
     {
+        // from here on this window only shows the picture going up: no clicks for it
+        IsHitTestVisible = false;
+        System.Windows.Input.Mouse.Capture(null);
         foreach (var e in new UIElement[] { _bar, _barShadow, _tab, _tip, _frame, _size, _hover, _lens, _pop }) e.Visibility = Visibility.Collapsed;
         foreach (var h in _handles) h.Visibility = Visibility.Collapsed;
         _annot.Visibility = Visibility.Collapsed;
+        // The picture flies in a window of its own, see-through and click-through (a layered window: this full-screen one
+        // can't be, WPF won't let it), over the stretch from the picked area to the island. This one goes away as soon as
+        // the dimming is gone, so clicks reach the windows underneath everywhere, even where the picture was taken.
+        var c0 = new Point(_sel.X + _sel.Width / 2, _sel.Y + _sel.Height / 2);
+        var to = new Point(_islandAt.X, _islandAt.Y);
+        var cp = new Point(c0.X + (to.X - c0.X) * 0.2 + 50, to.Y + Math.Max(60, (c0.Y - to.Y) * 0.25));
+        var box = _sel;
+        box.Union(new Rect(to.X - 30, to.Y - 30, 60, 60));
+        box.Union(new Rect(cp.X - 30, cp.Y - 30, 60, 60));
+        box.Inflate(40, 40);
+        var flyCanvas = new Canvas { IsHitTestVisible = false, RenderTransform = new TranslateTransform(-box.X, -box.Y) };
+        var flyWindow = new Window
+        {
+            WindowStyle = WindowStyle.None, AllowsTransparency = true, Background = Brushes.Transparent, Topmost = true, ShowInTaskbar = false,
+            ShowActivated = false, ResizeMode = ResizeMode.NoResize, Left = Left + box.X, Top = Top + box.Y, Width = box.Width, Height = box.Height,
+            Content = flyCanvas, IsHitTestVisible = false, Title = "Notchy"
+        };
+        flyWindow.SourceInitialized += (_, _) => Native.MakeClickThrough(new System.Windows.Interop.WindowInteropHelper(flyWindow).Handle);
+
         var shot = new Image { Source = picture, Width = _sel.Width, Height = _sel.Height, Stretch = Stretch.Fill, RenderTransformOrigin = new Point(0.5, 0.5) };
         RenderOptions.SetBitmapScalingMode(shot, BitmapScalingMode.LowQuality); // (smooth enough while it shrinks, and cheap)
         Place(shot, _sel);
-        _stage.Children.Add(shot);
+        flyCanvas.Children.Add(shot);
         var flash = new Rectangle { Fill = Brushes.White, IsHitTestVisible = false };
         Place(flash, _sel);
-        _stage.Children.Add(flash);
+        flyCanvas.Children.Add(flash);
         flash.BeginAnimation(OpacityProperty, new DoubleAnimation(0.85, 0, TimeSpan.FromMilliseconds(Ms(220))) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
-        _dim.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(Ms(480))) { BeginTime = TimeSpan.FromMilliseconds(Ms(100)) });
+        // (quick: once it's gone this window goes, and the real screen is there, the same as this picture of it)
+        _dim.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(Ms(150))));
 
         // the trail: soft dots of light (a gradient, no effects: cheap to move every frame)
         var glow = new RadialGradientBrush(Colors.White, Color.FromArgb(0, Ice.R, Ice.G, Ice.B)) { GradientStops = { new GradientStop(Color.FromArgb(0xCC, Ice.R, Ice.G, Ice.B), 0.45) } };
         glow.Freeze();
         var ghosts = Enumerable.Range(0, 12).Select(i => new Ellipse { Width = 20 - i, Height = 20 - i, Fill = glow, IsHitTestVisible = false, Opacity = 0 }).ToList();
-        foreach (var g in ghosts) _stage.Children.Add(g);
-
-        var c0 = new Point(_sel.X + _sel.Width / 2, _sel.Y + _sel.Height / 2);
-        var to = new Point(_islandAt.X, _islandAt.Y);
-        var cp = new Point(c0.X + (to.X - c0.X) * 0.2 + 50, to.Y + Math.Max(60, (c0.Y - to.Y) * 0.25));
+        foreach (var g in ghosts) flyCanvas.Children.Add(g);
+        flyWindow.Show();
+        Returning?.Invoke(); // (the island back on top of the picture, which melts into it)
         Point At(double u)
         {
             double k = u < 0.5 ? 4 * u * u * u : 1 - Math.Pow(-2 * u + 2, 3) / 2;
@@ -1254,10 +1275,7 @@ public sealed class CaptureWindow : Window
 
         const double Start = 0.10, Trip = 0.62, Fade = 0.22, GhostLag = 0.022;
         double arrive = Start + Trip, end = arrive + Math.Max(Fade, GhostLag * ghosts.Count) + 0.04;
-        var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
-        SetWindowLong(hwnd, -20, GetWindowLong(hwnd, -20) | 0x80000); // WS_EX_LAYERED: the whole window can fade
-        SetLayeredWindowAttributes(hwnd, 0, 255, 2);
-        bool handedOver = false;
+        bool handedOver = false, gone = false;
         var done = new TaskCompletionSource();
         var clock = Stopwatch.StartNew();
         double speed = Math.Max(AppSettings.Current.SpeedFactor, 0.01);
@@ -1279,13 +1297,17 @@ public sealed class CaptureWindow : Window
                 Canvas.SetTop(ghosts[i], q.Y - ghosts[i].Height / 2);
                 ghosts[i].Opacity = (1 - i / (double)ghosts.Count) * 0.85 * Smooth(0.04, 0.16, ui) * (1 - Smooth(0.86, 1, ui));
             }
+            if (!gone && t >= 0.16)
+            {
+                gone = true;
+                Hide(); // (the dimming is gone: the real screen looks the same as this picture of it)
+            }
             if (!handedOver && t >= arrive)
             {
                 handedOver = true;
                 arrived();
             }
-            if (t >= arrive)
-                SetLayeredWindowAttributes(hwnd, 0, (byte)Math.Round(255 * (1 - Smooth(arrive, arrive + Fade, t))), 2);
+            if (t >= arrive) flyWindow.Opacity = 1 - Smooth(arrive, arrive + Fade, t);
             if (t < end) return;
             CompositionTarget.Rendering -= Frame;
             done.TrySetResult();
@@ -1297,15 +1319,10 @@ public sealed class CaptureWindow : Window
         CompositionTarget.Rendering += Frame;
         await done.Task;
         Hide();
-        SetLayeredWindowAttributes(hwnd, 0, 255, 2);
-        _stage.Children.Remove(shot);
-        _stage.Children.Remove(flash);
-        foreach (var g in ghosts) _stage.Children.Remove(g);
+        flyWindow.Close();
     }
 
     [DllImport("user32.dll")] private static extern int SetWindowLong(IntPtr h, int index, int value);
-    [DllImport("user32.dll")] private static extern bool SetLayeredWindowAttributes(IntPtr h, uint key, byte alpha, uint flags);
-
     /// <summary>Editar on the island's notice: back to the same area and marks.</summary>
     public void Reopen()
     {

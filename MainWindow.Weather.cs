@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -205,7 +205,7 @@ public partial class MainWindow
         // the next days: name, icon, a bar from the low to the high on a shared scale
         double lo = w.Days.Min(d => d.Min), hi = w.Days.Max(d => d.Max), span = Math.Max(1, hi - lo);
         var days = new StackPanel { Margin = new Thickness(4, 6, 4, 0) };
-        foreach (var d in w.Days.Skip(1).Take(3))
+        foreach (var d in w.Days.Skip(1).Take(OnSide ? 4 : 3)) // (standing on a side the island is taller: one more day)
         {
             var row = new Grid { Height = 22 };
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(44) });

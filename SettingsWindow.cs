@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
@@ -33,6 +33,7 @@ public sealed partial class SettingsWindow : Window
     {
         new("general", "", false, Color.FromRgb(0xE6, 0xE6, 0xEE)),
         new("look", "", false, Color.FromRgb(0xA7, 0x8B, 0xFA)),
+        new("place", "", false, Color.FromRgb(0x7E, 0xE0, 0xC8)),
         new("notif", "\uEA8F", false, Color.FromRgb(0xFF, 0x7A, 0x7A)),
         new("sounds", "", false, Color.FromRgb(0xFF, 0xD3, 0x6B)),
         new("music", "", false, Color.FromRgb(0xFF, 0x7E, 0xB6)),
@@ -509,6 +510,7 @@ public sealed partial class SettingsWindow : Window
     private StackPanel BuildPage(string key) => key switch
     {
         "look" => LookPage(),
+        "place" => PlacePage(),
         "notif" => NoticesPage(),
         "calendar" => CalendarPage(),
         "music" => MusicPage(),

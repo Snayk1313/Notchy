@@ -18,7 +18,7 @@ public partial class MainWindow : Window
 {
     private enum IslandState { None, Idle, Compact, Volume, Expanded }
     private enum Tab { Home, Claude, Music, Chat, Focus, Clock, Shelf, Clip, Downloads, News }
-    private enum CompactMode { None, Music, MusicPaused, Claude, ClaudeDone, ClaudeAttention, Focus, FocusDone, Battery, BatteryLow, Update, Transfer, TransferDone, TransferFailed, WhatsNew, Timer, TimerRing, Buds, BudsLow, BudsOff, Notice, CalNotice, Shot }
+    private enum CompactMode { None, Music, MusicPaused, Claude, ClaudeDone, ClaudeAttention, Focus, FocusDone, Battery, BatteryLow, Update, Transfer, TransferDone, TransferFailed, WhatsNew, Timer, TimerRing, Buds, BudsLow, BudsOff, Notice, CalNotice }
 
     private static readonly Color ClaudeColor = Color.FromRgb(0xE8, 0x82, 0x5F);
     private static readonly Color FocusColor = Color.FromRgb(0xB7, 0x9C, 0xFF);
@@ -111,10 +111,12 @@ public partial class MainWindow : Window
         InitUpdates();
         InitCardGlow();
         InitCardTilt();
+        InitArtTilt();
         InitTransfers();
         InitClaudeFace();
         InitShelfFace();
         InitCapture();
+        InitPlaceDrag();
         InitWhatsNew();
         InitFocusTab();
         InitClockTab();
@@ -189,6 +191,13 @@ public partial class MainWindow : Window
 
     private void PositionWindow()
     {
+        if (OnSide)
+        {
+            var wa = SystemParameters.WorkArea;
+            Left = PlaceRight ? wa.Right - Width : wa.Left;
+            Top = SideWindowTop();
+            return;
+        }
         Left = (SystemParameters.PrimaryScreenWidth - Width) / 2;
         Top = 0;
     }
@@ -218,7 +227,8 @@ public partial class MainWindow : Window
         Loc.Language = S.Language;
         IslandScale.ScaleX = IslandScale.ScaleY = S.SizeScale;
 
-        bool floating = S.Style == IslandStyle.Floating;
+        SyncPlace();
+        bool floating = S.Style == IslandStyle.Floating || OnSide; // (on a side the open island floats by the edge)
         _topHidden = floating ? 0 : 30;
         // the scale grows the island from its hidden top: hide 30 px at that scale so the visible part still starts at the screen edge
         Island.Margin = new Thickness(0, floating ? 8 : -_topHidden * S.SizeScale, 0, 0);
@@ -231,6 +241,7 @@ public partial class MainWindow : Window
         DownloadPod.Background = Island.Background;
         PodContent.Margin = new Thickness(0, _topHidden, 0, 0);
         ApplyExtrasSettings();
+        ApplyPlaceLayout(); // (after the blur: the pill takes the island's background)
         if (_nav.Count > 0) ApplyGlowEffects();
 
         if (!S.GameMode && _hiddenForFullscreen)
@@ -252,9 +263,14 @@ public partial class MainWindow : Window
         {
             var s = _state;
             _state = IslandState.None;
-            ApplyState(s, playSound: false);
+            _reapplyingState = true; // (the same island again: it stays on the tab and page it shows)
+            try { ApplyState(s, playSound: false); }
+            finally { _reapplyingState = false; }
         }
     }
+
+    /// <summary>The settings changed and the island's state is laid out again: not an opening (no tab chosen anew).</summary>
+    private bool _reapplyingState;
 
     private void ApplyTexts()
     {
@@ -313,7 +329,6 @@ public partial class MainWindow : Window
         // a notification card stays a card under the mouse (so you can click it), instead of opening the island
         ringing |= _noticeShown != null && _transient == CompactMode.Notice && DateTime.UtcNow < _transientUntil;
         ringing |= CalNoticeHolds;
-        ringing |= ShotNoticeHolds;
         if (_forcedState is { } forced) next = forced;
         else if (!ringing && WheelVolumeHolds) next = IslandState.Volume; // (Shift + wheel on the open island: the bar, for a moment)
         else if (!ringing && _hoverActive && !FullscreenHidesIsland || _clickOpened && !FullscreenHidesIsland || _holdOpenAfterPill || _menu.IsOpen || _devicesMenuOpen?.IsOpen == true || _dragOver || _lassoing || ChatKeepsOpen || ClipKeepsOpen) next = IslandState.Expanded;
@@ -338,12 +353,13 @@ public partial class MainWindow : Window
         if (next != _state) ApplyState(next);
     }
 
-    private Size TargetSize(IslandState state) => state switch
+    /// <summary>The island's size for a state (on a side, minimized: the standing pill's).</summary>
+    private Size TargetSize(IslandState state) => OnSide && PillState(state) ? PillSize(state) : state switch
     {
         IslandState.Idle => new Size(IdleWidth, 30),
         IslandState.Volume => LevelSize(),
-        IslandState.Expanded => new Size(480, _subOpen ? SubPageHeight : TabHeight(_tab)),
-        _ => new Size(CompactWidth(_compactMode), _compactMode == CompactMode.TimerRing ? RingHeight : _compactMode == CompactMode.Notice ? NoticeHeight : _compactMode == CompactMode.CalNotice ? CalNoticeHeight : _compactMode == CompactMode.Shot ? ShotHeight : IsTransferMode(_compactMode) ? TransferHeight : 34)
+        IslandState.Expanded => new Size(480 + (OnSide ? RailWidth : 0), ExpandedHeight(_subOpen ? SubPageHeight : TabHeight(_tab))),
+        _ => new Size(CompactWidth(_compactMode), _compactMode == CompactMode.TimerRing ? RingHeight : _compactMode == CompactMode.Notice ? NoticeHeight : _compactMode == CompactMode.CalNotice ? CalNoticeHeight : IsTransferMode(_compactMode) ? TransferHeight : 34)
     };
 
     private double TabHeight(Tab t) => 34 + 40 + 2 + t switch
@@ -372,7 +388,6 @@ public partial class MainWindow : Window
         CompactMode.BudsOff => BudsOffWidth,
         CompactMode.Notice => NoticeWidth,
         CompactMode.CalNotice => _calWidth,
-        CompactMode.Shot => ShotWidth,
         CompactMode.WhatsNew => WhatsNewWidth(),
         CompactMode.Transfer or CompactMode.TransferDone or CompactMode.TransferFailed => TransferWidth,
         _ => 320
@@ -422,7 +437,7 @@ public partial class MainWindow : Window
             _podOpenRequest = false;
             _dlOpenRequest = false;
             _returnTab = null;
-            if (!backToPage)
+            if (!backToPage && !_reapplyingState)
             {
                 if (!_dragOver) SelectTab(target, animate: false); // (closes the page left open)
                 else CloseSubPage(animate: false);
@@ -438,12 +453,12 @@ public partial class MainWindow : Window
 
         AnimateIslandSize(TargetSize(state), expanding || prev == IslandState.Expanded);
 
+        bool pill = OnSide && PillState(state); // (on a side, minimized: the standing pill, just its eyes for now)
         Fade(IdlePanel, state == IslandState.Idle);
-        Fade(CompactPanel, state == IslandState.Compact && !IsTransferMode(_compactMode) && !IsClaudeMode(_compactMode) && _compactMode is not (CompactMode.WhatsNew or CompactMode.TimerRing) && !IsBudsMode(_compactMode) && _compactMode is not (CompactMode.Notice or CompactMode.CalNotice or CompactMode.Shot));
+        Fade(CompactPanel, state == IslandState.Compact && !IsTransferMode(_compactMode) && !IsClaudeMode(_compactMode) && _compactMode is not (CompactMode.WhatsNew or CompactMode.TimerRing) && !IsBudsMode(_compactMode) && _compactMode is not (CompactMode.Notice or CompactMode.CalNotice));
         Fade(_budsPanel, state == IslandState.Compact && IsBudsMode(_compactMode));
         Fade(_noticePanel, state == IslandState.Compact && _compactMode == CompactMode.Notice);
         Fade(_calPanel, state == IslandState.Compact && _compactMode == CompactMode.CalNotice);
-        Fade(_shotPanel, state == IslandState.Compact && _compactMode == CompactMode.Shot);
         Fade(_ringPanel, state == IslandState.Compact && _compactMode == CompactMode.TimerRing);
         Fade(WhatsNewPanel, state == IslandState.Compact && _compactMode == CompactMode.WhatsNew);
         Fade(ClaudePanel, state == IslandState.Compact && IsClaudeMode(_compactMode));
@@ -475,6 +490,18 @@ public partial class MainWindow : Window
 
     private void AnimateIslandSize(Size size, bool bigMove)
     {
+        // on a side, while the pill stands in for it, the island shrinks into the pill's shape (and opens out of it)
+        if (AsPill)
+        {
+            size = PillSize(_state);
+            _pillAsked = size;
+            // what a state change measures can be a step behind (texts and pieces still switching): check again once settled
+            Dispatcher.InvokeAsync(() =>
+            {
+                if (AsPill && _pillAsked is Size asked && PillSize(_state) is var now && (Math.Abs(now.Width - asked.Width) > 1 || Math.Abs(now.Height - asked.Height) > 1))
+                    AnimateIslandSize(now, bigMove: false);
+            }, System.Windows.Threading.DispatcherPriority.Background);
+        }
         // the little overshoot only when opening; closing settles without bouncing (a bounce makes
         // a wide compact island - long lyric line - wobble sideways before it rests)
         bool growing = size.Height + _topHidden > Island.ActualHeight + 0.5;
@@ -486,7 +513,7 @@ public partial class MainWindow : Window
         if (_podEntering)
         {
             // the island is hiding while a bubble moves out of its place: it comes down when that's done
-            Island.BeginAnimation(WidthProperty, new DoubleAnimation(size.Width, TimeSpan.Zero));
+            Island.BeginAnimation(SpanProperty, new DoubleAnimation(SpanOf(size), TimeSpan.Zero));
         }
         else
         {
@@ -505,11 +532,14 @@ public partial class MainWindow : Window
             _ringPanel.Width = size.Width;
             _budsPanel.Width = size.Width;
             _noticePanel.Width = size.Width;
+            if (AsPill) CompactPanel.Height = TransferPanel.Height = ClaudePanel.Height = size.Height; // (standing)
         }
         if (_state == IslandState.Volume)
         {
-            VolumePanel.Width = size.Width;
-            VolumePanel.Height = size.Height;
+            // (on a side the bar is turned to stand: its own width runs along the edge, it keeps its size when the
+            // outputs list opens beside it)
+            VolumePanel.Width = OnSide ? LevelPillHeight : size.Width;
+            VolumePanel.Height = OnSide ? SidePillWidth : size.Height;
         }
     }
 
@@ -527,6 +557,14 @@ public partial class MainWindow : Window
     {
         double w = Island.ActualWidth, h = Island.ActualHeight;
         double radius = Math.Clamp((h - _topHidden) / 2, 8, 26);
+        if (OnSide)
+        {
+            radius = Math.Clamp(Math.Min(w, h) / 2, 8, 26); // (a standing pill: half its width)
+            // glued to the edge: square corners on that side (the clip runs past it)
+            Island.CornerRadius = PlaceRight ? new CornerRadius(radius, 0, 0, radius) : new CornerRadius(0, radius, radius, 0);
+            IslandContent.Clip = new RectangleGeometry(new Rect(PlaceRight ? 0 : -radius, 0, w + radius, h), radius, radius);
+            return;
+        }
         Island.CornerRadius = new CornerRadius(radius);
         IslandContent.Clip = new RectangleGeometry(new Rect(0, 0, w, h), radius, radius);
     }
@@ -592,6 +630,7 @@ public partial class MainWindow : Window
         UpdateBudsFrame();
         UpdateNoticesFrame();
         UpdateCalendarFrame();
+        CheckClickOutside();
         var pos = _media.Position;
 
         if (_state == IslandState.Expanded)
@@ -618,6 +657,7 @@ public partial class MainWindow : Window
 
         UpdateLyrics(pos);
         UpdateMusicAccentFrame();
+        SideFrame();
 
         if (_state == IslandState.Expanded) UpdateFace(MusicPeak());
         else if (_compactFaceOn) UpdateCompactFace();
@@ -642,7 +682,6 @@ public partial class MainWindow : Window
         UpdateTransferEyes();
         UpdateEyeTrip();
         UpdateShelfFace();
-        UpdateShotNotice();
         UpdateClipLight();
         UpdateNavActivity();
         UpdateFocusFrame();
@@ -652,6 +691,8 @@ public partial class MainWindow : Window
 
         if (_slowTick && _tick % 6 == 0) PollVolume();
         if (_slowTick && _tick % 8 == 0) CheckFullscreen(); // ~4 times a second: a game going full screen hides the island right away
+        if (_slowTick) CheckPlaceRules(); // (an app with a rule in Posição moves it: at once)
+        if (S.PlaceRules.Count > 0 || _placeMoving) PlaceLog();
         if (_slowTick && _tick % 60 == 0) UpdateClock();
         if (_slowTick && _tick % 180 == 0)
         {
@@ -797,10 +838,24 @@ public partial class MainWindow : Window
         foreach (var (t, (button, label)) in _nav)
         {
             bool sel = t == tab;
-            label.Visibility = sel ? Visibility.Visible : Visibility.Collapsed;
+            label.Visibility = sel && !OnSide ? Visibility.Visible : Visibility.Collapsed; // (the column of tabs on a side: icons only)
             button.Foreground = sel ? new SolidColorBrush(TabColor(t)) : (Brush)new SolidColorBrush(Color.FromArgb(0x8C, 255, 255, 255));
         }
 
+        // the way it slides: sideways at the top; standing on a side, up and down the column of tabs (further down the
+        // column: the new page comes from below)
+        int Rank(Tab t)
+        {
+            int i = 0;
+            foreach (var k in _nav.Keys)
+            {
+                if (k == t) return i;
+                i++;
+            }
+            return (int)t;
+        }
+        double slideDir = (OnSide ? Rank(tab) > Rank(old) : (int)tab > (int)old) ? 1 : -1;
+        var slideAxis = OnSide ? TranslateTransform.YProperty : TranslateTransform.XProperty;
         foreach (Tab t in Enum.GetValues(typeof(Tab)))
         {
             var el = TabElement(t);
@@ -810,11 +865,11 @@ public partial class MainWindow : Window
                 el.IsHitTestVisible = true;
                 if (animate && old != tab)
                 {
-                    double dir = (int)tab > (int)old ? 1 : -1;
+                    double dir = slideDir;
                     var tt = new TranslateTransform();
                     el.RenderTransform = tt;
                     var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
-                    tt.BeginAnimation(TranslateTransform.XProperty,
+                    tt.BeginAnimation(slideAxis,
                         new DoubleAnimation(28 * dir, 0, TimeSpan.FromMilliseconds(Dur(320))) { EasingFunction = ease });
                     el.BeginAnimation(OpacityProperty,
                         new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(Dur(260))) { EasingFunction = ease });
@@ -829,13 +884,13 @@ public partial class MainWindow : Window
             else if (animate && t == old && _state == IslandState.Expanded && el.Visibility == Visibility.Visible && S.SpeedFactor > 0)
             {
                 // the tab you leave goes out to the other side (like the pages inside the island), then it's put away
-                double dir = (int)tab > (int)old ? 1 : -1;
+                double dir = slideDir;
                 var leaving = t;
                 var away = new TranslateTransform();
                 el.RenderTransform = away;
                 el.IsHitTestVisible = false;
                 var time = TimeSpan.FromMilliseconds(Dur(140)); // (short: two tabs on top of each other is a blur)
-                away.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(0, -28 * dir, time) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+                away.BeginAnimation(slideAxis, new DoubleAnimation(0, -28 * dir, time) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
                 var fade = new DoubleAnimation(0, time);
                 fade.Completed += (_, _) =>
                 {
@@ -891,6 +946,22 @@ public partial class MainWindow : Window
         var p = nav.button.TranslatePoint(new Point(0, 0), NavBar);
         double x = p.X, w = nav.button.ActualWidth;
         if (w <= 0) return;
+        if (OnSide)
+        {
+            // the column of tabs: the highlight goes up and down, a round-ish pill around the icon
+            NavPill.Background = new SolidColorBrush(Color.FromArgb(0x2E, TabColor(_tab).R, TabColor(_tab).G, TabColor(_tab).B));
+            double h = nav.button.ActualHeight + 8, y = p.Y - 4, size = Math.Min(w, 34); // (a little taller than the icon: room around it)
+            NavPill.BeginAnimation(WidthProperty, null);
+            NavPill.Width = size;
+            NavPill.Height = h;
+            NavPillX.BeginAnimation(TranslateTransform.XProperty, null);
+            NavPillX.X = 0;
+            var to = new DoubleAnimation(y, TimeSpan.FromMilliseconds(Dur(animate ? 380 : 0))) { EasingFunction = new BackEase { Amplitude = 0.3, EasingMode = EasingMode.EaseOut } };
+            NavPillX.BeginAnimation(TranslateTransform.YProperty, to);
+            return;
+        }
+        NavPillX.BeginAnimation(TranslateTransform.YProperty, null);
+        NavPillX.Y = 0;
         NavPill.Background = new SolidColorBrush(Color.FromArgb(0x2E, TabColor(_tab).R, TabColor(_tab).G, TabColor(_tab).B));
         if (!animate)
         {
@@ -932,10 +1003,11 @@ public partial class MainWindow : Window
             Tab.Downloads => (Loc.T("downloads.head.a"), Loc.T("downloads.head.b")),
             Tab.Chat => ("Notchy", " Chat"),
             Tab.News => (Loc.T("news.title"), " " + WhatsNew.Version),
+            Tab.Clock => ("", Loc.T("tab.clock")), // (on a side: a plain title, the Timer and the Alarmes are both on the page)
             _ => ("Notchy", "")
         };
-        // Relógio: "Timer · Alarmes" in place of the title (MainWindow.Clock.cs)
-        bool clock = _tab == Tab.Clock;
+        // Relógio at the top: "Timer · Alarmes" in place of the title, it switches between them (MainWindow.Clock.cs)
+        bool clock = _tab == Tab.Clock && !OnSide;
         ((FrameworkElement)HeaderA.Parent).Visibility = clock ? Visibility.Collapsed : Visibility.Visible;
         _clockHeader.Visibility = clock ? Visibility.Visible : Visibility.Collapsed;
         if (clock) UpdateClockHeader();
@@ -1039,7 +1111,7 @@ public partial class MainWindow : Window
     {
         var m = _compactMode;
         // Claude / download alone have their own panels: leave the generic one as it was while it fades out
-        if (IsClaudeMode(m) || IsTransferMode(m) || m is CompactMode.WhatsNew or CompactMode.TimerRing or CompactMode.Notice or CompactMode.CalNotice or CompactMode.Shot || IsBudsMode(m))
+        if (IsClaudeMode(m) || IsTransferMode(m) || m is CompactMode.WhatsNew or CompactMode.TimerRing or CompactMode.Notice or CompactMode.CalNotice || IsBudsMode(m))
         {
             if (IsTransferMode(m)) UpdateTransferPanel();
             ShowCompactFace(false);
@@ -1157,6 +1229,14 @@ public partial class MainWindow : Window
 
     private void FitCompactText()
     {
+        if (OnSide)
+        {
+            // standing, the text wraps instead of sliding: the pill just takes its new height
+            if (CompactText.RenderTransform is TranslateTransform st) { st.BeginAnimation(TranslateTransform.XProperty, null); st.X = 0; }
+            CompactTextHost.HorizontalAlignment = HorizontalAlignment.Center;
+            if (_state == IslandState.Compact) AnimateIslandSize(TargetSize(IslandState.Compact), bigMove: false);
+            return;
+        }
         double textW = MeasureText(CompactText, CompactText.Text);
         // everything around the text in the music layout: margins, cover art, visualizer
         double musicChrome = 16 + 22 + 20 + 28 + 14 + 10 + CompactAlarmExtra;
@@ -1555,8 +1635,9 @@ public partial class MainWindow : Window
                     TextWrapping = TextWrapping.Wrap
                 });
             }
-            foreach (var job in _claude.Recent.GetRange(0, Math.Min(3, _claude.Recent.Count)))
+            foreach (var job in _claude.Recent.GetRange(0, Math.Min(OnSide ? 7 : 3, _claude.Recent.Count))) // (standing: room for more)
                 ClaudeRecentList.Children.Add(RecentRow(job));
+            UpdateClaudeWeek();
             return;
         }
 
@@ -1879,6 +1960,7 @@ public partial class MainWindow : Window
 
     private void Island_MouseEnter(object sender, MouseEventArgs e)
     {
+        if (_placeDragging) return; // (being carried: it doesn't open)
         if (DateTime.UtcNow < _ignoreHoverUntil) return; // a notification was just dismissed right here
         if (_holdOpenAfterPill && ReferenceEquals(sender, Island))
         {
@@ -1973,6 +2055,10 @@ public partial class MainWindow : Window
         }
     }
 
+#if DEBUG
+    private bool _testCursorOverIsland; // (tests: as if the mouse were on the island)
+#endif
+
     private void Collapse()
     {
         _holdOpenAfterPill = false;
@@ -2044,6 +2130,9 @@ public partial class MainWindow : Window
     /// <summary>True if the mouse cursor is really over the visible island right now.</summary>
     private bool CursorOverIsland()
     {
+#if DEBUG
+        if (_testCursorOverIsland) return true;
+#endif
         try
         {
             Native.GetCursorPos(out var p);
@@ -2077,10 +2166,10 @@ public partial class MainWindow : Window
 
 #if DEBUG
     /// <summary>Test: after a short wait, saves a picture of the whole window (on a purple backdrop) as &lt;folder&gt;/&lt;name&gt;.png.</summary>
-    private async Task ShotAsync(string folder, string name, int wait)
+    private async Task ShotAsync(string folder, string name, int wait, FrameworkElement? root = null)
     {
         await Task.Delay(wait);
-        var root = (FrameworkElement)Content;
+        root ??= (FrameworkElement)Content;
         var picture = new System.Windows.Media.Imaging.RenderTargetBitmap((int)root.ActualWidth * 2, (int)root.ActualHeight * 2, 192, 192, PixelFormats.Pbgra32);
         var back = new DrawingVisual();
         using (var dc = back.RenderOpen()) dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(0x5B, 0x2A, 0x86)), null, new Rect(0, 0, root.ActualWidth, root.ActualHeight));
@@ -2222,6 +2311,1528 @@ public partial class MainWindow : Window
         System.IO.Directory.CreateDirectory(folder);
         await Task.Delay(2500);
         // only the music bars' hover (quick): the lighter stretch and the label, on progress and volume
+        // the alarm cards with the red bin showing (as with the mouse on a card): right, left and top, three sizes
+        if (Environment.GetEnvironmentVariable("NOTCHY_ALARMBINTEST") == "1")
+        {
+            var dpiS = VisualTreeHelper.GetDpi(this);
+            var wa = SystemParameters.WorkArea;
+            bool wasAlarms = S.ClockOnAlarms;
+            await Task.Delay(6000);
+            _media.Fake("", "", false);
+            // a made-up alarm for the cards (switched off, so it never rings; removed at the end)
+            var testAlarm = new Alarm { Hour = 7, Minute = 0, Days = 0b0011111, Name = "Teste", Enabled = false };
+            _clock.SaveAlarm(testAlarm);
+            foreach (var size in new[] { IslandSize.Compact, IslandSize.Normal, IslandSize.Large })
+                foreach (var place in new[] { IslandPlace.Right, IslandPlace.Left, IslandPlace.Top })
+                {
+                    S.Size = size;
+                    S.Place = place;
+                    ApplySettings();
+                    await Task.Delay(1800);
+                    _forcedState = IslandState.Expanded;
+                    UpdateState();
+                    SelectTab(Tab.Clock, animate: false);
+                    if (place == IslandPlace.Top) ShowClockPage(alarms: true);
+                    await Task.Delay(900);
+                    // every bin out, as if the mouse were on its card
+                    void Bins(DependencyObject d)
+                    {
+                        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(d); i++)
+                        {
+                            var c = VisualTreeHelper.GetChild(d, i);
+                            if (c is Border b && b.ToolTip as string == Loc.T("clock.delete") && b.Width == 22)
+                            {
+                                b.BeginAnimation(OpacityProperty, null);
+                                b.Opacity = 1;
+                                if (b.RenderTransform is ScaleTransform st) { st.BeginAnimation(ScaleTransform.ScaleXProperty, null); st.BeginAnimation(ScaleTransform.ScaleYProperty, null); st.ScaleX = st.ScaleY = 1; }
+                                b.Background = new SolidColorBrush(Color.FromArgb(0x40, 0xFF, 0x6B, 0x6B));
+                            }
+                            Bins(c);
+                        }
+                    }
+                    Bins(ClockTab);
+                    await Task.Delay(200);
+                    {
+                        // how much each part needs (unconstrained) vs what it gets
+                        double Need(FrameworkElement f) { var h0 = f.Height; f.Height = double.NaN; f.Measure(new Size(f.ActualWidth, double.PositiveInfinity)); double n = f.DesiredSize.Height; f.Height = h0; f.UpdateLayout(); return n; }
+                        System.IO.File.AppendAllText(System.IO.Path.Combine(folder, "medidas.txt"),
+                            $"{size} {place}: timer precisa {Need(_timerPage):0.0} tem {_timerPage.ActualHeight:0.0} · alarmes precisa {Need(_alarmPage):0.0} tem {_alarmPage.ActualHeight:0.0} · página {SidePageHeight - SidePageBottom:0.0}{Environment.NewLine}");
+                    }
+                    var grab = place == IslandPlace.Top
+                        ? new System.Drawing.Rectangle((int)((wa.Left + wa.Width / 2 - 320) * dpiS.DpiScaleX), (int)(wa.Top * dpiS.DpiScaleY), (int)(640 * dpiS.DpiScaleX), (int)(400 * dpiS.DpiScaleY))
+                        : new System.Drawing.Rectangle((int)((place == IslandPlace.Left ? wa.Left : wa.Right - 640) * dpiS.DpiScaleX), (int)((wa.Top + wa.Height * SideCenterAt - 240) * dpiS.DpiScaleY), (int)(640 * dpiS.DpiScaleX), (int)(480 * dpiS.DpiScaleY));
+                    using (var bmp = new System.Drawing.Bitmap(grab.Width, grab.Height))
+                    {
+                        using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(grab.Left, grab.Top, 0, 0, bmp.Size);
+                        bmp.Save(System.IO.Path.Combine(folder, $"{size}_{place}.png"));
+                    }
+                    _forcedState = null;
+                    UpdateState();
+                    await Task.Delay(700);
+                }
+            _clock.RemoveAlarm(testAlarm);
+            S.Size = IslandSize.Large;
+            ShowClockPage(alarms: wasAlarms);
+            Application.Current.Shutdown();
+            return;
+        }
+        // the alarm editor open (Cancelar / Salvar must fit): right, left and top, in the three island sizes
+        if (Environment.GetEnvironmentVariable("NOTCHY_ALARMEDITTEST") == "1")
+        {
+            var dpiS = VisualTreeHelper.GetDpi(this);
+            var wa = SystemParameters.WorkArea;
+            await Task.Delay(6000);
+            _media.Fake("", "", false);
+            var placesToTest = Environment.GetEnvironmentVariable("NOTCHY_ALARMEDITTOP") == "1" ? new[] { IslandPlace.Top } : new[] { IslandPlace.Right, IslandPlace.Left, IslandPlace.Top };
+            foreach (var size in new[] { IslandSize.Compact, IslandSize.Normal, IslandSize.Large })
+                foreach (var place in placesToTest)
+                {
+                    S.Size = size;
+                    S.Place = place;
+                    ApplySettings();
+                    await Task.Delay(1800);
+                    _forcedState = IslandState.Expanded;
+                    UpdateState();
+                    SelectTab(Tab.Clock, animate: false);
+                    await Task.Delay(700);
+                    if (place == IslandPlace.Top) { ShowClockPage(alarms: true); await Task.Delay(600); }
+                    OpenAlarmEditor(null);
+                    await Task.Delay(900);
+                    var grab = place == IslandPlace.Top
+                        ? new System.Drawing.Rectangle((int)((wa.Left + wa.Width / 2 - 320) * dpiS.DpiScaleX), (int)(wa.Top * dpiS.DpiScaleY), (int)(640 * dpiS.DpiScaleX), (int)(400 * dpiS.DpiScaleY))
+                        : new System.Drawing.Rectangle((int)((place == IslandPlace.Left ? wa.Left : wa.Right - 640) * dpiS.DpiScaleX), (int)((wa.Top + wa.Height * SideCenterAt - 240) * dpiS.DpiScaleY), (int)(640 * dpiS.DpiScaleX), (int)(480 * dpiS.DpiScaleY));
+                    using (var bmp = new System.Drawing.Bitmap(grab.Width, grab.Height))
+                    {
+                        using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(grab.Left, grab.Top, 0, 0, bmp.Size);
+                        bmp.Save(System.IO.Path.Combine(folder, $"{size}_{place}.png"));
+                    }
+                    CloseAlarmEditor();
+                    _forcedState = null;
+                    UpdateState();
+                    await Task.Delay(700);
+                }
+            S.Size = IslandSize.Large;
+            ShowClockPage(alarms: false); // (back to the Timer page: the test doesn't change which page the Relógio remembers)
+            Application.Current.Shutdown();
+            return;
+        }
+        // is the island centred? every state, at the top (left / right gaps) and on both sides (top / bottom gaps),
+        // also in the middle of its animations (positions only, nothing filmed)
+        if (Environment.GetEnvironmentVariable("NOTCHY_SIDECENTERTEST") == "1")
+        {
+            var log = new System.Text.StringBuilder();
+            var wa = SystemParameters.WorkArea;
+            double worst = 0;
+            S.ClaudeShowInCompact = true;
+            await Task.Delay(6000);
+            void Note(string what)
+            {
+                var r = Island.TransformToAncestor(this).TransformBounds(new Rect(0, 0, Island.ActualWidth, Island.ActualHeight));
+                double l = Left + r.Left, t = Top + r.Top, rr = Left + r.Right, b = Top + r.Bottom;
+                double off = OnSide ? (t - wa.Top) - (wa.Bottom - b) : (l - wa.Left) - (wa.Right - rr);
+                worst = Math.Max(worst, Math.Abs(off));
+                log.AppendLine(OnSide
+                    ? $"{_place} {what}: {_state}/{_compactMode} acima={t - wa.Top:0.0} abaixo={wa.Bottom - b:0.0} diferença={off:0.0}"
+                    : $"{_place} {what}: {_state}/{_compactMode} esquerda={l - wa.Left:0.0} direita={wa.Right - rr:0.0} diferença={off:0.0}");
+            }
+            async Task Watch(string what, int ms) { for (int t = 0; t < ms; t += 40) { await Task.Delay(40); Note($"{what} {t}ms"); } }
+            foreach (var place in new[] { IslandPlace.Right, IslandPlace.Left, IslandPlace.Top })
+            {
+                S.Place = place;
+                ApplySettings();
+                await Task.Delay(2200);
+                Note("parada");
+                _media.Fake("Waking up", "Teste", true); await Watch("música", 700);
+                _transfers.Fake = new TransferInfo(TransferKind.Download, "filme.mp4", 1, 0.3, 300_000_000, 1_000_000_000, 8_000_000, TimeSpan.FromSeconds(70)); PollTransfers();
+                await Watch("música+download", 900);
+                _claude.FakeWorking(true); UpdateState(); await Watch("música+download+claude", 900);
+                ShowVolumeLevel(0.5, false); _volumeOsdUntil = DateTime.UtcNow.AddSeconds(1.5); UpdateState(); await Watch("volume", 1800);
+                OnNotice(new Notice(920001, "WhatsApp", "", "Mãe", "Oi", DateTime.Now, null, false)); await Watch("aviso", 700); EndNotice();
+                _forcedState = IslandState.Expanded; UpdateState(); await Watch("abrindo", 700);
+                _forcedState = null; UpdateState(); await Watch("fechando", 700);
+                _claude.FakeWorking(false); _media.Fake("", "", false); _transfers.Fake = null; PollTransfers(); UpdateState();
+                await Watch("voltando a parada", 1500);
+            }
+            log.Insert(0, $"maior diferença entre os dois lados: {worst:0.0} px{Environment.NewLine}");
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "center-log.txt"), log.ToString());
+            Application.Current.Shutdown();
+            return;
+        }
+        // the volume / brightness bar on a side (the top's bar, standing), on the right and on the left
+        if (Environment.GetEnvironmentVariable("NOTCHY_SIDEVOLTEST") == "1")
+        {
+            var dpiS = VisualTreeHelper.GetDpi(this);
+            var wa = SystemParameters.WorkArea;
+            await Task.Delay(6000);
+            _media.Fake("", "", false);
+            foreach (var place in new[] { IslandPlace.Right, IslandPlace.Left })
+            {
+                S.Place = place;
+                ApplySettings();
+                await Task.Delay(2000);
+                var grab = new System.Drawing.Rectangle((int)((place == IslandPlace.Left ? wa.Left : wa.Right - 120) * dpiS.DpiScaleX), (int)((wa.Top + wa.Height * SideCenterAt - 120) * dpiS.DpiScaleY), (int)(120 * dpiS.DpiScaleX), (int)(240 * dpiS.DpiScaleY));
+                async Task Grab(string name, int wait)
+                {
+                    await Task.Delay(wait);
+                    using var bmp = new System.Drawing.Bitmap(grab.Width, grab.Height);
+                    using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(grab.Left, grab.Top, 0, 0, bmp.Size);
+                    bmp.Save(System.IO.Path.Combine(folder, $"{place}_{name}.png"));
+                }
+                void Level(Action show) { show(); _volumeOsdUntil = DateTime.UtcNow.AddSeconds(2.5); UpdateState(); }
+                Level(() => ShowVolumeLevel(0.3, false));
+                await Grab("1_chegando", 150);
+                await Grab("2_volume30", 600);
+                Level(() => ShowVolumeLevel(0.85, false));
+                await Grab("3_volume85", 600);
+                // closing: the eyes slide back to the empty island's place (filmed)
+                _volumeOsdUntil = DateTime.UtcNow;
+                UpdateState();
+                for (int f = 0; f < 14; f++) await Grab($"3b_fechando_{f:00}", 35);
+                await Task.Delay(800);
+                Level(() => ShowVolumeLevel(0.5, true));
+                await Grab("4_mudo", 600);
+                await Task.Delay(2600);
+                ShowBrightness(0.9);
+                await Grab("5_brilho90", 700);
+                await Task.Delay(2600);
+            }
+            Application.Current.Shutdown();
+            return;
+        }
+        // how long finding an app's notification activator takes (nothing is opened): the first time, and again
+        if (Environment.GetEnvironmentVariable("NOTCHY_ACTIVATORTEST") == "1")
+        {
+            var log = new System.Text.StringBuilder();
+            await Task.Delay(17000); // (after the shortcuts were read ahead, 15 s after start)
+            var ids = _notices.History.Select(h => (h.App, h.AppId)).Distinct().Take(8).ToList();
+            if (!ids.Any(i => i.App.Contains("Discord", StringComparison.OrdinalIgnoreCase))) ids.Insert(0, ("Discord", "com.squirrel.Discord.Discord"));
+            foreach (var round in new[] { "1ª vez", "2ª vez" })
+                foreach (var (app, id) in ids)
+                {
+                    var clock = System.Diagnostics.Stopwatch.StartNew();
+                    var g = await Task.Run(() => NotificationOpener.ActivatorFor(id));
+                    log.AppendLine($"{round} · {app} ({id}): {clock.ElapsedMilliseconds} ms · ativador {(g == null ? "não achado" : "achado")}");
+                }
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "log.txt"), log.ToString());
+            Application.Current.Shutdown();
+            return;
+        }
+        // clicking a notification in the open island: it closes once and stays closed (old way vs now)
+        if (Environment.GetEnvironmentVariable("NOTCHY_NOTICECLICKTEST") == "1")
+        {
+            var log = new System.Text.StringBuilder();
+            await Task.Delay(5000);
+            var (fgBefore, _) = Native.Foreground();
+            foreach (bool old in new[] { true, false })
+            {
+                log.AppendLine($"---- {(old ? "como era antes" : "com a correção")}");
+                _testCursorOverIsland = true;
+                _hoverActive = _hoverRequested = true;
+                UpdateState();
+                await Task.Delay(1200);
+                var n = new Notice(1, "Teste", NotificationService.TrayAppPrefix + "notchy-teste", "Mãe", "Oi", DateTime.Now, null, false);
+                OpenNoticeApp(n);
+                if (old) _ignoreHoverUntil = DateTime.MinValue; // (as before: nothing kept it closed)
+                await Task.Delay(150);
+                OnIslandDeactivated(); // the app comes to the front: Notchy is deactivated (as Windows does it after a real click)
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                string last = "";
+                while (clock.ElapsedMilliseconds < 1500)
+                {
+                    string now = _state.ToString();
+                    if (now != last) log.AppendLine($"{clock.ElapsedMilliseconds,5} ms  ilha {now}");
+                    last = now;
+                    await Task.Delay(20);
+                }
+                _testCursorOverIsland = false;
+                _hoverActive = _hoverRequested = _clickOpened = false;
+                UpdateState();
+                await Task.Delay(1500);
+            }
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "log.txt"), log.ToString());
+            Application.Current.Shutdown();
+            return;
+        }
+        // the cover under the mouse by its size on screen: grown, its grown part still counts as on it
+        if (Environment.GetEnvironmentVariable("NOTCHY_ARTHITTEST") == "1")
+        {
+            var log = new System.Text.StringBuilder();
+            await Task.Delay(6000);
+            var place0 = S.Place;
+            bool real = _media.HasSession && !string.IsNullOrEmpty(_media.Title);
+            if (!real) _media.Fake("Waking up", "Teste", true);
+            foreach (var place in new[] { IslandPlace.Top, IslandPlace.Right })
+            {
+                S.Place = place;
+                ApplySettings();
+                await Task.Delay(1600);
+                _forcedState = IslandState.Expanded;
+                UpdateState();
+                SelectTab(Tab.Music, false);
+                await Task.Delay(900);
+                var host = _artTilt!.Button;
+                double w = host.ActualWidth, h = host.ActualHeight, g = 1 + ArtGrow;
+                async Task At(string what, double x, double y)
+                {
+                    ArtMouse(new Point(x, y));
+                    await Task.Delay(500);
+                    log.AppendLine($"{place} · {what} ({x:0},{y:0}) de {w:0}x{h:0}: {(_artTilt.TargetHover > 0 ? "crescida" : "normal")} · plano 3D {(_artTilt.View != null ? "sim" : "não")}");
+                }
+                // what the mouse would hit at points of the grown cover: the page (MusicTab) or only the island behind it
+                foreach (var (name, fx, fy) in new[] { ("meio", 0.5, 0.5), ("direita", 1.25, 0.5), ("embaixo", 0.5, 1.25), ("canto de baixo à direita", 1.3, 1.3) })
+                {
+                    var pt = host.TranslatePoint(new Point(w * fx, h * fy), Island);
+                    var hit = Island.InputHitTest(pt) as DependencyObject;
+                    bool inPage = false;
+                    for (var d = hit; d != null; d = VisualTreeHelper.GetParent(d)) if (d == MusicTab) { inPage = true; break; }
+                    log.AppendLine($"{place} · ponto {name}: atinge {(hit as FrameworkElement)?.GetType().Name ?? hit?.GetType().Name ?? "nada"} · {(inPage ? "dentro da página" : "só a ilha (a página não sente o mouse ali)")}");
+                }
+                await At("dentro da capa", w * 0.5, h * 0.5);
+                await At("parte crescida, fora do tamanho original", w * 1.2, h * 1.2);
+                await At("canto da parte crescida", w * g - 2, h * g - 2);
+                await At("fora da capa crescida", w * g + 10, h * 0.5);
+                await At("volta para a parte crescida (já encolhida)", w * 1.2, h * 1.2);
+                ArtMouse(null);
+                _forcedState = null;
+                UpdateState();
+                await Task.Delay(700);
+            }
+            if (!real) _media.Fake("", "", false);
+            S.Place = place0;
+            ApplySettings();
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "log.txt"), log.ToString());
+            await Task.Delay(1200);
+            Application.Current.Shutdown();
+            return;
+        }
+        // the music's cover under the mouse (made up: no real mouse): grown, tilted, the app's icon in its corner
+        if (Environment.GetEnvironmentVariable("NOTCHY_ARTTILTTEST") == "1")
+        {
+            await Task.Delay(6000);
+            var place0 = S.Place;
+            bool real = _media.HasSession && !string.IsNullOrEmpty(_media.Title);
+            if (!real) _media.Fake("Waking up", "Teste", true);
+            foreach (var place in new[] { IslandPlace.Top, IslandPlace.Right, IslandPlace.Left })
+            {
+                S.Place = place;
+                ApplySettings();
+                await Task.Delay(1600);
+                _forcedState = IslandState.Expanded;
+                UpdateState();
+                SelectTab(Tab.Music, false);
+                await Task.Delay(900);
+                async Task Grab(string name)
+                {
+                    await Task.Delay(700);
+                    var tl = Island.PointToScreen(new Point(0, 0));
+                    var br = Island.PointToScreen(new Point(Island.ActualWidth, Island.ActualHeight));
+                    var r = new System.Drawing.Rectangle((int)tl.X - 8, (int)tl.Y - 8, (int)(br.X - tl.X) + 16, (int)(br.Y - tl.Y) + 16);
+                    using var bmp = new System.Drawing.Bitmap(r.Width, r.Height);
+                    using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(r.Left, r.Top, 0, 0, bmp.Size);
+                    bmp.Save(System.IO.Path.Combine(folder, name + ".png"));
+                }
+                await Grab($"{place}_1_parada");
+                UpdateArtBadge();
+                _artTilt!.TargetHover = 1;
+                _artTilt.TargetX = 0.6;
+                _artTilt.TargetY = -0.5;
+                Enter3D(_artTilt);
+                StartTilt();
+                await Grab($"{place}_2_mouse_em_cima");
+                System.IO.File.AppendAllText(System.IO.Path.Combine(folder, "log.txt"),
+                    $"{place}: app {_media.SourceName} ({_media.SourceProcess}) · ícone {(_artBadgeIcon?.Source != null ? "sim" : "não")} · real {real}{Environment.NewLine}");
+                _artTilt.TargetHover = 0;
+                _artTilt.TargetX = _artTilt.TargetY = 0;
+                StartTilt();
+                await Grab($"{place}_3_saiu");
+                _forcedState = null;
+                UpdateState();
+                await Task.Delay(700);
+            }
+            // the home cards still tilt (the same 3D code, now shared with the cover)
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            SelectTab(Tab.Home, false);
+            await Task.Delay(900);
+            var card = _tilts[0];
+            card.TargetHover = 1;
+            card.TargetX = 0.7;
+            card.TargetY = 0.4;
+            Enter3D(card);
+            StartTilt();
+            await Task.Delay(700);
+            {
+                var tl = Island.PointToScreen(new Point(0, 0));
+                var br = Island.PointToScreen(new Point(Island.ActualWidth, Island.ActualHeight));
+                var r = new System.Drawing.Rectangle((int)tl.X - 8, (int)tl.Y - 8, (int)(br.X - tl.X) + 16, (int)(br.Y - tl.Y) + 16);
+                using var bmp = new System.Drawing.Bitmap(r.Width, r.Height);
+                using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(r.Left, r.Top, 0, 0, bmp.Size);
+                bmp.Save(System.IO.Path.Combine(folder, "home_card_tilt.png"));
+            }
+            card.TargetHover = 0;
+            card.TargetX = card.TargetY = 0;
+            StartTilt();
+            _forcedState = null;
+            UpdateState();
+            if (!real) _media.Fake("", "", false);
+            S.Place = place0;
+            ApplySettings();
+            await Task.Delay(1200);
+            Application.Current.Shutdown();
+            return;
+        }
+        // the home cards' glow (the shape behind each card): as tall as the card, at the top and standing on a side
+        if (Environment.GetEnvironmentVariable("NOTCHY_CARDGLOWTEST") == "1")
+        {
+            await Task.Delay(6000);
+            var place0 = S.Place;
+            foreach (var place in new[] { IslandPlace.Right, IslandPlace.Top })
+            {
+                S.Place = place;
+                ApplySettings();
+                await Task.Delay(1600);
+                _forcedState = IslandState.Expanded;
+                UpdateState();
+                SelectTab(Tab.Home, false);
+                await Task.Delay(1200);
+                foreach (var (card, halo) in _cardGlow)
+                    System.IO.File.AppendAllText(System.IO.Path.Combine(folder, "medidas.txt"),
+                        $"{place} {card.Name}: card {card.ActualWidth:0}x{card.ActualHeight:0} · brilho {halo.ActualWidth:0}x{halo.ActualHeight:0}{Environment.NewLine}");
+                var tl = Island.PointToScreen(new Point(0, 0));
+                var br = Island.PointToScreen(new Point(Island.ActualWidth, Island.ActualHeight));
+                var r = new System.Drawing.Rectangle((int)tl.X - 8, (int)tl.Y - 8, (int)(br.X - tl.X) + 16, (int)(br.Y - tl.Y) + 16);
+                using (var bmp = new System.Drawing.Bitmap(r.Width, r.Height))
+                {
+                    using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(r.Left, r.Top, 0, 0, bmp.Size);
+                    bmp.Save(System.IO.Path.Combine(folder, $"{place}_inicio.png"));
+                }
+                _forcedState = null;
+                UpdateState();
+                await Task.Delay(700);
+            }
+            S.Place = place0;
+            ApplySettings();
+            await Task.Delay(1200);
+            Application.Current.Shutdown();
+            return;
+        }
+        // Calendário and Clima open on the island: on both sides and at the top (just the island grabbed)
+        if (Environment.GetEnvironmentVariable("NOTCHY_CALWEATHERTEST") == "1")
+        {
+            await Task.Delay(6000);
+            var place0 = S.Place;
+            async Task GrabIsland(string name)
+            {
+                await Task.Delay(1400);
+                var tl = Island.PointToScreen(new Point(0, 0));
+                var br = Island.PointToScreen(new Point(Island.ActualWidth, Island.ActualHeight));
+                var r = new System.Drawing.Rectangle((int)tl.X - 8, (int)tl.Y - 8, (int)(br.X - tl.X) + 16, (int)(br.Y - tl.Y) + 16);
+                using var bmp = new System.Drawing.Bitmap(r.Width, r.Height);
+                using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(r.Left, r.Top, 0, 0, bmp.Size);
+                bmp.Save(System.IO.Path.Combine(folder, name + ".png"));
+                System.IO.File.AppendAllText(System.IO.Path.Combine(folder, "medidas.txt"), $"{name}: ilha {Island.ActualWidth:0}x{Island.ActualHeight:0} · página {_subHeight:0}{Environment.NewLine}");
+            }
+            foreach (var place in new[] { IslandPlace.Right, IslandPlace.Left, IslandPlace.Top })
+            {
+                S.Place = place;
+                ApplySettings();
+                await Task.Delay(1600);
+                _forcedState = IslandState.Expanded;
+                UpdateState();
+                SelectTab(Tab.Home, false);
+                await Task.Delay(700);
+                OpenSubPage(Loc.T("cal.title"), CalendarPage);
+                await GrabIsland($"{place}_1_calendario");
+                // a six-week month: moving to it, and opening on it
+                _calMonth = new DateTime(2026, 8, 1);
+                _calLevel = CalLevel.Day;
+                CalSwap(CalMove.Down, null);
+                await GrabIsland($"{place}_1b_seis_semanas");
+                CloseSubPage(animate: false);
+                OpenCalendar(new DateTime(2026, 8, 15));
+                await GrabIsland($"{place}_1c_abre_em_seis_semanas");
+                CloseSubPage(animate: false);
+                _calDay = DateTime.Today;
+                _calMonth = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+                OpenSubPage(Loc.T("weather.title"), WeatherPage);
+                await GrabIsland($"{place}_2_clima");
+                CloseSubPage(animate: false);
+                _forcedState = null;
+                UpdateState();
+                await Task.Delay(700);
+            }
+            S.Place = place0;
+            ApplySettings();
+            await Task.Delay(1200);
+            Application.Current.Shutdown();
+            return;
+        }
+        // switching tabs on the open island: up and down the column on a side, sideways at the top (filmed numbers + a frame)
+        if (Environment.GetEnvironmentVariable("NOTCHY_TABSLIDETEST") == "1")
+        {
+            var log = new System.Text.StringBuilder();
+            await Task.Delay(5000);
+            var place0 = S.Place;
+            foreach (var place in new[] { IslandPlace.Right, IslandPlace.Left, IslandPlace.Top })
+            {
+                S.Place = place;
+                ApplySettings();
+                await Task.Delay(1600);
+                _forcedState = IslandState.Expanded;
+                UpdateState();
+                SelectTab(Tab.Home, false);
+                await Task.Delay(900);
+                foreach (var (from, to) in new[] { (Tab.Home, Tab.Clock), (Tab.Clock, Tab.Music) })
+                {
+                    log.AppendLine($"---- {place}: {from} -> {to}");
+                    SelectTab(to, animate: true);
+                    var clock = System.Diagnostics.Stopwatch.StartNew();
+                    string last = "";
+                    while (clock.ElapsedMilliseconds < 380)
+                    {
+                        await Task.Delay(15);
+                        var inEl = TabElement(to);
+                        var outEl = TabElement(from);
+                        string T(UIElement e) => e.RenderTransform is TranslateTransform tt ? $"{tt.X:0},{tt.Y:0} op {e.Opacity:0.00}" : $"- op {e.Opacity:0.00}";
+                        string line = $"entra {T(inEl)} · sai {(outEl.Visibility == Visibility.Visible ? T(outEl) : "guardada")} · destaque {NavPillX.X:0},{NavPillX.Y:0}";
+                        if (line != last) log.AppendLine($"{clock.ElapsedMilliseconds,4} ms  {line}");
+                        last = line;
+                    }
+                    await Task.Delay(500);
+                }
+                _forcedState = null;
+                UpdateState();
+                await Task.Delay(800);
+            }
+            S.Place = place0;
+            ApplySettings();
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "log.txt"), log.ToString());
+            await Task.Delay(1200);
+            Application.Current.Shutdown();
+            return;
+        }
+        // the bubbles (Claude working, a download) when the island changes place: they must slide with it
+        if (Environment.GetEnvironmentVariable("NOTCHY_PODMOVETEST") == "1")
+        {
+            var log = new System.Text.StringBuilder();
+            S.ClaudeShowInCompact = true;
+            await Task.Delay(6000);
+            var place0 = S.Place;
+            S.Place = IslandPlace.Left;
+            ApplySettings();
+            await Task.Delay(1500);
+            _claude.FakeWorking(true);
+            _media.Fake("Waking up", "Teste", true);
+            _transfers.Fake = new TransferInfo(TransferKind.Download, "filme.mp4", 1, 0.3, 300_000_000, 1_000_000_000, 8_000_000, TimeSpan.FromSeconds(70));
+            PollTransfers();
+            UpdateState();
+            await Task.Delay(2500);
+            Rect Box(FrameworkElement f) => f.IsVisible && f.Opacity > 0.05 ? f.TransformToAncestor(this).TransformBounds(new Rect(0, 0, f.ActualWidth, f.ActualHeight)) : Rect.Empty;
+            string R(Rect r) => r.IsEmpty ? "-" : $"{r.X + Left:0},{r.Y + Top:0}";
+            foreach (var to in new[] { IslandPlace.Top, IslandPlace.Right, IslandPlace.Left })
+            {
+                log.AppendLine($"---- {_place} -> {to}");
+                S.Place = to;
+                ApplySettings();
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                string last = "";
+                while (clock.ElapsedMilliseconds < 1300)
+                {
+                    await Task.Delay(10);
+                    var isl = Box(Island);
+                    var cp = Box(ClaudePod);
+                    var dp = Box(DownloadPod);
+                    string rel(Rect r) => r.IsEmpty || isl.IsEmpty ? "-" : $"{r.X - isl.X:0},{r.Y - isl.Y:0}";
+                    string line = $"lugar {_place}{(_placeMoving ? " movendo" : "")} · drop {IslandDrop.X:0},{IslandDrop.Y:0} · ilha {R(isl)} · claude {R(cp)} (rel {rel(cp)}) · download {R(dp)} (rel {rel(dp)})";
+                    if (line != last) log.AppendLine($"{clock.ElapsedMilliseconds,5} ms  {line}");
+                    last = line;
+                }
+                await Task.Delay(700);
+            }
+            _claude.FakeWorking(false);
+            _media.Fake("", "", false);
+            _transfers.Fake = null;
+            PollTransfers();
+            S.Place = place0;
+            ApplySettings();
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "log.txt"), log.ToString());
+            await Task.Delay(1500);
+            Application.Current.Shutdown();
+            return;
+        }
+        // the resting island's signs (calendar dot, alarm bell, its time) on the top and standing on a side
+        if (Environment.GetEnvironmentVariable("NOTCHY_IDLESIGNTEST") == "1")
+        {
+            await Task.Delay(5000);
+            _media.Fake("", "", false);
+            var place0 = S.Place;
+            double Mid(FrameworkElement f) => f.IsVisible ? f.TranslatePoint(new Point(f.ActualWidth / 2, 0), Island).X : double.NaN;
+            void Measure(string name) => System.IO.File.AppendAllText(System.IO.Path.Combine(folder, "centros.txt"),
+                $"{name}: ilha {Island.ActualWidth / 2:0.0} · olhos {Mid(IdleEyes):0.0} · bolinha {Mid(_idleCalDot):0.0} · sino {Mid(_idleBell!):0.0} · horário {Mid(_idleSoon!):0.0}{Environment.NewLine}");
+            async Task GrabIsland(string name)
+            {
+                await Task.Delay(900);
+                var tl = Island.PointToScreen(new Point(0, 0));
+                var br = Island.PointToScreen(new Point(Island.ActualWidth, Island.ActualHeight));
+                var r = new System.Drawing.Rectangle((int)tl.X - 12, (int)tl.Y - 12, (int)(br.X - tl.X) + 24, (int)(br.Y - tl.Y) + 24);
+                using var bmp = new System.Drawing.Bitmap(r.Width, r.Height);
+                using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(r.Left, r.Top, 0, 0, bmp.Size);
+                bmp.Save(System.IO.Path.Combine(folder, name + ".png"));
+            }
+            var pink = Color.FromRgb(0xFF, 0x5C, 0xB0);
+            _idleCalDot.Visibility = Visibility.Visible;
+            _idleCalDot.Fill = new SolidColorBrush(pink);
+            _idleCalDot.Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = pink, BlurRadius = 8, ShadowDepth = 0, Opacity = 0.8 };
+            foreach (var place in new[] { IslandPlace.Left, IslandPlace.Right, IslandPlace.Top })
+            {
+                S.Place = place;
+                ApplySettings();
+                await Task.Delay(1800);
+                _alarmHintForced = (false, null);
+                UpdateAlarmHint(force: true);
+                await GrabIsland($"{place}_1_lembrete"); Measure($"{place} lembrete");
+                _alarmHintForced = (true, null);
+                UpdateAlarmHint(force: true);
+                await GrabIsland($"{place}_2_lembrete_alarme"); Measure($"{place} alarme");
+                _alarmHintForced = (true, "07:00");
+                UpdateAlarmHint(force: true);
+                await GrabIsland($"{place}_3_alarme_perto"); Measure($"{place} horário");
+            }
+            _alarmHintForced = null;
+            S.Place = place0;
+            ApplySettings();
+            await Task.Delay(1500);
+            Application.Current.Shutdown();
+            return;
+        }
+        // Posição: a window with a rule is minimized (what the island does, every 10 ms)
+        if (Environment.GetEnvironmentVariable("NOTCHY_RULEMINTEST") is { Length: > 0 } formScript)
+        {
+            var log = new System.Text.StringBuilder();
+            await Task.Delay(4000);
+            var rules0 = S.PlaceRules.ToList();
+            var other = Environment.GetEnvironmentVariable("NOTCHY_RULEMINTOP") == "1" ? IslandPlace.Top : _place == IslandPlace.Right ? IslandPlace.Left : IslandPlace.Right;
+            var when = Environment.GetEnvironmentVariable("NOTCHY_RULEMINFULL") == "1" ? PlaceWhen.Fullscreen : PlaceWhen.Front;
+            S.PlaceRules = new List<PlaceRule> { new() { Process = "powershell", Name = "teste", When = when, Place = other } };
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -File \"{formScript}\"") { UseShellExecute = false, CreateNoWindow = true });
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            string last = "";
+            while (clock.ElapsedMilliseconds < 11000)
+            {
+                await Task.Delay(10);
+                var (fg, pid) = Native.Foreground();
+                string line = $"frente {(pid == 0 ? "-" : ProcessName(pid))}{(fg != IntPtr.Zero && Native.FillsPrimaryScreen(fg) ? " (cheia)" : "")} · regra {(_rulePlace?.ToString() ?? "-")} · lugar {_place}{(_placeMoving ? " movendo" : "")} · drop {IslandDrop.X:0},{IslandDrop.Y:0} · ilha {Island.ActualWidth:0}x{Island.ActualHeight:0} · janela {Left:0},{Top:0} {Width:0}x{Height:0} · {_state}";
+                if (line != last) log.AppendLine($"{clock.ElapsedMilliseconds,5} ms  {line}");
+                last = line;
+            }
+            S.PlaceRules = rules0;
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "log.txt"), log.ToString());
+            await Task.Delay(1500);
+            Application.Current.Shutdown();
+            return;
+        }
+        // Posição: how long a rule takes to move the island (it starts moving, it's there), and back
+        if (Environment.GetEnvironmentVariable("NOTCHY_RULETIMETEST") == "1")
+        {
+            var log = new System.Text.StringBuilder();
+            await Task.Delay(5000);
+            var rules0 = S.PlaceRules.ToList();
+            var (_, fgp) = Native.Foreground();
+            string proc = ProcessName(fgp);
+            var start = _place;
+            var other = start == IslandPlace.Right ? IslandPlace.Left : IslandPlace.Right;
+            async Task Time(string what, IslandPlace want)
+            {
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                long moving = -1, arrived = -1, there = -1;
+                while (clock.ElapsedMilliseconds < 6000)
+                {
+                    await Task.Delay(10);
+                    if (moving < 0 && (_placeMoving || _place == want)) moving = clock.ElapsedMilliseconds;
+                    if (arrived < 0 && _place == want && !_placeMoving) arrived = clock.ElapsedMilliseconds;
+                    // (slid all the way out at the new place)
+                    if (arrived >= 0 && clock.ElapsedMilliseconds - arrived > 40 && Math.Abs(IslandDrop.X) < 0.5 && Math.Abs(IslandDrop.Y) < 0.5) { there = clock.ElapsedMilliseconds; break; }
+                }
+                log.AppendLine($"{what}: começa a mover em {moving} ms · chegou em {there} ms");
+            }
+            for (int round = 1; round <= 3; round++)
+            {
+                S.PlaceRules = new List<PlaceRule> { new() { Process = proc, Name = proc, When = PlaceWhen.Front, Place = other } };
+                await Time($"rodada {round} · regra liga ({start} -> {other})", other);
+                await Task.Delay(800);
+                S.PlaceRules = new List<PlaceRule>();
+                await Time($"rodada {round} · regra desliga ({other} -> {start})", start);
+                await Task.Delay(800);
+            }
+            S.PlaceRules = rules0;
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "log.txt"), $"app na frente: {proc}{Environment.NewLine}" + log);
+            Application.Current.Shutdown();
+            return;
+        }
+        // Clima: switching the place between automatic and manual must keep the page open (as the buttons do it)
+        if (Environment.GetEnvironmentVariable("NOTCHY_WEATHERPAGETEST") == "1")
+        {
+            var log = new System.Text.StringBuilder();
+            await Task.Delay(5000);
+            bool auto0 = S.WeatherAuto;
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            SelectTab(Tab.Home, false);
+            await Task.Delay(800);
+            OpenSubPage(Loc.T("weather.title"), WeatherPage);
+            await Task.Delay(900);
+            log.AppendLine($"aberta: página {_subOpen} · {_subTitle.Text} · automática {S.WeatherAuto}");
+            for (int i = 0; i < 2; i++)
+            {
+                S.WeatherAuto = !S.WeatherAuto;
+                AppSettings.Commit();
+                RefreshSubPage(WeatherPage);
+                await Task.Delay(900);
+                log.AppendLine($"trocou para {(S.WeatherAuto ? "automática" : "manual")}: página {_subOpen} · {_subTitle.Text} · ilha {_state}");
+            }
+            S.WeatherAuto = auto0;
+            AppSettings.Commit();
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "log.txt"), log.ToString());
+            _forcedState = null;
+            Application.Current.Shutdown();
+            return;
+        }
+        // how long a spelling fix takes through the chat's own runner (the same prompt the button builds)
+        if (Environment.GetEnvironmentVariable("NOTCHY_CHATSPEEDTEST") == "1" && _geminiRunner != null)
+        {
+            var log = new System.Text.StringBuilder();
+            await Task.Delay(3000);
+            string sample = "But I can send you the cuts I've alredy made, did you finis the other video yet? I think we shuold talk tomorow.";
+            string prompt = Loc.T("chat.p.spelling") + "\n\n" + Loc.T("chat.p.content") + " (Discord):\n<<<\n" + sample + "\n>>>";
+            for (int i = 1; i <= 3; i++)
+            {
+                var done = new TaskCompletionSource<(string, bool)>();
+                void Got(string text, bool err) => done.TrySetResult((text, err));
+                _geminiRunner.Finished += Got;
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                _geminiRunner.Quick = true;
+                _geminiRunner.Run(prompt, FreeSystemPrompt, false, null);
+                var finished = await Task.WhenAny(done.Task, Task.Delay(60000));
+                _geminiRunner.Finished -= Got;
+                var (answer, error) = finished == done.Task ? done.Task.Result : ("(sem resposta em 60 s)", true);
+                log.AppendLine($"correção {i}: {clock.ElapsedMilliseconds} ms · erro={error} · {answer.Trim()}");
+                await Task.Delay(800);
+            }
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "log.txt"), log.ToString());
+            Application.Current.Shutdown();
+            return;
+        }
+        // the chat's box focused in a window that isn't active (the stuck-open bug): the island must close
+        if (Environment.GetEnvironmentVariable("NOTCHY_CHATFOCUSTEST") == "1")
+        {
+            var log = new System.Text.StringBuilder();
+            await Task.Delay(5000);
+            _clickOpened = true;
+            UpdateState();
+            SelectTab(Tab.Chat, false);
+            await Task.Delay(900);
+            Keyboard.Focus(_chatInput); // (focus without activating the window, as it ended up in daily use)
+            await Task.Delay(200);
+            log.AppendLine($"aberta: {_state} · campo focado {_chatInput.IsKeyboardFocused} · janela ativa {IsActive}");
+            _clickOpened = _hoverActive = _hoverRequested = false; // the mouse left and the click outside happened
+            UpdateState();
+            await Task.Delay(1200);
+            log.AppendLine($"depois de sair: {_state} · campo focado {_chatInput.IsKeyboardFocused} · janela ativa {IsActive}");
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "log.txt"), log.ToString());
+            Keyboard.ClearFocus();
+            Application.Current.Shutdown();
+            return;
+        }
+        // the chat open on a side (idle, and thinking: a page taller than the tabs), just the island grabbed
+        if (Environment.GetEnvironmentVariable("NOTCHY_SIDECHATTEST") == "1")
+        {
+            await Task.Delay(5000);
+            var place0 = S.Place;
+            async Task GrabIsland(string name)
+            {
+                await Task.Delay(900);
+                var tl = Island.PointToScreen(new Point(0, 0));
+                var br = Island.PointToScreen(new Point(Island.ActualWidth, Island.ActualHeight));
+                var r = new System.Drawing.Rectangle((int)tl.X - 10, (int)tl.Y - 10, (int)(br.X - tl.X) + 20, (int)(br.Y - tl.Y) + 20);
+                using var bmp = new System.Drawing.Bitmap(r.Width, r.Height);
+                using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(r.Left, r.Top, 0, 0, bmp.Size);
+                bmp.Save(System.IO.Path.Combine(folder, name + ".png"));
+            }
+            foreach (var place in new[] { IslandPlace.Right, IslandPlace.Left, IslandPlace.Top })
+            {
+                S.Place = place;
+                ApplySettings();
+                await Task.Delay(1800);
+                _forcedState = IslandState.Expanded;
+                UpdateState();
+                SelectTab(Tab.Chat, false);
+                SetChatView(ChatView.Idle);
+                await GrabIsland($"{place}_1_chat");
+                _answerLabel.Text = "Corrigir ortografia · Discord";
+                _answerText.Inlines.Clear();
+                _thinking.Text = Loc.T("chat.thinking");
+                _thinking.Visibility = Visibility.Visible;
+                SetChatView(ChatView.Answer);
+                await GrabIsland($"{place}_2_pensando");
+                SetChatView(ChatView.Idle);
+                _forcedState = null;
+                UpdateState();
+                await Task.Delay(800);
+            }
+            S.Place = place0;
+            ApplySettings();
+            await Task.Delay(1500);
+            Application.Current.Shutdown();
+            return;
+        }
+        // dragging, filmed from the drag layer only (no screen grabs): top → right, the drop, then back
+        if (Environment.GetEnvironmentVariable("NOTCHY_DRAGTEST") == "1")
+        {
+            await Task.Delay(5000);
+            var place0 = S.Place;
+            S.Place = IslandPlace.Top;
+            ApplySettings();
+            await Task.Delay(2500);
+            var wa = SystemParameters.WorkArea;
+            int f = 0;
+            void Film()
+            {
+                var rtb = new System.Windows.Media.Imaging.RenderTargetBitmap(700, 500, 96, 96, PixelFormats.Pbgra32);
+                var v = new DrawingVisual();
+                using (var dc = v.RenderOpen())
+                {
+                    dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(0x2A, 0x2E, 0x45)), null, new Rect(0, 0, 700, 500));
+                    dc.DrawRectangle(new VisualBrush(_dragCanvas) { Stretch = Stretch.Fill, ViewboxUnits = BrushMappingMode.Absolute, Viewbox = new Rect(wa.Width - 700, wa.Height / 2 - 250, 700, 500) }, null, new Rect(0, 0, 700, 500));
+                }
+                rtb.Render(v);
+                var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(rtb));
+                using var fs = System.IO.File.Create(System.IO.Path.Combine(folder, $"d{f++:00}.png"));
+                enc.Save(fs);
+            }
+            StartPlaceDrag();
+            var path = new[] { new Point(wa.Width / 2, 15), new Point(wa.Width * 0.62, wa.Height * 0.3), new Point(wa.Width * 0.8, wa.Height * 0.45),
+                new Point(wa.Width - 320, wa.Height * 0.5), new Point(wa.Width - 200, wa.Height * 0.52), new Point(wa.Width - 120, wa.Height * 0.52), new Point(wa.Width - 50, wa.Height * 0.51) };
+            for (int i = 1; i < path.Length; i++)
+                for (int k = 1; k <= 4; k++)
+                {
+                    var a0 = path[i - 1]; var a1 = path[i];
+                    MovePlaceDrag(new Point(a0.X + (a1.X - a0.X) * k / 4, a0.Y + (a1.Y - a0.Y) * k / 4));
+                    await Task.Delay(45);
+                    Film();
+                }
+            for (int k = 0; k < 6; k++)
+            {
+                await Task.Delay(50);
+                Film();
+            }
+            // the drop, filmed on the real screen (just the right edge) with the island's numbers
+            var dlog = new System.Text.StringBuilder();
+            var edge = System.Windows.Forms.Screen.PrimaryScreen!.Bounds;
+            var er = new System.Drawing.Rectangle(edge.Right - 200, edge.Top + edge.Height / 2 - 150, 200, 300);
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            EndPlaceDrag();
+            for (int k = 0; k < 40; k++)
+            {
+                await Task.Delay(16);
+                using (var bmp = new System.Drawing.Bitmap(er.Width, er.Height))
+                {
+                    using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(er.Left, er.Top, 0, 0, bmp.Size);
+                    bmp.Save(System.IO.Path.Combine(folder, $"r{k:00}.png"));
+                }
+                dlog.AppendLine($"{k:00} {clock.ElapsedMilliseconds,4} ms · janela {Opacity:0.00} · camada {(_dragLayer != null ? "sim" : "não")} · lugar {_place} · ilha {Island.ActualWidth:0}x{Island.ActualHeight:0} · drop {IslandDrop.X:0},{IslandDrop.Y:0} · escala {IslandScale.ScaleX:0.00} · olhos {IdlePanel.Opacity:0.00} · estado {_state}/{_compactMode}");
+            }
+            await Task.Delay(1000);
+            // and back to the top (numbers only: the top of the screen has the user's windows)
+            dlog.AppendLine("---- de volta ao topo");
+            StartPlaceDrag();
+            var back = new[] { new Point(wa.Width - 50, wa.Height * 0.51), new Point(wa.Width * 0.7, wa.Height * 0.3), new Point(wa.Width / 2 + 40, 60), new Point(wa.Width / 2, 14) };
+            for (int i = 1; i < back.Length; i++)
+                for (int k = 1; k <= 4; k++)
+                {
+                    MovePlaceDrag(new Point(back[i - 1].X + (back[i].X - back[i - 1].X) * k / 4, back[i - 1].Y + (back[i].Y - back[i - 1].Y) * k / 4));
+                    await Task.Delay(45);
+                }
+            await Task.Delay(400);
+            clock.Restart();
+            EndPlaceDrag();
+            for (int k = 0; k < 30; k++)
+            {
+                await Task.Delay(16);
+                dlog.AppendLine($"{k:00} {clock.ElapsedMilliseconds,4} ms · janela {Opacity:0.00} · camada {(_dragLayer != null ? "sim" : "não")} · lugar {_place} · ilha {Island.ActualWidth:0}x{Island.ActualHeight:0} · drop {IslandDrop.X:0},{IslandDrop.Y:0} · olhos {IdlePanel.Opacity:0.00} · estado {_state}/{_compactMode}");
+            }
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "drop.txt"), dlog.ToString());
+            await Task.Delay(800);
+            var full = System.Windows.Forms.Screen.PrimaryScreen!.Bounds;
+            var b = new System.Drawing.Rectangle(full.Right - 300, full.Top + full.Height / 2 - 200, 300, 400); // (just the right edge)
+            using (var bmp = new System.Drawing.Bitmap(b.Width, b.Height))
+            {
+                using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(b.Left, b.Top, 0, 0, bmp.Size);
+                bmp.Save(System.IO.Path.Combine(folder, "z_solto_direita.png"));
+            }
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "log.txt"), $"lugar: {_place} · S.Place {S.Place}");
+            S.Place = place0;
+            AppSettings.Commit();
+            await Task.Delay(1500);
+            Application.Current.Shutdown();
+            return;
+        }
+        // Posição: the settings page (rules in memory only), a rule for the app in front, the drag layer
+        if (Environment.GetEnvironmentVariable("NOTCHY_PLACETEST") == "1")
+        {
+            var log = new System.Text.StringBuilder();
+            await Task.Delay(5000);
+            var place0 = S.Place;
+            var rules0 = S.PlaceRules.ToList();
+            void ShotScreen(string name)
+            {
+                var full = System.Windows.Forms.Screen.PrimaryScreen!.Bounds;
+                var b = new System.Drawing.Rectangle(full.Right - 420, full.Top, 420, full.Height); // (just the right edge: the user's windows stay out)
+                using var bmp = new System.Drawing.Bitmap(b.Width, b.Height);
+                using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(b.Left, b.Top, 0, 0, bmp.Size);
+                bmp.Save(System.IO.Path.Combine(folder, name + ".png"));
+            }
+            // 1 · the page
+            S.PlaceRules.Add(new PlaceRule { Process = "zen", Name = "Zen", When = PlaceWhen.Fullscreen, Place = IslandPlace.Right });
+            S.PlaceRules.Add(new PlaceRule { Process = "Adobe Premiere Pro", Name = "Premiere Pro", When = PlaceWhen.Front, Place = IslandPlace.Left, On = false });
+            var psw = new SettingsWindow { WindowStartupLocation = WindowStartupLocation.Manual, Left = 100, Top = 100 };
+            psw.Show();
+            psw.ShowPage("place");
+            await Task.Delay(900);
+            {
+                var root = (FrameworkElement)psw.Content;
+                var rtb = new System.Windows.Media.Imaging.RenderTargetBitmap((int)psw.ActualWidth, (int)psw.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+                var host = new DrawingVisual();
+                using (var dc = host.RenderOpen())
+                    dc.DrawRectangle(new VisualBrush(root) { Stretch = Stretch.None, AlignmentX = AlignmentX.Left, AlignmentY = AlignmentY.Top }, null, new Rect(0, 0, psw.ActualWidth, psw.ActualHeight));
+                rtb.Render(host);
+                var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(rtb));
+                using var fs = System.IO.File.Create(System.IO.Path.Combine(folder, "1_aba_posicao.png"));
+                enc.Save(fs);
+            }
+            psw.Close();
+            S.PlaceRules.Clear();
+            await Task.Delay(800);
+            // 2 · a rule for the app in front now: the island goes right, then back when it's gone
+            var (fgw, fgp) = Native.Foreground();
+            string proc = ProcessName(fgp);
+            log.AppendLine($"app na frente: {proc} · enche a tela: {Native.FillsPrimaryScreen(fgw)} · lugar: {_place}");
+            S.PlaceRules.Add(new PlaceRule { Process = proc, Name = proc, When = PlaceWhen.Front, Place = IslandPlace.Right });
+            await Task.Delay(2500);
+            log.AppendLine($"com a regra: {_place} (regra {_rulePlace})");
+            ShotScreen("2_regra_direita");
+            S.PlaceRules[0].When = PlaceWhen.Fullscreen;
+            await Task.Delay(2500);
+            log.AppendLine($"regra só em tela cheia: {_place} (regra {_rulePlace})");
+            S.PlaceRules.Clear();
+            await Task.Delay(2500);
+            log.AppendLine($"sem a regra: {_place} (regra {_rulePlace})");
+            ShotScreen("3_sem_regra");
+            // 3 · dragging: the spots, carried, snapped to the left, dropped there (then back to top)
+            StartPlaceDrag();
+            await Task.Delay(300);
+            var wa = SystemParameters.WorkArea;
+            MovePlaceDrag(new Point(wa.Width * 0.4, wa.Height * 0.45));
+            await Task.Delay(300);
+            MovePlaceDrag(new Point(wa.Width - 60, wa.Height * 0.5 + 30));
+            await Task.Delay(400);
+            ShotScreen("5_ima_direita");
+            log.AppendLine($"encaixe: {_dragSnap}");
+            EndPlaceDrag();
+            await Task.Delay(1500);
+            log.AppendLine($"solto: {_place} · S.Place {S.Place}");
+            ShotScreen("6_solto_direita");
+            S.Place = place0;
+            S.PlaceRules = rules0;
+            AppSettings.Commit();
+            await Task.Delay(1500);
+            log.AppendLine($"de volta: {_place}");
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "log.txt"), log.ToString());
+            Application.Current.Shutdown();
+            return;
+        }
+        // a finished download's card: a picture and a file with an icon, top, right, left
+        if (Environment.GetEnvironmentVariable("NOTCHY_DLCARDTEST") is { Length: > 0 } dlFiles)
+        {
+            var dpiS = VisualTreeHelper.GetDpi(this);
+            var wa = SystemParameters.WorkArea;
+            var place0 = S.Place;
+            await Task.Delay(6000);
+            _media.Fake("", "", false);
+            foreach (var place in new[] { IslandPlace.Top, IslandPlace.Right, IslandPlace.Left })
+            {
+                S.Place = place;
+                ApplySettings();
+                await Task.Delay(2000);
+                double gx = place == IslandPlace.Top ? wa.Left + wa.Width / 2 - 300 : place == IslandPlace.Left ? wa.Left : wa.Right - 560;
+                double gy = place == IslandPlace.Top ? wa.Top : wa.Top + wa.Height * SideCenterAt - 260;
+                double gw = place == IslandPlace.Top ? 600 : 560, gh = place == IslandPlace.Top ? 380 : 560;
+                var grab = new System.Drawing.Rectangle((int)(gx * dpiS.DpiScaleX), (int)(gy * dpiS.DpiScaleY), (int)(gw * dpiS.DpiScaleX), (int)(gh * dpiS.DpiScaleY));
+                async Task Grab(string name, int wait)
+                {
+                    await Task.Delay(wait);
+                    using var bmp = new System.Drawing.Bitmap(grab.Width, grab.Height);
+                    using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(grab.Left, grab.Top, 0, 0, bmp.Size);
+                    bmp.Save(System.IO.Path.Combine(folder, $"{place}_{name}.png"));
+                }
+                int k = 0;
+                foreach (var file in dlFiles.Split('|'))
+                {
+                    Happy();
+                    ShowDownloadCard(file);
+                    await Grab($"{++k}_card", 700);
+                    _hoverActive = true;
+                    UpdateState();
+                    await Grab($"{k}_ilha_aberta", 900);
+                    _hoverActive = false;
+                    UpdateState();
+                    DismissNotice();
+                    _holdOpenAfterPill = false;
+                    UpdateState();
+                    await Task.Delay(1200);
+                }
+            }
+            S.Place = place0;
+            ApplySettings();
+            await Task.Delay(500);
+            Application.Current.Shutdown();
+            return;
+        }
+        // a screenshot's card under the island, in line with a notification: top, right, left
+        if (Environment.GetEnvironmentVariable("NOTCHY_SHOTCARDTEST") == "1")
+        {
+            var dpiS = VisualTreeHelper.GetDpi(this);
+            var wa = SystemParameters.WorkArea;
+            var place0 = S.Place;
+            await Task.Delay(6000);
+            _media.Fake("", "", false);
+            int pw = 320, ph = 200;
+            var px = new byte[pw * ph * 4];
+            for (int y = 0; y < ph; y++)
+                for (int x = 0; x < pw; x++)
+                {
+                    int i = (y * pw + x) * 4;
+                    px[i] = (byte)(200 - x / 3); px[i + 1] = (byte)(80 + y / 2); px[i + 2] = (byte)(90 + x / 2); px[i + 3] = 255;
+                }
+            var pic = System.Windows.Media.Imaging.BitmapSource.Create(pw, ph, 96, 96, PixelFormats.Bgra32, null, px, pw * 4);
+            foreach (var place in new[] { IslandPlace.Top, IslandPlace.Right, IslandPlace.Left })
+            {
+                S.Place = place;
+                ApplySettings();
+                await Task.Delay(2000);
+                double gx = place == IslandPlace.Top ? wa.Left + wa.Width / 2 - 300 : place == IslandPlace.Left ? wa.Left : wa.Right - 560;
+                double gy = place == IslandPlace.Top ? wa.Top : wa.Top + wa.Height * SideCenterAt - 260;
+                double gw = place == IslandPlace.Top ? 600 : 560, gh = place == IslandPlace.Top ? 380 : 560;
+                var grab = new System.Drawing.Rectangle((int)(gx * dpiS.DpiScaleX), (int)(gy * dpiS.DpiScaleY), (int)(gw * dpiS.DpiScaleX), (int)(gh * dpiS.DpiScaleY));
+                async Task Grab(string name, int wait)
+                {
+                    await Task.Delay(wait);
+                    using var bmp = new System.Drawing.Bitmap(grab.Width, grab.Height);
+                    using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(grab.Left, grab.Top, 0, 0, bmp.Size);
+                    bmp.Save(System.IO.Path.Combine(folder, $"{place}_{name}.png"));
+                }
+                ShowShotNotice(pic, Loc.T("cap.copied"), null, CaptureAction.Copy);
+                await Grab("1_chega", 120);
+                await Grab("2_card", 700);
+                _noticeQueue.Enqueue(new Notice(7, "WhatsApp", "", "Mãe", "Já chegou em casa?", DateTime.Now, null, false) { Accent = Color.FromRgb(0x25, 0xD3, 0x66) });
+                UpdateNoticeCount();
+                await Grab("3_fila", 300);
+                _hoverActive = true;
+                UpdateState();
+                await Grab("4_ilha_aberta", 900);
+                DismissNotice();
+                await Grab("5_notificacao_assume", 900);
+                _hoverActive = _holdOpenAfterPill = false; // (as if the mouse had come back and left)
+                UpdateState();
+                await Grab("6_ilha_fecha", 1200);
+                DismissNotice();
+                await Task.Delay(1500);
+            }
+            S.Place = place0;
+            ApplySettings();
+            await Task.Delay(500);
+            Application.Current.Shutdown();
+            return;
+        }
+        // the outputs list beside the standing volume bar: both sides, the three sizes
+        if (Environment.GetEnvironmentVariable("NOTCHY_SIDEDEVTEST") == "1")
+        {
+            var dpiS = VisualTreeHelper.GetDpi(this);
+            var wa = SystemParameters.WorkArea;
+            var size0 = S.Size;
+            var place0 = S.Place;
+            await Task.Delay(6000);
+            _media.Fake("", "", false);
+            foreach (var size in new[] { IslandSize.Compact, IslandSize.Normal, IslandSize.Large })
+            foreach (var place in new[] { IslandPlace.Right, IslandPlace.Left })
+            {
+                S.Size = size;
+                S.Place = place;
+                ApplySettings();
+                await Task.Delay(2000);
+                var grab = new System.Drawing.Rectangle((int)((place == IslandPlace.Left ? wa.Left : wa.Right - 420) * dpiS.DpiScaleX), (int)((wa.Top + wa.Height * SideCenterAt - 200) * dpiS.DpiScaleY), (int)(420 * dpiS.DpiScaleX), (int)(400 * dpiS.DpiScaleY));
+                async Task Grab(string name, int wait)
+                {
+                    await Task.Delay(wait);
+                    using var bmp = new System.Drawing.Bitmap(grab.Width, grab.Height);
+                    using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(grab.Left, grab.Top, 0, 0, bmp.Size);
+                    bmp.Save(System.IO.Path.Combine(folder, $"{size}_{place}_{name}.png"));
+                }
+                ShowVolumeLevel(0.6, false);
+                _volumeOsdUntil = DateTime.UtcNow.AddSeconds(8);
+                UpdateState();
+                _levelHover = true;
+                await Grab("1_botao", 700);
+                SetDeviceListOpen(true);
+                await Grab("2_abrindo", 150);
+                await Grab("3_aberta", 700);
+                SetDeviceListOpen(false);
+                _levelHover = false;
+                await Grab("4_fechada", 700);
+                _volumeOsdUntil = DateTime.UtcNow;
+                UpdateState();
+                await Task.Delay(1200);
+            }
+            S.Size = size0;
+            S.Place = place0;
+            ApplySettings();
+            await Task.Delay(500);
+            Application.Current.Shutdown();
+            return;
+        }
+        // the island open on a side: every tab, on the right and on the left, from the real screen
+        if (Environment.GetEnvironmentVariable("NOTCHY_SIDEOPENTEST") == "1")
+        {
+            var dpiS = VisualTreeHelper.GetDpi(this);
+            var wa = SystemParameters.WorkArea;
+            var log = new System.Text.StringBuilder();
+            await Task.Delay(6000);
+            _media.Fake("Waking up", "Teste", true);
+            // some files on the shelf (made-up, in the test folder; not saved)
+            var shelfFiles = new[] { "Anne's Voice.wav", "Dash_2026-11-14.mp4", "Pretending_to_be.wav", "capa.png", "roteiro.docx", "thumb_final.jpg", "B ROLL.mp4", "notas.txt", "trilha.mp3", "logo.svg", "planilha.xlsx", "intro.mp4" }
+                .Select(n => { var p = System.IO.Path.Combine(folder, n); System.IO.File.WriteAllText(p, "x"); return p; }).ToList();
+            _shelf.Clear();
+            _shelf.AddRange(shelfFiles);
+            RenderShelf();
+            var places = Environment.GetEnvironmentVariable("NOTCHY_SIDEOPENTOP") == "1" ? new[] { IslandPlace.Top } : new[] { IslandPlace.Right, IslandPlace.Left };
+            foreach (var place in places)
+            {
+                S.Place = place;
+                ApplySettings();
+                await Task.Delay(2000);
+                _forcedState = IslandState.Expanded;
+                UpdateState();
+                await Task.Delay(800);
+                var grab = place == IslandPlace.Top
+                    ? new System.Drawing.Rectangle((int)((wa.Left + wa.Width / 2 - 300) * dpiS.DpiScaleX), (int)(wa.Top * dpiS.DpiScaleY), (int)(600 * dpiS.DpiScaleX), (int)(400 * dpiS.DpiScaleY))
+                    : new System.Drawing.Rectangle((int)((place == IslandPlace.Left ? wa.Left : wa.Right - 600) * dpiS.DpiScaleX), (int)((wa.Top + wa.Height * SideCenterAt - 280) * dpiS.DpiScaleY), (int)(600 * dpiS.DpiScaleX), (int)(560 * dpiS.DpiScaleY));
+                foreach (var tab in new[] { Tab.Home, Tab.Claude, Tab.Music, Tab.Chat, Tab.Focus, Tab.Clock, Tab.Shelf, Tab.Clip, Tab.Downloads })
+                {
+                    SelectTab(tab, animate: true);
+                    await Task.Delay(700);
+                    using (var bmp = new System.Drawing.Bitmap(grab.Width, grab.Height))
+                    {
+                        using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(grab.Left, grab.Top, 0, 0, bmp.Size);
+                        bmp.Save(System.IO.Path.Combine(folder, $"{place}_{(int)tab:00}_{tab}.png"));
+                    }
+                    log.AppendLine($"{place} {tab}: ilha={Island.ActualWidth:0}x{Island.ActualHeight:0} painel={ExpandedPanel.ActualWidth:0}x{ExpandedPanel.ActualHeight:0} pilula={NavPill.ActualWidth:0}x{NavPill.ActualHeight:0} y={NavPillX.Y:0}");
+                }
+                SelectTab(Tab.Home, animate: false);
+                _forcedState = null;
+                UpdateState();
+                await Task.Delay(1500);
+            }
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "open-log.txt"), log.ToString());
+            Application.Current.Shutdown();
+            return;
+        }
+        // the opening animation on the right, on the left and at the top, filmed from the real screen
+        if (Environment.GetEnvironmentVariable("NOTCHY_SIDEINTROTEST") == "1")
+        {
+            var dpiS = VisualTreeHelper.GetDpi(this);
+            var wa = SystemParameters.WorkArea;
+            await Task.Delay(6000);
+            _media.Fake("", "", false);
+            foreach (var place in new[] { IslandPlace.Right, IslandPlace.Left, IslandPlace.Top })
+            {
+                S.Place = place;
+                ApplySettings();
+                await Task.Delay(2000);
+                var grab = place == IslandPlace.Top
+                    ? new System.Drawing.Rectangle((int)((wa.Left + wa.Width / 2 - 100) * dpiS.DpiScaleX), (int)(wa.Top * dpiS.DpiScaleY), (int)(200 * dpiS.DpiScaleX), (int)(80 * dpiS.DpiScaleY))
+                    : new System.Drawing.Rectangle((int)((place == IslandPlace.Left ? wa.Left : wa.Right - 100) * dpiS.DpiScaleX), (int)((wa.Top + wa.Height * SideCenterAt - 70) * dpiS.DpiScaleY), (int)(100 * dpiS.DpiScaleX), (int)(140 * dpiS.DpiScaleY));
+                PlayIntro();
+                var t0 = DateTime.UtcNow;
+                for (int f = 0; (DateTime.UtcNow - t0).TotalMilliseconds < 4300; f++)
+                {
+                    using (var bmp = new System.Drawing.Bitmap(grab.Width, grab.Height))
+                    {
+                        using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(grab.Left, grab.Top, 0, 0, bmp.Size);
+                        bmp.Save(System.IO.Path.Combine(folder, $"{place}_{f:00}.png"));
+                    }
+                    await Task.Delay(90);
+                }
+                await Task.Delay(800);
+            }
+            Application.Current.Shutdown();
+            return;
+        }
+        // music + Claude + a download: Claude finishes first (its eyes travel to the download bubble), then starts again
+        // (back to Claude's), on the right and on the left, filmed from the real screen
+        if (Environment.GetEnvironmentVariable("NOTCHY_SIDETRIPTEST") == "1")
+        {
+            S.ClaudeShowInCompact = true;
+            var dpiS = VisualTreeHelper.GetDpi(this);
+            var wa = SystemParameters.WorkArea;
+            var log = new System.Text.StringBuilder();
+            await Task.Delay(7000);
+            foreach (var place in new[] { IslandPlace.Right, IslandPlace.Left })
+            {
+                S.Place = place;
+                ApplySettings();
+                await Task.Delay(1500);
+                double x = place == IslandPlace.Left ? wa.Left : wa.Right - 160;
+                var grab = new System.Drawing.Rectangle((int)(x * dpiS.DpiScaleX), (int)((wa.Top + wa.Height * SideCenterAt - 200) * dpiS.DpiScaleY), (int)(160 * dpiS.DpiScaleX), (int)(400 * dpiS.DpiScaleY));
+                async Task Film(string name, int ms)
+                {
+                    var t0 = DateTime.UtcNow;
+                    for (int f = 0; (DateTime.UtcNow - t0).TotalMilliseconds < ms; f++)
+                    {
+                        using (var bmp = new System.Drawing.Bitmap(grab.Width, grab.Height))
+                        {
+                            using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(grab.Left, grab.Top, 0, 0, bmp.Size);
+                            bmp.Save(System.IO.Path.Combine(folder, $"{place}_{name}_{f:00}.png"));
+                        }
+                        log.AppendLine($"{place}_{name}_{f:00} {(DateTime.UtcNow - t0).TotalMilliseconds:0}ms viagem={EyeTripActive} {TripProgress:0.00} podTrip={PodTrip.Y:0} dlTrip={DlPodTrip.Y:0} brilho={EyeTripGlow.Opacity:0.00} x={EyeTripGlowX.X:0} y={EyeTripGlowX.Y:0} claude={ClaudePod.Visibility}:{ClaudePod.Opacity:0.00} dl={DownloadPod.Visibility}");
+                        await Task.Delay(40);
+                    }
+                }
+                _media.Fake("Waking up", "Teste", true);
+                _transfers.Fake = new TransferInfo(TransferKind.Download, "filme.mp4", 1, 0.3, 300_000_000, 1_000_000_000, 8_000_000, TimeSpan.FromSeconds(70));
+                PollTransfers();
+                _claude.FakeWorking(true);
+                UpdateState();
+                await Task.Delay(3000);
+                _claude.FakeDone();
+                await Task.Delay(2700);
+                await Film("a_claude_done", 1800);
+                await Task.Delay(1000);
+                _claude.FakeWorking(true);
+                await Film("b_claude_again", 2000);
+                _claude.FakeWorking(false);
+                _media.Fake("", "", false);
+                _transfers.Fake = null;
+                PollTransfers();
+                UpdateState();
+                await Task.Delay(2500);
+            }
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "trip-log.txt"), log.ToString());
+            Application.Current.Shutdown();
+            return;
+        }
+        // Claude + music + download + a notification at once, on the left and on the right (quick)
+        if (Environment.GetEnvironmentVariable("NOTCHY_SIDEALLTEST") == "1")
+        {
+            S.ClaudeShowInCompact = true;
+            var dpiS = VisualTreeHelper.GetDpi(this);
+            var wa = SystemParameters.WorkArea;
+            await Task.Delay(7000);
+            foreach (var place in new[] { IslandPlace.Left, IslandPlace.Right })
+            {
+                S.Place = place;
+                ApplySettings();
+                await Task.Delay(1500);
+                _claude.FakeWorking(true);
+                _media.Fake("Waking up", "Teste", true);
+                _transfers.Fake = new TransferInfo(TransferKind.Download, "filme.mp4", 1, 0.07, 70_000_000, 1_000_000_000, 8_000_000, TimeSpan.FromSeconds(70));
+                PollTransfers();
+                UpdateState();
+                await Task.Delay(2500);
+                OnNotice(new Notice(910001, "WhatsApp", "", "Mãe", "Já chegou em casa?", DateTime.Now, null, false));
+                await Task.Delay(1200);
+                double x = place == IslandPlace.Left ? wa.Left : wa.Right - 460;
+                var grab = new System.Drawing.Rectangle((int)(x * dpiS.DpiScaleX), (int)((wa.Top + wa.Height * SideCenterAt - 230) * dpiS.DpiScaleY), (int)(460 * dpiS.DpiScaleX), (int)(460 * dpiS.DpiScaleY));
+                using (var bmp = new System.Drawing.Bitmap(grab.Width, grab.Height))
+                {
+                    using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(grab.Left, grab.Top, 0, 0, bmp.Size);
+                    bmp.Save(System.IO.Path.Combine(folder, $"all_{place}.png"));
+                }
+                System.IO.File.AppendAllText(System.IO.Path.Combine(folder, "all-log.txt"),
+                    $"{place}: claude {ClaudePod.ActualWidth:0}x{ClaudePod.ActualHeight:0} canto={ClaudePod.CornerRadius} dl {DownloadPod.ActualWidth:0}x{DownloadPod.ActualHeight:0} canto={DownloadPod.CornerRadius} pilulaFundo={_pillBody.Background}" + Environment.NewLine);
+                EndNotice();
+                _claude.FakeWorking(false);
+                _media.Fake("", "", false);
+                _transfers.Fake = null;
+                PollTransfers();
+                UpdateState();
+                await Task.Delay(2000);
+            }
+            Application.Current.Shutdown();
+            return;
+        }
+        // notifications on a side, every scenario, filmed from the real screen: closed island with nothing / music / Claude /
+        // Claude + music / music + download / focus; the island opening and closing with a notification up; one arriving
+        // while it's open; the volume over a notification
+        if (Environment.GetEnvironmentVariable("NOTCHY_SIDENOTIFTEST") == "1")
+        {
+            S.Place = IslandPlace.Right;
+            S.ClaudeShowInCompact = true;
+            var dpiS = VisualTreeHelper.GetDpi(this);
+            var wa = SystemParameters.WorkArea;
+            var grab = new System.Drawing.Rectangle((int)((wa.Right - 560) * dpiS.DpiScaleX), (int)((wa.Top + wa.Height * SideCenterAt - 250) * dpiS.DpiScaleY),
+                (int)(560 * dpiS.DpiScaleX), (int)(500 * dpiS.DpiScaleY));
+            var log = new System.Text.StringBuilder();
+            string State() => $"{_state}/{_compactMode} ilha={Island.ActualWidth:0}x{Island.ActualHeight:0} vis={Island.Visibility} aviso={_noticeShown?.Title ?? "-"} pilula={_noticeInPill} pilulaVis={_noticePill.Visibility}:{_noticePill.Opacity:0.00} cartao={_noticePanel.Opacity:0.00} bolhaClaude={ClaudePod.Visibility}:{ClaudePod.Opacity:0.00} bolhaDl={DownloadPod.Visibility}:{DownloadPod.Opacity:0.00}";
+            async Task Film(string name, int ms, int every)
+            {
+                var t0 = DateTime.UtcNow;
+                for (int f = 0; (DateTime.UtcNow - t0).TotalMilliseconds < ms; f++)
+                {
+                    using (var bmp = new System.Drawing.Bitmap(grab.Width, grab.Height))
+                    {
+                        using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(grab.Left, grab.Top, 0, 0, bmp.Size);
+                        bmp.Save(System.IO.Path.Combine(folder, $"{name}_{f:00}.png"));
+                    }
+                    log.AppendLine($"{name}_{f:00} {(DateTime.UtcNow - t0).TotalMilliseconds:0}ms {State()}");
+                    await Task.Delay(every);
+                }
+            }
+            uint id = 900000;
+            Notice Make(string title, string text) => new(id++, "WhatsApp", "", title, text, DateTime.Now, null, false);
+            async Task Reset()
+            {
+                EndNotice();
+                _forcedState = null;
+                _hoverActive = _clickOpened = false;
+                _claude.FakeWorking(false);
+                _media.Fake("", "", false);
+                _transfers.Fake = null;
+                PollTransfers();
+                _focus.Reset();
+                UpdateState();
+                await Task.Delay(2500);
+            }
+            async Task Closed(string name, Action setup)
+            {
+                setup();
+                UpdateState();
+                await Task.Delay(2200);
+                log.AppendLine($"--- {name}: antes {State()}");
+                OnNotice(Make("Mãe", "Já chegou em casa? Me avisa quando chegar"));
+                await Film(name, 2600, 160);
+                await Reset();
+            }
+
+            await Task.Delay(7000); // (the intro at the top, then the move to the side)
+            await Closed("n1_parada", () => { });
+            await Closed("n2_musica", () => _media.Fake("Waking up", "Teste", true));
+            await Closed("n3_claude", () => _claude.FakeWorking(true));
+            await Closed("n4_claude_musica", () => { _claude.FakeWorking(true); _media.Fake("Waking up", "Teste", true); });
+            await Closed("n5_musica_download", () =>
+            {
+                _media.Fake("Waking up", "Teste", true);
+                _transfers.Fake = new TransferInfo(TransferKind.Download, "filme.mp4", 1, 0.42, 420_000_000, 1_000_000_000, 8_000_000, TimeSpan.FromSeconds(70));
+                PollTransfers();
+            });
+            await Closed("n6_foco", () => _focus.Start());
+
+            // a notification up, the island opens (mouse on it) and closes again
+            _media.Fake("Waking up", "Teste", true);
+            UpdateState();
+            await Task.Delay(2200);
+            log.AppendLine($"--- n7_abre_fecha: antes {State()}");
+            OnNotice(Make("Ana", "chego em 10 min!"));
+            await Film("n7a_aviso", 700, 100);
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            await Film("n7b_abrindo", 1200, 60);
+            _forcedState = null;
+            UpdateState();
+            await Film("n7c_fechando", 1500, 60);
+            await Reset();
+
+            // the island open, a notification arrives (the pill under it), then the island closes
+            _media.Fake("Waking up", "Teste", true);
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            await Task.Delay(1500);
+            log.AppendLine($"--- n8_aberta: antes {State()}");
+            OnNotice(Make("Pedro", "olha isso"));
+            await Film("n8a_chega", 1200, 80);
+            _forcedState = null;
+            UpdateState();
+            await Film("n8b_fecha", 1500, 60);
+            await Reset();
+
+            // the volume over a notification
+            _media.Fake("Waking up", "Teste", true);
+            UpdateState();
+            await Task.Delay(2200);
+            OnNotice(Make("Mãe", "Já chegou?"));
+            await Task.Delay(500);
+            ShowVolumeLevel(0.5, false);
+            _volumeOsdUntil = DateTime.UtcNow.AddSeconds(1.2);
+            UpdateState();
+            await Film("n9_volume", 2400, 120);
+            await Reset();
+
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "notif-log.txt"), log.ToString());
+            Application.Current.Shutdown();
+            return;
+        }
+        // stage 2 of the island on a side, from the real screen: each minimized state on the standing pill
+        if (Environment.GetEnvironmentVariable("NOTCHY_SIDE2TEST") == "1")
+        {
+            S.Place = IslandPlace.Right;
+            var dpiS = VisualTreeHelper.GetDpi(this);
+            var wa = SystemParameters.WorkArea;
+            var grab = new System.Drawing.Rectangle((int)((wa.Right - 260) * dpiS.DpiScaleX), (int)((wa.Top + wa.Height * SideCenterAt - 200) * dpiS.DpiScaleY),
+                (int)(260 * dpiS.DpiScaleX), (int)(400 * dpiS.DpiScaleY));
+            async Task Grab(string name, int wait)
+            {
+                await Task.Delay(wait);
+                using var bmp = new System.Drawing.Bitmap(grab.Width, grab.Height);
+                using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(grab.Left, grab.Top, 0, 0, bmp.Size);
+                bmp.Save(System.IO.Path.Combine(folder, name + ".png"));
+            }
+            var log = new System.Text.StringBuilder();
+            void Note(string what)
+            {
+                log.AppendLine($"{what}: {_state}/{_compactMode} pilula={AsPill} ilha={Island.ActualWidth:0}x{Island.ActualHeight:0} texto='{CompactText.Text}' pede={PillSize(_state)}");
+                foreach (FrameworkElement c in CompactPanel.Children)
+                    log.AppendLine($"   {c.GetType().Name} linha={Grid.GetRow(c)} {c.DesiredSize} vis={c.Visibility}");
+                foreach (FrameworkElement c in ((StackPanel)CompactPanel.Children[0]).Children)
+                    log.AppendLine($"      {c.Name} {c.DesiredSize} vis={c.Visibility}");
+            }
+            await Task.Delay(7000); // (the intro at the top, then the move to the side)
+            S.ClaudeShowInCompact = false;
+            _media.Fake("", "", false);
+            await Grab("s01_idle", 1200); Note("parada");
+            _media.Fake("Waking up", "Teste", true);
+            await Grab("s02_music_title", 1500); Note("musica");
+            SetCompactText("Those nights and those dreams we had");
+            await Grab("s03_music_lyric", 900); Note("letra");
+            SetCompactText("");
+            await Grab("s03b_music_solo", 900); Note("solo");
+            ShowVolumeLevel(0.62, false);
+            _volumeOsdUntil = DateTime.UtcNow.AddSeconds(2);
+            UpdateState();
+            await Grab("s04_volume", 700); Note("volume");
+            await Task.Delay(2200);
+            _transfers.Fake = new TransferInfo(TransferKind.Download, "filme.mp4", 1, 0.42, 420_000_000, 1_000_000_000, 8_000_000, TimeSpan.FromSeconds(70));
+            PollTransfers();
+            await Grab("s05_music_and_download", 1800); Note("musica+download");
+            _media.Fake("", "", false);
+            await Grab("s06_download_morph", 350); Note("download virando ilha");
+            await Grab("s07_download", 1500); Note("download");
+            _transfers.Fake = null;
+            PollTransfers();
+            await Grab("s08_download_done", 600); Note("download acabou");
+            await Task.Delay(2500);
+            S.ClaudeShowInCompact = true;
+            UpdateState();
+            await Grab("s09_claude", 1500); Note("claude");
+            _media.Fake("Waking up", "Teste", true);
+            await Grab("s10_claude_to_bubble", 350); Note("claude virando bolha");
+            await Grab("s11_music_and_claude", 1500); Note("musica+claude");
+            _media.Fake("", "", false);
+            S.ClaudeShowInCompact = false;
+            UpdateState();
+            await Task.Delay(1500);
+            _focus.Start();
+            UpdateState();
+            await Grab("s12_focus", 1500); Note("foco");
+            _focus.Reset();
+            UpdateState();
+            await Grab("s13_back_idle", 2000); Note("de volta");
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "side2-log.txt"), log.ToString());
+            Application.Current.Shutdown();
+            return;
+        }
+        // the island on a side, filmed from the real screen (pill, island and glass together): after the intro, opening,
+        // closing back into the pill, a notification with the island closed
+        if (Environment.GetEnvironmentVariable("NOTCHY_SIDEANIMTEST") == "1")
+        {
+            S.Place = IslandPlace.Right;
+            var dpiS = VisualTreeHelper.GetDpi(this);
+            var wa = SystemParameters.WorkArea;
+            var grab = new System.Drawing.Rectangle((int)((wa.Right - 620) * dpiS.DpiScaleX), (int)((wa.Top + wa.Height * SideCenterAt - 260) * dpiS.DpiScaleY),
+                (int)(620 * dpiS.DpiScaleX), (int)(520 * dpiS.DpiScaleY));
+            void Grab(string name)
+            {
+                using var bmp = new System.Drawing.Bitmap(grab.Width, grab.Height);
+                using (var g = System.Drawing.Graphics.FromImage(bmp)) g.CopyFromScreen(grab.Left, grab.Top, 0, 0, bmp.Size);
+                bmp.Save(System.IO.Path.Combine(folder, name + ".png"));
+            }
+            async Task Film(string prefix, int ms)
+            {
+                var t0 = DateTime.UtcNow;
+                for (int f = 0; (DateTime.UtcNow - t0).TotalMilliseconds < ms; f++)
+                {
+                    Grab($"{prefix}{f:00}_{(DateTime.UtcNow - t0).TotalMilliseconds:0000}");
+                    await Task.Delay(40);
+                }
+            }
+            await Task.Delay(1500);
+            await Film("a_intro_to_side_", 6000);
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            await Film("b_open_", 800);
+            _forcedState = null;
+            UpdateState();
+            await Film("c_close_", 900);
+            await Task.Delay(500);
+            OnNotice(new Notice(999999, "WhatsApp", "", "Mãe", "Já chegou em casa? Me avisa quando chegar ❤️", DateTime.Now, null, false));
+            await Film("d_notice_", 1600);
+            EndNotice();
+            await Film("e_notice_gone_", 1200);
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            await Task.Delay(700);
+            OnNotice(new Notice(999998, "WhatsApp", "", "Ana", "chego em 10 min!", DateTime.Now, null, false));
+            await Film("f_open_notice_", 1200);
+            _forcedState = null;
+            UpdateState();
+            await Task.Delay(1500);
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "side-log.txt"),
+                $"place {_place} state {_state} {_compactMode} pilula {AsPill} ilha {Island.ActualWidth:0}x{Island.ActualHeight:0}");
+            Application.Current.Shutdown();
+            return;
+        }
+        // only the island on a side (2.5): out of the top and into the right edge, open there, the left edge, back to the top
+        if (Environment.GetEnvironmentVariable("NOTCHY_SIDETEST") == "1")
+        {
+            await Task.Delay(4500); // (the hello wave first)
+            await ShotAsync(folder, "side_0_top", 0);
+            S.Place = IslandPlace.Right;
+            ApplySettings();
+            await ShotAsync(folder, "side_1_leaving_top", 120);
+            await ShotAsync(folder, "side_2_pill_coming", 330);
+            await ShotAsync(folder, "side_3_pill_right", 700);
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            await ShotAsync(folder, "side_4_open_right", 900);
+            _forcedState = null;
+            UpdateState();
+            await ShotAsync(folder, "side_5_pill_back", 900);
+            _media.Fake("Waking up", "Teste", true);
+            await ShotAsync(folder, "side_6_pill_music", 1200);
+            S.Place = IslandPlace.Left;
+            ApplySettings();
+            await ShotAsync(folder, "side_7_pill_left", 1200);
+            _forcedState = IslandState.Expanded;
+            UpdateState();
+            await ShotAsync(folder, "side_8_open_left", 900);
+            _forcedState = null;
+            S.Place = IslandPlace.Top;
+            ApplySettings();
+            await ShotAsync(folder, "side_9_back_top", 1400);
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "side-log.txt"),
+                $"place {_place} state {_state} janela {Left:0},{Top:0} pilula {AsPill}");
+            Application.Current.Shutdown();
+            return;
+        }
         if (Environment.GetEnvironmentVariable("NOTCHY_BARHOVERTEST") == "1")
         {
             await Task.Delay(4000); // (the hello wave first)
@@ -2488,6 +4099,9 @@ public partial class MainWindow : Window
         if (Environment.GetEnvironmentVariable("NOTCHY_NEWSTEST") == "1")
         {
             await Task.Delay(4000);
+            // (seen in memory only: showing it must not save "seen" over the user's settings)
+            S.LastSeenNotes = WhatsNew.Version;
+            _whatsNewPending = false;
             ShowWhatsNew();
             await Task.Delay(1000);
             _newsManual = true;
@@ -2592,6 +4206,74 @@ public partial class MainWindow : Window
             return;
         }
         // only the screen capture (quick): Print Screen opens it, an area with marks, the colours, the trip to the island, the notice
+        // while the picture flies up to the island: does the capture window still take the clicks? (asks Windows which
+        // window is under a few points of the screen, the same thing it does to decide who gets a click)
+        if (Environment.GetEnvironmentVariable("NOTCHY_CAPTURECLICKTEST") == "1")
+        {
+            [System.Runtime.InteropServices.DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+            [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr WindowFromPoint(Native.POINT p);
+            [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr h, uint flags);
+            [System.Runtime.InteropServices.DllImport("user32.dll")] static extern long GetWindowLongPtr(IntPtr h, int index);
+            [System.Runtime.InteropServices.DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+            var log = new System.Text.StringBuilder();
+            await Task.Delay(5000);
+            keybd_event(0x2C, 0, 0, UIntPtr.Zero);
+            keybd_event(0x2C, 0, 2, UIntPtr.Zero);
+            await Task.Delay(900);
+            var cw = _capture;
+            if (cw != null)
+            {
+                var own = new System.Windows.Interop.WindowInteropHelper(cw).Handle;
+                void Probe(string when)
+                {
+                    long ex = GetWindowLongPtr(own, -20);
+                    log.Append($"{when}: estilo transparente={(ex & 0x20) != 0} camada={(ex & 0x80000) != 0} ·");
+                    var dpiC = VisualTreeHelper.GetDpi(cw);
+                    int mx = (int)(650 * dpiC.DpiScaleX), my = (int)(450 * dpiC.DpiScaleY); // (the middle of the picked area: where the picture starts)
+                    foreach (var (x, y) in new[] { (mx, my), (200, 200), (900, 700), (1600, 1100) })
+                    {
+                        var h = GetAncestor(WindowFromPoint(new Native.POINT { X = x, Y = y }), 2);
+                        GetWindowThreadProcessId(h, out uint pid);
+                        string who = h == own ? "CAPTURA" : h == _hwnd ? "ilha" : pid == (uint)Environment.ProcessId ? "outra janela do Notchy" : "app de baixo";
+                        log.Append($" ({x},{y})={who}");
+                    }
+                    log.AppendLine();
+                }
+                Probe("escolhendo");
+                cw.TestSelect(new Rect(400, 300, 500, 300));
+                await Task.Delay(400);
+                Probe("editando");
+                cw.TestHoldFly();
+                var fly = cw.TestFinish(CaptureAction.Copy);
+                await Task.Delay(300);
+                cw.TestFlyAt(0.05);
+                await Task.Delay(100);
+                Probe("voo começando");
+                cw.TestFlyAt(0.3);
+                await Task.Delay(100);
+                Probe("voando");
+                // a few frames of the flight, from the real screen (the picture in its own window now)
+                var scr = System.Windows.Forms.Screen.PrimaryScreen!.Bounds;
+                foreach (var t in new[] { 0.12, 0.3, 0.45, 0.6, 0.72, 0.8, 0.9 })
+                {
+                    cw.TestFlyAt(t);
+                    await Task.Delay(120);
+                    using var bmp = new System.Drawing.Bitmap(scr.Width / 2, scr.Height / 2);
+                    using (var full = new System.Drawing.Bitmap(scr.Width, scr.Height))
+                    {
+                        using (var g = System.Drawing.Graphics.FromImage(full)) g.CopyFromScreen(scr.Left, scr.Top, 0, 0, full.Size);
+                        using (var g = System.Drawing.Graphics.FromImage(bmp)) g.DrawImage(full, 0, 0, bmp.Width, bmp.Height);
+                    }
+                    bmp.Save(System.IO.Path.Combine(folder, $"voo_{t:0.00}.png"));
+                }
+                cw.TestFlyAt(5);
+                await Task.Delay(500);
+            }
+            else log.AppendLine("a captura não abriu");
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "clique-log.txt"), log.ToString());
+            Application.Current.Shutdown();
+            return;
+        }
         if (Environment.GetEnvironmentVariable("NOTCHY_CAPTURETEST") == "1")
         {
             [System.Runtime.InteropServices.DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
@@ -2674,7 +4356,7 @@ public partial class MainWindow : Window
                 cw.TestFlyAt(t);
                 await Task.Delay(45);
                 GrabScreen($"h{f2++:00}_{t:0.00}");
-                System.IO.File.AppendAllText(log, $"{t:0.00}: {_state} {_compactMode} ilha {Island.ActualWidth:0}x{Island.ActualHeight:0} vis {Island.Visibility} janela {Opacity:0.0} compacto {CompactPanel.Opacity:0.00} aviso {_shotPanel.Opacity:0.00} topo {_topHidden:0} captura {cw.IsVisible} · luz {FocusLight.Visibility} {FocusLight.Opacity:0.00} {(FocusLight.Stroke as SolidColorBrush)?.Color} {FocusLight.Width:0}x{FocusLight.Height:0} trilho {FocusTrack.Opacity:0.00}{Environment.NewLine}");
+                System.IO.File.AppendAllText(log, $"{t:0.00}: {_state} {_compactMode} ilha {Island.ActualWidth:0}x{Island.ActualHeight:0} vis {Island.Visibility} janela {Opacity:0.0} compacto {CompactPanel.Opacity:0.00} aviso {_noticePill.Opacity:0.00} topo {_topHidden:0} captura {cw.IsVisible} · luz {FocusLight.Visibility} {FocusLight.Opacity:0.00} {(FocusLight.Stroke as SolidColorBrush)?.Color} {FocusLight.Width:0}x{FocusLight.Height:0} trilho {FocusTrack.Opacity:0.00}{Environment.NewLine}");
             }
             cw.TestFlyAt(2);
             await Task.Delay(100);
@@ -2705,7 +4387,7 @@ public partial class MainWindow : Window
             Note($"copiado: {Clipboard.ContainsImage()} · aviso: {_compactMode} · ilha visível: {Opacity:0}");
             await ShotAsync(folder, "k6_notice", 200);
             await ShotAsync(folder, "k7_notice_later", 1200);
-            if (_shotPicture != null) Note($"imagem {_shotPicture.PixelWidth}x{_shotPicture.PixelHeight} · arquivo {_shotFile}");
+            if (ShotPicture != null) Note($"imagem {ShotPicture.PixelWidth}x{ShotPicture.PixelHeight} · arquivo {ShotShown?.File}");
             Application.Current.Shutdown();
             return;
         }

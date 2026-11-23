@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -57,7 +57,7 @@ public partial class MainWindow
 
     private bool HasContext => _ctxText != null || _ctxImage != null;
     private double ChatContentHeight => _chatView == ChatView.Answer ? 292 : HasContext ? 262 : 214;
-    private bool ChatKeepsOpen => (_chatInput != null && (_chatInput.IsKeyboardFocused || _draggingEyes || _chatPinned)) || FocusTaskBox.IsKeyboardFocused;
+    private bool ChatKeepsOpen => (_chatInput != null && (_chatInput.IsKeyboardFocused && IsActive || _draggingEyes || _chatPinned)) || FocusTaskBox.IsKeyboardFocused && IsActive;
 
     // =====================================================================================
     // build
@@ -88,16 +88,7 @@ public partial class MainWindow
         ChatTab.Children.Add(_answerView);
         ChatTab.Children.Add(input);
 
-        Deactivated += (_, _) =>
-        {
-            // typing is over: go back to never stealing focus
-            if (_hwnd != IntPtr.Zero) Native.SetActivatable(_hwnd, false);
-            _clickOpened = CursorOverIsland();
-            _hoverRequested = _clickOpened;
-            _hoverTimer.Stop();
-            _hoverTimer.Interval = TimeSpan.FromMilliseconds(300);
-            _hoverTimer.Start();
-        };
+        Deactivated += (_, _) => OnIslandDeactivated();
 
         ApplyChatTexts();
         UpdateChatView(animate: false);
@@ -248,7 +239,9 @@ public partial class MainWindow
         _replaceButton = SmallPill(0xE8AB, "chat.replace", async () =>
         {
             if (_ctxText == null) return;
-            await ScreenContext.ReplaceSelectionAsync(_ctxText, _answer);
+            _replacingText = true; // (it clicks into the other app itself: that's not a click outside)
+            try { await ScreenContext.ReplaceSelectionAsync(_ctxText, _answer); }
+            finally { _replacingText = false; }
             FlashLabel(Loc.T("chat.replaced"));
             Happy();
             await BackToChatHomeAsync();
@@ -738,8 +731,43 @@ public partial class MainWindow
         if (focusInput) FocusChatInput();
     }
 
+    /// <summary>Another window came to the front (typing in the chat is over, an app opened from the island...).</summary>
+    private void OnIslandDeactivated()
+    {
+        // typing is over: go back to never stealing focus
+        if (_hwnd != IntPtr.Zero) Native.SetActivatable(_hwnd, false);
+        // (just sent to an app from the island: it stays closed, even with the mouse still where it was)
+        _clickOpened = DateTime.UtcNow >= _ignoreHoverUntil && CursorOverIsland();
+        _hoverRequested = _clickOpened;
+        _hoverTimer.Stop();
+        _hoverTimer.Interval = TimeSpan.FromMilliseconds(300);
+        _hoverTimer.Start();
+    }
+
     /// <summary>Open after a capture (eyes / screen snip) until the mouse comes back to the island.</summary>
     private bool _chatPinned;
+
+    private bool _replacingText, _mouseWasDown;
+
+    /// <summary>
+    /// Every frame: a click outside Notchy (another app, the desktop) lets the open island go, whatever was keeping it
+    /// open (the chat's box holding the keys, open after a capture, opened by a click...).
+    /// </summary>
+    private void CheckClickOutside()
+    {
+        bool down = Native.IsKeyDown(0x01) || Native.IsKeyDown(0x02);
+        bool pressed = down && !_mouseWasDown;
+        _mouseWasDown = down;
+        if (!pressed || _state != IslandState.Expanded || _replacingText || _draggingEyes || _placeDragging || _capturing || _lassoing) return;
+        Native.GetCursorPos(out var p);
+        var under = ScreenContext.RootWindowAt(p.X, p.Y);
+        if (under != IntPtr.Zero && Native.ProcessOf(under) == Environment.ProcessId) return; // (Notchy's own: the island, its menus, a capture)
+        if (CursorOverIsland()) return;
+        if (_chatInput.IsKeyboardFocused || FocusTaskBox.IsKeyboardFocused) Keyboard.ClearFocus();
+        if (_hwnd != IntPtr.Zero) Native.SetActivatable(_hwnd, false);
+        _chatPinned = _clickOpened = _hoverActive = _hoverRequested = _holdOpenAfterPill = false;
+        UpdateState();
+    }
 
     /// <summary>Called when the mouse enters the island: from now on it opens/closes with the mouse again.</summary>
     private void UnpinChat() => _chatPinned = false;
@@ -845,6 +873,7 @@ public partial class MainWindow
         _replaceButton.Visibility = Visibility.Collapsed;
         SetChatView(ChatView.Answer);
 
+        if (_runner is GeminiRunner gemini) gemini.Quick = action is "spelling" or "translate";
         _runner.Run(prompt.ToString(), S.ChatUseGemini ? FreeSystemPrompt : SystemPrompt, followUp, includeContext ? _ctxImage : null);
     }
 

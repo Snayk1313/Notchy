@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Media;
@@ -145,15 +145,24 @@ public sealed class IslandOutline
     private readonly List<Point> _pts = new();
     private readonly List<double> _at = new();
     private double _w = -1, _h = -1, _top = -1;
+    private int _turn;
+
+    /// <summary>On a side the outline is built for the island lying on its edge, open past it like the top's (this much).</summary>
+    private const double SideHidden = 30;
 
     public double Length { get; private set; }
 
     public void Invalidate() => _w = -1;
 
-    /// <summary>Rebuilds for an island of W x H (visible part) when the size changed; true if it did.</summary>
-    public bool Build(double W, double H, double topHidden)
+    /// <summary>
+    /// Rebuilds for an island of W x H (visible part) when the size changed; true if it did. <paramref name="turn"/>:
+    /// the island standing on the right (1) or left (-1) edge of the screen (2.5), open on that edge.
+    /// </summary>
+    public bool Build(double W, double H, double topHidden, int turn = 0)
     {
-        if (Math.Abs(W - _w) < 0.25 && Math.Abs(H - _h) < 0.25 && topHidden == _top) return false;
+        if (turn != 0) (W, H, topHidden) = (H, W, SideHidden); // lying down, its edge on top
+        if (Math.Abs(W - _w) < 0.25 && Math.Abs(H - _h) < 0.25 && topHidden == _top && turn == _turn) return false;
+        _turn = turn;
         _w = W;
         _h = H;
         _top = topHidden;
@@ -247,6 +256,7 @@ public sealed class IslandOutline
             if (_at[i] < from || _at[i] > to) continue;
             var p = _pts[i];
             if (mirror) p = new Point(_w - p.X, p.Y);
+            p = Stand(p);
             if (!started)
             {
                 ctx.BeginFigure(p, false, false);
@@ -266,6 +276,14 @@ public sealed class IslandOutline
         return bottom - top < 0.5 ? 0 : Math.Clamp((_pts[i].Y - top) / (bottom - top), 0, 1);
     }
 
+    /// <summary>Built lying down for a side: turned to stand, its open edge on the screen's edge (past it).</summary>
+    private Point Stand(Point p) => _turn switch
+    {
+        1 => new Point(_top + _h - p.Y, p.X),
+        -1 => new Point(p.Y - _top, p.X),
+        _ => p
+    };
+
     /// <summary>The stretch [from, to] (distance along the half outline) on both sides.</summary>
     public Geometry Segment(double from, double to)
     {
@@ -282,6 +300,7 @@ public sealed class IslandOutline
                     if (_at[i] > to) break;
                     var p = _pts[i];
                     if (side == 1) p = new Point(_w - p.X, p.Y);
+                    p = Stand(p);
                     if (!started)
                     {
                         ctx.BeginFigure(p, false, false);

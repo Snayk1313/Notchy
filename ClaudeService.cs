@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -97,6 +97,26 @@ public sealed class ClaudeService
             .FirstOrDefault();
 
     public bool AnyWorking => _sessions.Values.Any(s => s.IsWorking);
+
+#if DEBUG
+    /// <summary>Snapshot tests: a made-up session working (true) or gone (false), as if its hooks had said so.</summary>
+    public void FakeWorking(bool on)
+    {
+        if (on) _sessions["fake"] = new ClaudeSession { Id = "fake", Cwd = @"C:\projeto", TaskStart = DateTime.Now, Phase = default, Prompt = "Teste", LastEvent = DateTime.Now };
+        else _sessions.Remove("fake");
+        Changed?.Invoke();
+    }
+
+    /// <summary>Snapshot tests: the made-up session finishes its task.</summary>
+    public void FakeDone()
+    {
+        if (!_sessions.TryGetValue("fake", out var s)) return;
+        s.TaskEnd = DateTime.Now;
+        s.LastEvent = DateTime.Now;
+        TaskDone?.Invoke(s);
+        Changed?.Invoke();
+    }
+#endif
 
     public void Start()
     {
@@ -552,6 +572,9 @@ public sealed class ClaudeService
             _extraToday = 0;
         }
         Recent.Insert(0, new ClaudeJob(s.Project, s.Prompt, DateTime.Now, s.Elapsed.TotalSeconds));
+        string day = DateTime.Today.ToString("yyyy-MM-dd");
+        Days[day] = Days.GetValueOrDefault(day) + 1;
+        foreach (var old in Days.Keys.Where(k => string.CompareOrdinal(k, DateTime.Today.AddDays(-14).ToString("yyyy-MM-dd")) < 0).ToList()) Days.Remove(old);
         if (Recent.Count > 12)
         {
             var dropped = Recent[^1];
@@ -561,9 +584,16 @@ public sealed class ClaudeService
         SaveStats();
     }
 
+    /// <summary>Jobs finished per day ("yyyy-MM-dd"), the last two weeks (the week chart).</summary>
+    public Dictionary<string, int> Days { get; private set; } = new();
+
+    /// <summary>Jobs finished that day.</summary>
+    public int JobsOn(DateTime day) => day.Date == DateTime.Today ? JobsToday : Days.GetValueOrDefault(day.ToString("yyyy-MM-dd"));
+
     private sealed class Stats
     {
         public List<ClaudeJob> Recent { get; set; } = new();
+        public Dictionary<string, int>? Days { get; set; }
         public int ExtraToday { get; set; }
         public DateTime ExtraDay { get; set; }
     }
@@ -576,6 +606,8 @@ public sealed class ClaudeService
             var st = JsonSerializer.Deserialize<Stats>(File.ReadAllText(StatsFile));
             if (st == null) return;
             Recent = st.Recent;
+            // (before the days were kept: what the recent list remembers)
+            Days = st.Days ?? Recent.GroupBy(j => j.Finished.Date.ToString("yyyy-MM-dd")).ToDictionary(g => g.Key, g => g.Count());
             if (st.ExtraDay == DateTime.Today)
             {
                 _extraToday = st.ExtraToday;
@@ -593,7 +625,7 @@ public sealed class ClaudeService
         try
         {
             Directory.CreateDirectory(AppSettings.Folder);
-            SafeFile.Write(StatsFile, JsonSerializer.Serialize(new Stats { Recent = Recent, ExtraToday = _extraToday, ExtraDay = _extraDay }));
+            SafeFile.Write(StatsFile, JsonSerializer.Serialize(new Stats { Recent = Recent, ExtraToday = _extraToday, ExtraDay = _extraDay, Days = Days }));
         }
         catch
         {

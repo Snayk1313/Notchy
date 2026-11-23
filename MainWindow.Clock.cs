@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -243,6 +243,7 @@ public partial class MainWindow
         eyes.Children.Add(Eye(out _alarmEyeL, new Thickness(0, 0, 2, 0)));
         eyes.Children.Add(Eye(out _alarmEyeR, new Thickness(2, 0, 0, 0)));
         face.Child = eyes;
+        _alarmFace = face;
         top.Children.Add(face);
         _alarmNext = new TextBlock { FontSize = 11.5, Foreground = Brushes.White, Margin = new Thickness(9, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
         top.Children.Add(_alarmNext);
@@ -437,6 +438,7 @@ public partial class MainWindow
     {
         e.Handled = true;
         if (_editing != null) return; // the editor's numbers take the wheel; elsewhere it does nothing meanwhile
+        if (OnSide) return; // (standing on a side both pages show: nothing to slide to)
         if (AnimNow - _clockWheelAt < 0.45) return; // one notch = one page, even on free-spinning wheels
         bool down = e.Delta < 0;
         if (down == _clockOnAlarms) return;
@@ -483,6 +485,25 @@ public partial class MainWindow
             page.BeginAnimation(OpacityProperty, fade);
             page.IsHitTestVisible = visible;
         }
+        if (OnSide)
+        {
+            // standing on a side the island is taller: the Timer on top and the Alarmes right under it, both showing
+            // (creating or editing an alarm: the Alarmes take the whole page, the Timer slides up out of the way)
+            const double timer = 142; // (the Timer needs 136 and the play button glows a bit; the alarm cards need 117 of the 123 left)
+            bool full = _editing != null;
+            double page = SidePageHeight - SidePageBottom;
+            _timerPage.VerticalAlignment = _alarmPage.VerticalAlignment = VerticalAlignment.Top;
+            _alarmCards.Margin = new Thickness(0, 6, 0, 2);
+            _timerPage.Height = timer;
+            _alarmPage.Height = Math.Max(0, full ? page : page - timer);
+            Place(_timerPage, full ? -timer : 0, !full);
+            Place(_alarmPage, full ? 0 : timer, true);
+            UpdateClockHeader();
+            return;
+        }
+        _timerPage.VerticalAlignment = _alarmPage.VerticalAlignment = VerticalAlignment.Stretch;
+        _alarmCards.Margin = new Thickness(0, 10, 0, 6);
+        _timerPage.Height = _alarmPage.Height = double.NaN;
         Place(_timerPage, _clockOnAlarms ? -h : 0, !_clockOnAlarms);
         Place(_alarmPage, _clockOnAlarms ? 0 : h, _clockOnAlarms);
         UpdateClockHeader();
@@ -1118,6 +1139,7 @@ public partial class MainWindow
         st.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(0.6, 1, d) { EasingFunction = ease });
         st.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(0.6, 1, d) { EasingFunction = ease });
         _alarmEditor.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(Dur(220))));
+        if (OnSide) PlaceClockPages(animate: true); // (standing: the editor gets the whole page)
     }
 
     private void CloseAlarmEditor()
@@ -1131,6 +1153,7 @@ public partial class MainWindow
         _alarmEditor.BeginAnimation(OpacityProperty, fade);
         _alarmCards.IsHitTestVisible = true;
         _alarmCards.BeginAnimation(OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(Dur(240))) { BeginTime = TimeSpan.FromMilliseconds(Dur(100)) });
+        if (OnSide) PlaceClockPages(animate: true); // (standing: the Timer comes back above)
         UpdateClockUi();
     }
 
@@ -1161,6 +1184,28 @@ public partial class MainWindow
             tb.Text = i < days.Length ? days[i] : "";
             tb.Foreground = on ? Br(TimerColor) : White(0x55);
         }
+        if (_edWhen != null) _edWhen.Text = string.Format(Loc.T("clock.ringsin"), FormatUntil(EditorRingsAt() - DateTime.Now));
+    }
+
+    /// <summary>When the alarm being edited would ring next (its days, or the next time the clock gets there).</summary>
+    private DateTime EditorRingsAt()
+    {
+        var at = DateTime.Today.AddHours(_edHour).AddMinutes(_edMinute);
+        for (int i = 0; i < 8; i++, at = at.AddDays(1))
+        {
+            int bit = 1 << (((int)at.DayOfWeek + 6) % 7); // (bit 0 = Monday)
+            if (at > DateTime.Now && (_edDays == 0 || (_edDays & bit) != 0)) return at;
+        }
+        return at;
+    }
+
+    /// <summary>"28 min", "3 h 10 min", "2 d 4 h".</summary>
+    private static string FormatUntil(TimeSpan t)
+    {
+        if (t.TotalMinutes < 1) return "1 min";
+        if (t.TotalHours < 1) return $"{(int)Math.Ceiling(t.TotalMinutes)} min";
+        if (t.TotalDays < 1) return t.Minutes == 0 ? $"{(int)t.TotalHours} h" : $"{(int)t.TotalHours} h {t.Minutes} min";
+        return t.Hours == 0 ? $"{(int)t.TotalDays} d" : $"{(int)t.TotalDays} d {t.Hours} h";
     }
 
     // =====================================================================================

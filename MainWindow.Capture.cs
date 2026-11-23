@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
@@ -22,26 +22,29 @@ namespace Notchy;
 /// </summary>
 public partial class MainWindow
 {
-    private const double ShotWidth = 252, ShotHeight = 48, ShotSeconds = 6;
+    private const double ShotThumbWidth = 86, ShotThumbHeight = 54;
     private static readonly Color ShotIce = Color.FromRgb(0x9A, 0xD7, 0xFF);
 
     private KeyboardHook? _captureHook;
     private CaptureWindow? _capture;          // the last one (kept hidden after a capture, for Editar)
     private bool _capturing;
-    private BitmapSource? _shotPicture;
-    private string? _shotFile;               // where it was saved, or a copy in the temp folder
-    private Grid _shotPanel = null!;
-    private Border _shotThumb = null!;
-    private TextBlock _shotCaption = null!;
     private StackPanel _shotButtons = null!;
     private Border _shotCopy = null!, _shotSave = null!;
-    private EyesFace _shotFace = null!;
 
-    private bool ShotNoticeHolds => _shotPicture != null && _transient == CompactMode.Shot && DateTime.UtcNow < _transientUntil;
+    /// <summary>A screenshot's card: where the picture is (saved, or a copy in the temp folder) and what was already done with it.</summary>
+    private sealed class ShotCard
+    {
+        public string? File;
+        public CaptureAction? Done;
+    }
+
+    /// <summary>The screenshot card on screen now, if that's what the notification card shows.</summary>
+    private ShotCard? ShotShown => _noticeShown?.Local as ShotCard;
+    private BitmapSource? ShotPicture => ShotShown != null ? _noticeShown!.Avatar : null;
 
     private void InitCapture()
     {
-        BuildShotPanel();
+        BuildShotButtons();
         SetCaptureHotkey(S.CaptureHotkey);
     }
 
@@ -99,7 +102,7 @@ public partial class MainWindow
         {
             _capture?.Close();
             _capture = null;
-            if (_transient == CompactMode.Shot) EndShotNotice();
+            if (ShotShown != null) DismissNotice();
             // where the island is (the toolbar comes from there, the picture goes back there)
             var mid = Island.PointToScreen(new Point(Island.ActualWidth / 2, _topHidden + 17));
             double width = Island.PointToScreen(new Point(Island.ActualWidth, 0)).X - Island.PointToScreen(new Point(0, 0)).X;
@@ -260,46 +263,30 @@ public partial class MainWindow
     }
 
     // =====================================================================================
-    // the notice on the island: eyes ^ ^, the picture, Copiar · Salvar · Editar
+    // the card: the picture, "Print · agora", what was done, Copiar · Salvar · Editar as round icons. It's the
+    // notifications' card, in their line, under the island: the island itself stays free to open.
     // =====================================================================================
 
-    private void BuildShotPanel()
+    private void BuildShotButtons()
     {
-        _shotPanel = new Grid { Width = ShotWidth, Height = ShotHeight, VerticalAlignment = VerticalAlignment.Top, HorizontalAlignment = HorizontalAlignment.Center, Opacity = 0, IsHitTestVisible = false, Background = Brushes.Transparent };
-        var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-        _shotFace = new EyesFace { BaseMood = Mood.Happy, Margin = new Thickness(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center };
-        row.Children.Add(_shotFace);
-        _shotThumb = new Border { Width = 54, Height = 34, CornerRadius = new CornerRadius(6), Cursor = Cursors.Hand, ToolTip = Loc.T("cap.open"),
-            BorderBrush = White(0x22), BorderThickness = new Thickness(1) };
-        _shotThumb.MouseLeftButtonUp += (_, e) =>
-        {
-            e.Handled = true;
-            if (_shotFile == null) return;
-            SoundService.Play(Sfx.Click);
-            try { Process.Start(new ProcessStartInfo(_shotFile) { UseShellExecute = true }); } catch (Exception ex) { App.Log(ex); }
-            EndShotNotice();
-        };
-        row.Children.Add(_shotThumb);
-        _shotCaption = new TextBlock { FontSize = 11.5, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0) };
-        row.Children.Add(_shotCaption);
-        _shotButtons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 0, 0, 0) };
+        _shotButtons = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0), Visibility = Visibility.Collapsed };
         // only what's left to do: after Copiar, Salvar and Editar; after Salvar, Copiar and Editar
         _shotCopy = ShotButton("M7,5.5 H12 A1.5,1.5 0 0 1 13.5,7 V12 A1.5,1.5 0 0 1 12,13.5 H7 A1.5,1.5 0 0 1 5.5,12 V7 A1.5,1.5 0 0 1 7,5.5 Z M10.5,5.5 V3.5 A1,1 0 0 0 9.5,2.5 H3.5 A1,1 0 0 0 2.5,3.5 V9.5 A1,1 0 0 0 3.5,10.5 H5.5",
             Loc.T("cap.copy"), () =>
             {
-                if (_shotPicture == null || !CaptureFiles.Copy(_shotPicture)) return;
-                _shotCaption.Text = Loc.T("cap.copied");
+                if (ShotPicture is not { } picture || !CaptureFiles.Copy(picture)) return;
+                _pillTitle.Text = Loc.T("cap.copied");
                 _shotCopy.Visibility = Visibility.Collapsed;
             });
         _shotSave = ShotButton("M8,2.5 V10.5 M4.5,7 L8,10.5 L11.5,7 M2.5,13.5 H13.5", Loc.T("cap.save.short"), () =>
         {
-            if (_shotPicture == null) return;
-            _transientUntil = DateTime.UtcNow.AddSeconds(60); // (stays while the folder window is open)
-            var file = CaptureFiles.Save(_shotPicture, this);
-            _transientUntil = DateTime.UtcNow.AddSeconds(ShotSeconds);
+            if (ShotShown is not { } shot || ShotPicture is not { } picture) return;
+            _pillUntil = DateTime.UtcNow.AddSeconds(60); // (stays while the folder window is open)
+            var file = CaptureFiles.Save(picture, this);
+            _pillUntil = DateTime.UtcNow.AddSeconds(NoticeSeconds);
             if (file == null) return;
-            _shotFile = file;
-            _shotCaption.Text = Loc.T("cap.saved");
+            shot.File = file;
+            _pillTitle.Text = Loc.T("cap.saved");
             _shotSave.Visibility = Visibility.Collapsed;
         });
         _shotButtons.Children.Add(_shotCopy);
@@ -307,26 +294,26 @@ public partial class MainWindow
         _shotButtons.Children.Add(ShotButton("M2.5,13.5 L3.5,10 L10.5,3 L13,5.5 L6,12.5 Z", Loc.T("cap.edit"), () =>
         {
             if (_capture == null) return;
-            EndShotNotice();
+            DismissNotice();
             _capturing = true;
             Opacity = 0;
             _capture.Reopen();
         }));
-        row.Children.Add(_shotButtons);
-        _shotPanel.Children.Add(row);
-        ((Panel)CompactPanel.Parent).Children.Add(_shotPanel);
+        Grid.SetColumn(_shotButtons, 2);
+        _pillRow.Children.Add(_shotButtons);
     }
 
     private Border ShotButton(string icon, string tip, Action click)
     {
         var b = new Border
         {
-            Width = 26, Height = 26, CornerRadius = new CornerRadius(13), Background = White(0x1C), Margin = new Thickness(3, 0, 0, 0), Cursor = Cursors.Hand, ToolTip = tip,
+            Width = 30, Height = 30, CornerRadius = new CornerRadius(15), Background = White(0x1C), Margin = new Thickness(5, 0, 0, 0), Cursor = Cursors.Hand, ToolTip = tip,
             Child = new System.Windows.Shapes.Path { Data = Geometry.Parse(icon), Stroke = Brushes.White, StrokeThickness = 1.7, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round,
                 StrokeLineJoin = PenLineJoin.Round, Width = 16, Height = 16, RenderTransform = new ScaleTransform(0.78, 0.78, 8, 8) }
         };
         b.MouseEnter += (_, _) => b.Background = White(0x30);
         b.MouseLeave += (_, _) => b.Background = White(0x1C);
+        b.MouseLeftButtonDown += (_, e) => e.Handled = true; // (not a click on the card, nor the start of a swipe)
         b.MouseLeftButtonUp += (_, e) =>
         {
             e.Handled = true;
@@ -339,48 +326,36 @@ public partial class MainWindow
     /// <param name="done">What was already done (its button doesn't show); null: no buttons (the text was read).</param>
     private void ShowShotNotice(BitmapSource picture, string caption, string? file, CaptureAction? done)
     {
-        _shotPicture = picture;
-        _shotFile = file;
-        _shotThumb.Background = new ImageBrush(picture) { Stretch = Stretch.UniformToFill };
-        // the picture that went in comes out as the thumbnail: it grows inside the opening island
+        Happy(); // the island's eyes ^ ^ (the card has none: one pair of eyes on screen)
+        var n = new Notice(0, Loc.T("cap.card"), "", caption, $"{picture.PixelWidth} × {picture.PixelHeight}", DateTime.Now, picture, false)
+        {
+            Accent = ShotIce,
+            Local = new ShotCard { File = file, Done = done }
+        };
+        _noticeQueue.Enqueue(n); // (in line with the notifications, in the order they came)
+        if (_noticeShown == null) ShowNextNotice();
+        else UpdateNoticeCount();
+    }
+
+    /// <summary>Its turn in the line: the card under the island, the picture that went in growing out as its thumbnail.</summary>
+    private void ShowShotCard(Notice n, ShotCard shot)
+    {
+        _shotButtons.Visibility = shot.Done == null ? Visibility.Collapsed : Visibility.Visible;
+        _shotCopy.Visibility = shot.Done == CaptureAction.Copy ? Visibility.Collapsed : Visibility.Visible;
+        _shotSave.Visibility = shot.Done == CaptureAction.Save ? Visibility.Collapsed : Visibility.Visible;
+        ShowNoticePill(n);
         var grow = new ScaleTransform(0.3, 0.3);
-        _shotThumb.RenderTransformOrigin = new Point(0.5, 0.5);
-        _shotThumb.RenderTransform = grow;
+        _pillAvatar.RenderTransformOrigin = new Point(0.5, 0.5);
+        _pillAvatar.RenderTransform = grow;
         var pop = new DoubleAnimation(0.3, 1, TimeSpan.FromMilliseconds(Dur(420))) { BeginTime = TimeSpan.FromMilliseconds(Dur(110)), EasingFunction = new BackEase { Amplitude = 0.35, EasingMode = EasingMode.EaseOut } };
         grow.BeginAnimation(ScaleTransform.ScaleXProperty, pop);
         grow.BeginAnimation(ScaleTransform.ScaleYProperty, pop);
-        _shotThumb.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(Dur(200))) { BeginTime = TimeSpan.FromMilliseconds(Dur(110)) });
-        _shotCaption.Text = caption;
-        _shotButtons.Visibility = done == null ? Visibility.Collapsed : Visibility.Visible;
-        _shotCopy.Visibility = done == CaptureAction.Copy ? Visibility.Collapsed : Visibility.Visible;
-        _shotSave.Visibility = done == CaptureAction.Save ? Visibility.Collapsed : Visibility.Visible;
-        _shotFace.React(Mood.Happy, 2);
-        _shotLightAt = AnimNow;
-        ShowTransient(CompactMode.Shot, "", "", ShotSeconds);
     }
 
-    private void EndShotNotice()
+    /// <summary>A click on the card: the picture, in the default viewer.</summary>
+    private static void OpenShot(ShotCard shot)
     {
-        _shotPicture = null;
-        if (_transient == CompactMode.Shot) _transient = CompactMode.None;
-        UpdateState();
-    }
-
-    private double _shotLightAt = -10, _shotFaceLast;
-
-    /// <summary>Every frame: the notice stays while the mouse is on it, and goes when its time is up.</summary>
-    private void UpdateShotNotice()
-    {
-        if (_shotPicture == null) return;
-        if (_transient != CompactMode.Shot)
-        {
-            _shotPicture = null;
-            return;
-        }
-        if (_shotPanel.IsMouseOver) _transientUntil = DateTime.UtcNow.AddSeconds(1.5);
-        double now = _faceClock.Elapsed.TotalSeconds, dt = Math.Clamp(now - _shotFaceLast, 0, 0.1);
-        _shotFaceLast = now;
-        _shotFace.Update(dt, 0);
-        if (DateTime.UtcNow >= _transientUntil) EndShotNotice();
+        if (shot.File == null) return;
+        try { Process.Start(new ProcessStartInfo(shot.File) { UseShellExecute = true }); } catch (Exception ex) { App.Log(ex); }
     }
 }

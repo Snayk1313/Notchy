@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -85,6 +85,22 @@ public static class NotificationOpener
         finally
         {
             Marshal.ReleaseComObject(obj);
+        }
+    }
+
+    /// <summary>
+    /// Reads the Start menu shortcuts ahead of time (in the background): apps like Discord are only found there, and
+    /// reading them all takes seconds, which was the first click on their notification's wait.
+    /// </summary>
+    public static void Warm()
+    {
+        try
+        {
+            lock (Lock) _shortcuts ??= ScanShortcuts();
+        }
+        catch (Exception ex)
+        {
+            App.Log(ex);
         }
     }
 

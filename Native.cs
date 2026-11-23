@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -167,6 +167,34 @@ internal static class Native
         SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
     /// <summary>True when the foreground window covers the whole primary monitor (games, videos in fullscreen).</summary>
+    public static uint ProcessOf(IntPtr hwnd)
+    {
+        GetWindowThreadProcessId(hwnd, out uint pid);
+        return pid;
+    }
+
+    /// <summary>The window in front and its process (0: none, or the desktop / taskbar).</summary>
+    public static (IntPtr hwnd, uint pid) Foreground()
+    {
+        IntPtr fg = GetForegroundWindow();
+        if (fg == IntPtr.Zero || fg == GetShellWindow() || fg == GetDesktopWindow()) return (IntPtr.Zero, 0);
+        var sb = new StringBuilder(64);
+        GetClassName(fg, sb, sb.Capacity);
+        if (sb.ToString() is "WorkerW" or "Progman" or "Shell_TrayWnd") return (IntPtr.Zero, 0);
+        GetWindowThreadProcessId(fg, out uint pid);
+        return (fg, pid);
+    }
+
+    /// <summary>Maximized or full screen on the main screen (the island's): it covers at least the whole work area.</summary>
+    public static bool FillsPrimaryScreen(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero || IsIconic(hwnd) || !GetWindowRect(hwnd, out RECT r)) return false;
+        IntPtr mon = MonitorFromWindow(hwnd, 2 /* MONITOR_DEFAULTTONEAREST */);
+        var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        if (!GetMonitorInfo(mon, ref mi) || (mi.dwFlags & 1) == 0) return false;
+        return r.Left <= mi.rcWork.Left && r.Top <= mi.rcWork.Top && r.Right >= mi.rcWork.Right && r.Bottom >= mi.rcWork.Bottom;
+    }
+
     public static bool IsForegroundFullscreen(IntPtr own)
     {
         IntPtr fg = GetForegroundWindow();

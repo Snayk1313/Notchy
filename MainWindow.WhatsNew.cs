@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Windows;
@@ -534,6 +534,39 @@ public partial class MainWindow
                 Canvas.SetLeft(arc, 34); Canvas.SetTop(arc, 6); c.Children.Add(arc);
                 Eyes(70, 42, color, 7, 7);
                 _newsArtFrames.Add(t => arc.Data = ArcGeometry(36, 33, t % 6 / 6));
+                break;
+            }
+            case "side":
+            {
+                // a little screen: the island at the top slides up out of it and comes out of the right edge standing, then back
+                static double Sm(double a, double b, double x) { double u = Math.Clamp((x - a) / (b - a), 0, 1); return u * u * (3 - 2 * u); }
+                var screen = new Rectangle { Width = 116, Height = 74, RadiusX = 7, RadiusY = 7, Fill = new SolidColorBrush(Color.FromArgb(0x16, 255, 255, 255)),
+                    Stroke = new SolidColorBrush(Color.FromArgb(0x30, 255, 255, 255)), StrokeThickness = 1 };
+                Canvas.SetLeft(screen, 12); Canvas.SetTop(screen, 5); c.Children.Add(screen);
+                var clip = new Canvas { Width = 116, Height = 74, ClipToBounds = true };
+                Canvas.SetLeft(clip, 12); Canvas.SetTop(clip, 5); c.Children.Add(clip);
+                Border Isl(double w, double hh, CornerRadius r)
+                {
+                    var eyes = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+                    for (int i = 0; i < 2; i++) eyes.Children.Add(new Rectangle { Width = 3.5, Height = 6, RadiusX = 1.75, RadiusY = 1.75, Fill = Brushes.White, Margin = new Thickness(1.5, 0, 1.5, 0) });
+                    var b = new Border { Width = w, Height = hh, CornerRadius = r, Background = Brushes.Black, BorderBrush = new SolidColorBrush(color), BorderThickness = new Thickness(1.2), Child = eyes,
+                        Effect = new DropShadowEffect { ShadowDepth = 0, BlurRadius = 8, Opacity = 0.8, Color = color } };
+                    clip.Children.Add(b);
+                    return b;
+                }
+                var top = Isl(40, 13, new CornerRadius(0, 0, 6.5, 6.5));
+                var side = Isl(14, 30, new CornerRadius(7, 0, 0, 7));
+                Canvas.SetLeft(top, 38);
+                Canvas.SetTop(side, 22);
+                _newsArtFrames.Add(t =>
+                {
+                    double p = t % 5.0;
+                    // 0–1.3 at the top · 1.3–1.7 up out · 1.7–2.2 out of the right edge · 2.2–3.5 standing · then back the same way
+                    double upOut = Sm(1.3, 1.7, p) * (1 - Sm(4.3, 4.7, p));
+                    double sideIn = Sm(1.7, 2.2, p) * (1 - Sm(3.6, 4.1, p));
+                    Canvas.SetTop(top, -1 - 16 * upOut);
+                    Canvas.SetLeft(side, 116 - 14 * sideIn - 0.5);
+                });
                 break;
             }
             case "capture":

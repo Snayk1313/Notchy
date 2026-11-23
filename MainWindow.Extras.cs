@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -73,7 +73,7 @@ public partial class MainWindow
         ApplyClipSettings();
 
         ApplyTransferSettings();
-        ClaudePod.Height = 34 + _topHidden;
+        ClaudePod.Height = OnSide ? SidePodThickness : 34 + _topHidden; // (on a side, turned: its thickness)
         BuildPodOutline();
         if (!S.ClaudePod && _podShown && _podKind == PodKind.Claude) HidePod();
         PodScale.ScaleX = PodScale.ScaleY = _podShown ? S.SizeScale : PodScale.ScaleX;
@@ -166,23 +166,26 @@ public partial class MainWindow
         }
 
         // an island pulled all the way up (while a bubble takes its place) has nothing on screen: no blur, no shadow
-        bool islandOnScreen = Island.ActualHeight - _topHidden > 0.5;
-        var island = islandShown && islandOnScreen ? Px(Island, Island.CornerRadius.TopLeft) : (new Rect(), 0);
+        bool islandOnScreen = (OnSide ? Island.ActualWidth : Island.ActualHeight - _topHidden) > 0.5;
+        var island = islandShown && islandOnScreen ? Px(Island, Math.Max(Island.CornerRadius.TopLeft, Island.CornerRadius.TopRight)) : (new Rect(), 0);
+        island.Item1 = GlueToEdge(island.Item1, island.Item2);
         bool podVisible = show && ClaudePod.Visibility == Visibility.Visible;
-        var pod = podVisible ? Px(ClaudePod, ClaudePod.CornerRadius.TopLeft) : (new Rect(), 0);
+        var pod = podVisible ? Px(ClaudePod, Math.Max(ClaudePod.CornerRadius.TopLeft, ClaudePod.CornerRadius.BottomRight)) : (new Rect(), 0);
         bool dlVisible = show && DownloadPod.Visibility == Visibility.Visible;
-        var dl = dlVisible ? Px(DownloadPod, DownloadPod.CornerRadius.TopLeft) : (new Rect(), 0);
+        var dl = dlVisible ? Px(DownloadPod, Math.Max(DownloadPod.CornerRadius.TopLeft, DownloadPod.CornerRadius.BottomRight)) : (new Rect(), 0);
         double podOpacity = podVisible ? ClaudePod.Opacity : 0, dlOpacity = dlVisible ? DownloadPod.Opacity : 0;
-        // the notification pill under the open island has the same glass, in whichever bubble's place is free
-        if (show && _noticePill.Visibility == Visibility.Visible)
-        {
-            if (!podVisible) (pod, podOpacity) = (Px(_noticePill, PillRadius), _noticePill.Opacity);
-            else if (!dlVisible) (dl, dlOpacity) = (Px(_noticePill, PillRadius), _noticePill.Opacity);
-            else _pillBody.Background = PillNoGlass; // both bubbles are out: no glass left for it, so it can't be see-through
-        }
+        pod.Item1 = GlueToEdge(pod.Item1, pod.Item2);
+        dl.Item1 = GlueToEdge(dl.Item1, dl.Item2);
+        // the notification pill under the island has the same glass, its own (the bubbles may both be out)
+        bool pillVisible = show && _noticePill.Visibility == Visibility.Visible;
+        var pill = pillVisible ? Px(_noticePill, PillRadius) : (new Rect(), 0);
         _backdrop.Update(island.Item1, island.Item2, pod.Item1, pod.Item2, podOpacity,
-            dl.Item1, dl.Item2, dlOpacity);
+            dl.Item1, dl.Item2, dlOpacity, pill.Item1, pill.Item2, pillVisible ? _noticePill.Opacity : 0);
     }
+
+    /// <summary>On a side, a glass shape glued to the edge runs past it by its radius: only the inner corners are round.</summary>
+    private Rect GlueToEdge(Rect g, double radius) =>
+        !OnSide || g.IsEmpty ? g : PlaceRight ? new Rect(g.X, g.Y, g.Width + radius, g.Height) : new Rect(g.X - radius, g.Y, g.Width + radius, g.Height);
 
     // =====================================================================================
     // eyes
@@ -308,7 +311,7 @@ public partial class MainWindow
     {
         if (_podMorphing) return;
         double scale = S.SizeScale;
-        double islandW = Island.ActualWidth * scale;
+        double islandW = IslandSpan * scale; // (on a side: its height, the bubble goes above it)
         const double podW = 70, gap = 8;
         PodX.X = -(islandW / 2 + gap * scale + podW * scale / 2);
     }

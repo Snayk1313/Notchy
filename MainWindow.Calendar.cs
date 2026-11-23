@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -508,7 +508,23 @@ public partial class MainWindow
     // ---- quick navigation: day → month → year, in the same space, zooming out and back in
 
     private int CalRows => (int)Math.Ceiling(((int)_calMonth.DayOfWeek + DateTime.DaysInMonth(_calMonth.Year, _calMonth.Month)) / 7.0);
-    private double CalBodyHeight => 18 + CalRows * 30;
+    private double CalBodyHeight => OnSide && _calSideBody > 0 ? _calSideBody : 18 + CalRows * 30;
+    /// <summary>A week's row: 30 at the top; standing on a side, as tall as fills the island (a 5-week month: taller).</summary>
+    private double CalCellHeight => (CalBodyHeight - 18) / CalRows;
+    /// <summary>Standing on a side: the month's height that fills the open island (measured when the page opens there).</summary>
+    private double _calSideBody;
+
+    /// <summary>On a side the island is as tall as its column of tabs: the month grows into the room left under it.</summary>
+    private void FitCalendarToSide()
+    {
+        if (!OnSide || !_subOpen || _subTitle.Text != Loc.T("cal.title")) return;
+        double free = SidePageHeight - SidePageBottom - _subHeight;
+        if (Math.Abs(free) < 1) return;
+        double was = CalBodyHeight, want = Math.Max(18 + CalRows * 30, was + free);
+        if (Math.Abs(want - was) < 1) return; // (already as tall as it can be: no redraw, so no loop)
+        _calSideBody = want;
+        RefreshSubPage(CalendarPage);
+    }
     private double CalListHeight => 26 + CalBodyHeight - 27 - 32;
 
     private bool CalAtHome
@@ -881,7 +897,7 @@ public partial class MainWindow
         number.HorizontalAlignment = HorizontalAlignment.Center;
         stack.Children.Add(number);
         stack.Children.Add(dots);
-        var cell = new Border { Height = 30, CornerRadius = new CornerRadius(9), Background = Brushes.Transparent, Cursor = Cursors.Hand, Child = stack, Tag = day,
+        var cell = new Border { Height = CalCellHeight, CornerRadius = new CornerRadius(9), Background = Brushes.Transparent, Cursor = Cursors.Hand, Child = stack, Tag = day,
             BorderThickness = new Thickness(1.2), BorderBrush = selected ? White(0x90) : Brushes.Transparent };
         SoftHover(cell, 0x10);
         cell.MouseLeftButtonUp += (_, e) =>

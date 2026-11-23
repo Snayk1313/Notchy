@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media.Animation;
@@ -130,8 +130,8 @@ public partial class MainWindow
 
         // 1) the island goes up and away (keeps its width, its content fades)
         islandPanel.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.Zero));
-        Island.BeginAnimation(WidthProperty, new DoubleAnimation(Island.ActualWidth, TimeSpan.Zero));
-        Island.BeginAnimation(HeightProperty, new DoubleAnimation(_topHidden, up)
+        Island.BeginAnimation(SpanProperty, new DoubleAnimation(IslandSpan, TimeSpan.Zero));
+        Island.BeginAnimation(DepthProperty, new DoubleAnimation(DepthHidden, up)
         {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn }
         });
@@ -141,7 +141,8 @@ public partial class MainWindow
         pod.IsHitTestVisible = false;
         slide.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(0, d) { EasingFunction = ease, BeginTime = up });
         x.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(0, d) { EasingFunction = ease, BeginTime = up });
-        var grow = new DoubleAnimation(width, d) { EasingFunction = ease, BeginTime = up };
+        _podMorphSpan = SpanOf(TargetSize(_state)); // (on a side: the pill's length, what the bubble's light stretches to)
+        var grow = new DoubleAnimation(OnSide ? _podMorphSpan : width, d) { EasingFunction = ease, BeginTime = up };
         grow.Completed += (_, _) =>
         {
             if (over) return;
@@ -212,15 +213,16 @@ public partial class MainWindow
         pod.BeginAnimation(OpacityProperty, null);
         pod.Opacity = 1;
         pod.BeginAnimation(WidthProperty, null);
-        pod.Width = fromWidth;
+        _podMorphSpan = IslandSpan;
+        pod.Width = OnSide ? IslandSpan : fromWidth; // (on a side the bubble is turned: its width runs along the edge)
         pod.Visibility = Visibility.Visible;
         pod.IsHitTestVisible = false;
         Panel.SetZIndex(pod, 10);
 
         // ...and the island hides behind it right away (taking the music island's width while it's out of sight)
         var size = TargetSize(_state);
-        Island.BeginAnimation(WidthProperty, new DoubleAnimation(size.Width, TimeSpan.Zero));
-        Island.BeginAnimation(HeightProperty, new DoubleAnimation(_topHidden, TimeSpan.Zero));
+        Island.BeginAnimation(SpanProperty, new DoubleAnimation(SpanOf(size), TimeSpan.Zero));
+        Island.BeginAnimation(DepthProperty, new DoubleAnimation(DepthHidden, TimeSpan.Zero));
 
         // 2) the bubble shrinks into its oval while it moves aside
         var ease = new CubicEase { EasingMode = EasingMode.EaseInOut };
@@ -240,10 +242,10 @@ public partial class MainWindow
 
             // 3) only now the island comes down from the top
             var target = TargetSize(_state);
-            Island.BeginAnimation(WidthProperty, null);
+            Island.BeginAnimation(SpanProperty, null);
             Island.Width = target.Width;
             Island.Height = target.Height + _topHidden;
-            Island.BeginAnimation(HeightProperty, new DoubleAnimation(_topHidden, target.Height + _topHidden, down)
+            Island.BeginAnimation(DepthProperty, new DoubleAnimation(DepthHidden, OnSide ? target.Width : target.Height + _topHidden, down)
             {
                 EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
             });
@@ -272,7 +274,7 @@ public partial class MainWindow
         DrawClaudePod(AnimNow);
 
         double s = S.SizeScale;
-        double toX = -(TargetSize(_state).Width * s / 2 + 8 * s + 70 * s / 2);
+        double toX = -(SpanOf(TargetSize(_state)) * s / 2 + 8 * s + 70 * s / 2);
         MorphIslandIntoPod(ClaudePod, PodScale, PodX, _podSlide, ClaudeIslandWidth, toX, () =>
         {
             _podMorphing = false;
@@ -295,10 +297,10 @@ public partial class MainWindow
         if (Math.Abs(w - lastW) < 0.2 && Math.Abs(u - lastU) < 0.002) return false;
         lastW = w;
         lastU = u;
-        const double h = 34;
+        double h = OnSide ? SidePodThickness : 34; // (standing on a side the bubble is thicker)
         // the island's edge: 1.1 px inside, round bottom corners, the top hidden behind the screen edge
         double endRadius = Math.Clamp(h / 2, 8, 26) - 1.1;
-        double endTop = _topHidden == 0 ? 1.1 : -(endRadius + 1.5);
+        double endTop = _topHidden == 0 && !OnSide ? 1.1 : -(endRadius + 1.5); // (on a side the bubble's top is on the edge, like attached)
         double pad = Lerp(6, 1.1, u);
         shape.Build(pad, Lerp(5, endTop, u), w - pad, h - Lerp(5, 1.1, u), Lerp((h - 10) / 2, endRadius, u));
         return true;
@@ -308,8 +310,8 @@ public partial class MainWindow
     private void DrawClaudePod(double t)
     {
         double w = ClaudePod.ActualWidth > 1 ? ClaudePod.ActualWidth : ClaudePod.Width;
-        double islandW = _podKind == PodKind.Focus ? CompactWidth(CompactMode.Focus) : ClaudeIslandWidth;
-        double u = _podMorphing ? Math.Clamp((w - 70) / (islandW - 70), 0, 1) : 0;
+        double islandW = OnSide ? _podMorphSpan : _podKind == PodKind.Focus ? CompactWidth(CompactMode.Focus) : ClaudeIslandWidth;
+        double u = _podMorphing ? Math.Clamp((w - 70) / Math.Max(1, islandW - 70), 0, 1) : 0;
         if (ShapePod(_podShape, w, u, ref _podShapeW, ref _podShapeU))
         {
             PodTrack.Data = _podShape.Half(0, _podShape.Visible);
@@ -334,7 +336,7 @@ public partial class MainWindow
     private void DrawDownloadPod(double prog)
     {
         double w = DownloadPod.ActualWidth > 1 ? DownloadPod.ActualWidth : DownloadPod.Width;
-        double u = _dlPodMorphing ? Math.Clamp((w - 70) / (TransferWidth - 70), 0, 1) : 0;
+        double u = _dlPodMorphing ? Math.Clamp((w - 70) / Math.Max(1, (OnSide ? _podMorphSpan : TransferWidth) - 70), 0, 1) : 0;
         if (ShapePod(_dlPodShape, w, u, ref _dlShapeW, ref _dlShapeU))
         {
             DlPodTrack.Data = _dlPodShape.Half(0, _dlPodShape.Visible);
@@ -378,7 +380,11 @@ public partial class MainWindow
         if (_claudeRig != null && _podRig != null) _claudeRig.Pose = _podRig.Pose; // the island's eyes start where the bubble's are
         _podShown = false;
         _podMorphing = true;
-        MorphPodIntoIsland(ClaudePod, PodX, _podSlide, ClaudeIslandWidth, ClaudePanel, () => _claudeLightOpacity = 1, () =>
+        MorphPodIntoIsland(ClaudePod, PodX, _podSlide, ClaudeIslandWidth, ClaudePanel, () =>
+        {
+            _claudeLightOpacity = 1;
+            CopyPose(_podRig, _claudeRig); // the island's eyes start where the bubble's were, then go their way
+        }, () =>
         {
             _podMorphing = false;
             UpdatePodPosition();
@@ -556,7 +562,7 @@ public partial class MainWindow
 
         double W = Island.ActualWidth, H = Island.ActualHeight - _topHidden;
         if (W < 2 || H < 2) return;
-        if (_claudeOutline.Build(W, H, _topHidden))
+        if (_claudeOutline.Build(W, H, _topHidden, OutlineTurn))
         {
             ClaudeLight.Width = ClaudeTrack.Width = W;
             ClaudeLight.Height = ClaudeTrack.Height = H + _topHidden;
