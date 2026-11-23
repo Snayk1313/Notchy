@@ -130,6 +130,8 @@ public partial class MainWindow
             };
             _capture = w;
             w.Show();
+            // the keyboard too, at once: Esc must cancel before anything is clicked
+            Native.FocusWindow(new System.Windows.Interop.WindowInteropHelper(w).Handle);
             w.Activate();
             w.Focus();
             // the same spot without the island, taken once the capture covers the screen (so nothing changes on screen):

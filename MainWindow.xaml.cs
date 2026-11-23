@@ -39,6 +39,7 @@ public partial class MainWindow : Window
     private IslandState _state = IslandState.None;
     private Tab _tab = Tab.Home;
     private Tab? _userTab;          // last tab YOU picked (nav, home cards)
+    private bool _shelfUnseen;      // a file was just dropped on the shelf: the next open shows it once
     private bool _podOpenRequest;   // opened by clicking the Claude pod: show Claude this time only
     private CompactMode _compactMode = CompactMode.None;
     private bool _hoverRequested, _hoverActive, _clickOpened, _hiddenForFullscreen;
@@ -424,6 +425,7 @@ public partial class MainWindow : Window
             // a click on the download or Claude bubble opens that tab
             else if (S.TransferProgress && _dlOpenRequest) target = Tab.Downloads;
             else if (_podOpenRequest) target = Tab.Claude;
+            else if (_shelfUnseen && S.ShelfEnabled) target = Tab.Shelf;
             // something playing: open on the player (downloads and Claude have their own bubbles meanwhile)
             else if (_media.HasSession && _media.IsPlaying) target = Tab.Music;
             else if (S.TransferProgress && _compactMode == CompactMode.Transfer && ActiveTransfer?.Kind == TransferKind.Download)
@@ -436,6 +438,7 @@ public partial class MainWindow : Window
             bool backToPage = _subOpen && (DateTime.UtcNow - _subLeftAt).TotalSeconds <= SubReturnSeconds && !_dlOpenRequest && !_podOpenRequest && !_dragOver;
             _podOpenRequest = false;
             _dlOpenRequest = false;
+            _shelfUnseen = false;
             _returnTab = null;
             if (!backToPage && !_reapplyingState)
             {
@@ -714,17 +717,15 @@ public partial class MainWindow : Window
         TimeRun.Text = FormatClock(now);
         UpdateDateDot();
 
+        // a laptop's battery: "Este PC" in Dispositivos (the header has a single battery for everything)
+#if DEBUG
+        if (_testPcBattery) return;
+#endif
         var power = System.Windows.Forms.SystemInformation.PowerStatus;
-        if (power.BatteryChargeStatus.HasFlag(System.Windows.Forms.BatteryChargeStatus.NoSystemBattery) ||
-            power.BatteryChargeStatus == System.Windows.Forms.BatteryChargeStatus.Unknown)
-        {
-            BatteryText.Text = "";
-        }
-        else
-        {
-            string charging = power.PowerLineStatus == System.Windows.Forms.PowerLineStatus.Online ? "⚡" : "";
-            BatteryText.Text = $"{charging}{Math.Round(power.BatteryLifePercent * 100)}%";
-        }
+        bool none = power.BatteryChargeStatus.HasFlag(System.Windows.Forms.BatteryChargeStatus.NoSystemBattery) ||
+                    power.BatteryChargeStatus == System.Windows.Forms.BatteryChargeStatus.Unknown;
+        SetPcBattery(none ? null : new DeviceBattery(Loc.T("dev.pc"), DeviceKind.Computer, (int)Math.Round(power.BatteryLifePercent * 100),
+            power.PowerLineStatus == System.Windows.Forms.PowerLineStatus.Online));
     }
 
     private static string FormatClock(DateTime t) => S.Clock switch
@@ -790,6 +791,7 @@ public partial class MainWindow : Window
         button.Click += (_, _) =>
         {
             _userTab = tab;
+            if (tab == Tab.Shelf) _shelfUnseen = false;
             SelectTab(tab, animate: true);
         };
         NavBar.Children.Add(button);
@@ -2040,6 +2042,8 @@ public partial class MainWindow : Window
             _userTab = Tab.Clock;
         }
         if (_state == IslandState.Expanded) return;
+        // a click on the earbuds / low battery island opens Dispositivos
+        bool toDevices = _state == IslandState.Compact && _compactMode is CompactMode.Buds or CompactMode.BudsLow && _devices.Count > 0;
         // the volume pop-up is all controls (the level, the device button, the output list)
         if (_state == IslandState.Volume) return;
         if (S.Open == OpenMode.Click)
@@ -2053,6 +2057,7 @@ public partial class MainWindow : Window
             _hoverActive = true;
             UpdateState();
         }
+        if (toDevices && _state == IslandState.Expanded) OpenDevicesPage();
     }
 
 #if DEBUG
@@ -2310,6 +2315,330 @@ public partial class MainWindow : Window
     {
         System.IO.Directory.CreateDirectory(folder);
         await Task.Delay(2500);
+        // only Dispositivos with the real devices (quick): the first reading, the page, then a made-up low HyperX warning and its click
+        if (Environment.GetEnvironmentVariable("NOTCHY_DEVREALTEST") == "1")
+        {
+            var log = new System.Text.StringBuilder();
+            await Task.Delay(12000);
+            log.AppendLine("aparelhos: " + string.Join(" | ", _devices.Select(d => $"{d.Name} {d.Kind} {d.Percent}% carregando={d.Charging}")));
+            log.AppendLine($"chip={_devChip.Visibility}");
+            _forcedState = IslandState.Expanded; UpdateState(); await Task.Delay(900);
+            await Shot("dev-cabecalho");
+            OpenDevicesPage(); await Task.Delay(900);
+            await Shot("dev-pagina");
+            CloseSubPage(animate: false);
+            _forcedState = null; UpdateState(); await Task.Delay(1500);
+            _hyperx = new HidBattery.Reading("HyperX Cloud Alpha", 12, false);
+            _hyperxWarned = 100;
+            MaybeWarnHyperX();
+            RefreshBluetoothDevices();
+            await Task.Delay(1200);
+            log.AppendLine($"aviso: {_state}/{_compactMode} chipPct={_devChipText.Text}");
+            await Shot("dev-aviso");
+            _testCursorOverIsland = true;
+            Island_MouseLeftButtonUp(Island, new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = Mouse.MouseUpEvent });
+            await Task.Delay(1200);
+            log.AppendLine($"depois do clique: {_state} pagina={(_subOpen ? _subTitle.Text : "-")}");
+            await Shot("dev-clique");
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "devreal.txt"), log.ToString());
+            Application.Current.Shutdown();
+            return;
+        }
+        // the receivers' raw answers every 2 s for 3 minutes, while the charging cables go in and out (finding the charging byte)
+        if (Environment.GetEnvironmentVariable("NOTCHY_CHARGETEST") == "1")
+        {
+            var path = System.IO.Path.Combine(folder, "carregando.txt");
+            HidBattery.ReadRapoo();
+            var t0 = DateTime.Now;
+            while ((DateTime.Now - t0).TotalSeconds < 180)
+            {
+                var line = new System.Text.StringBuilder($"{(DateTime.Now - t0).TotalSeconds:000}s ");
+                await Task.Run(() =>
+                {
+                    HidBattery.ReadHyperX(m => { if (m.Contains("lido 0C") || m.Contains("lido 0B")) line.Append(m.Trim()).Append(" | "); });
+                });
+                line.Append("rapoo ").Append(HidBattery.RapooRaw ?? "-");
+                System.IO.File.AppendAllText(path, line + Environment.NewLine);
+                await Task.Delay(2000);
+            }
+            Application.Current.Shutdown();
+            return;
+        }
+        // only the free chat on a recent fact (quick): the real Gemini, with today's date and Google search
+        if (Environment.GetEnvironmentVariable("NOTCHY_GEMINIDATETEST") == "1")
+        {
+            var log = new System.Text.StringBuilder();
+            var g = new GeminiRunner(Dispatcher);
+            var done = new TaskCompletionSource<(string, bool)>();
+            g.Finished += (t, err) => done.TrySetResult((t, err));
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            log.AppendLine("sistema: " + FreeSystemPrompt);
+            g.Run(TodayNote + " Quando o GTA 6 vai ser lançado?", FreeSystemPrompt, false, null);
+            var (answer, isError) = await done.Task;
+            log.AppendLine($"erro={isError} em {clock.ElapsedMilliseconds} ms");
+            log.AppendLine(answer);
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "gemini.txt"), log.ToString());
+            Application.Current.Shutdown();
+            return;
+        }
+        // only Esc right after Print Screen (quick): another app in front, nothing clicked, Esc cancels the capture
+        if (Environment.GetEnvironmentVariable("NOTCHY_CAPESCTEST") == "1")
+        {
+            [System.Runtime.InteropServices.DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+            [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+            var log = new System.Text.StringBuilder();
+            await Task.Delay(5000);
+            var np = System.Diagnostics.Process.Start("charmap.exe")!;
+            for (int i = 0; i < 40 && np.MainWindowHandle == IntPtr.Zero; i++) { await Task.Delay(250); np.Refresh(); }
+            for (int round = 1; round <= 3; round++)
+            {
+                SetForegroundWindow(np.MainWindowHandle);
+                await Task.Delay(1000);
+                keybd_event(0x2C, 0, 0, UIntPtr.Zero);
+                keybd_event(0x2C, 0, 2, UIntPtr.Zero);
+                await Task.Delay(1200);
+                bool open = _capture != null;
+                keybd_event(0x1B, 0, 0, UIntPtr.Zero);
+                keybd_event(0x1B, 0, 2, UIntPtr.Zero);
+                await Task.Delay(800);
+                log.AppendLine($"rodada {round}: captura abriu={open} · depois do Esc ainda aberta={_capture != null}");
+                if (_capture != null) { _capture.Close(); _capture = null; EndCapture(); await Task.Delay(500); }
+            }
+            try { np.CloseMainWindow(); } catch { }
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "capesc.txt"), log.ToString());
+            Application.Current.Shutdown();
+            return;
+        }
+        // the capture's spotlight over the browser already open (nothing opened or closed in it): a grid of spots, what lights up
+        if (Environment.GetEnvironmentVariable("NOTCHY_SPOTWEBTEST") == "1")
+        {
+            [System.Runtime.InteropServices.DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+            [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out Native.RECT r);
+            [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+            var log = new System.Text.StringBuilder();
+            await Task.Delay(5000);
+            var browser = (Environment.GetEnvironmentVariable("NOTCHY_SPOTAPP") is { Length: > 0 } app ? new[] { app } : new[] { "zen", "firefox", "floorp", "librewolf", "opera", "msedge", "chrome", "brave", "vivaldi", "arc" })
+                .SelectMany(System.Diagnostics.Process.GetProcessesByName).FirstOrDefault(p => p.MainWindowHandle != IntPtr.Zero);
+            if (browser == null) log.AppendLine("nenhum navegador aberto");
+            else
+            {
+                var bh = browser.MainWindowHandle;
+                log.AppendLine($"navegador: {browser.ProcessName}");
+                SetForegroundWindow(bh);
+                await Task.Delay(1500);
+                GetWindowRect(bh, out var wr);
+                keybd_event(0x2C, 0, 0, UIntPtr.Zero);
+                keybd_event(0x2C, 0, 2, UIntPtr.Zero);
+                await Task.Delay(1200);
+                var cw = _capture;
+                if (cw != null)
+                {
+                    var dpiC = VisualTreeHelper.GetDpi(cw);
+                    int k = 0;
+                    foreach (double fy in new[] { 0.012, 0.03, 0.06, 0.12, 0.3, 0.6 })
+                        foreach (double fx in new[] { 0.08, 0.3, 0.55, 0.85 })
+                        {
+                            var p = new Point((wr.Left + (wr.Right - wr.Left) * fx) / dpiC.DpiScaleX, (wr.Top + (wr.Bottom - wr.Top) * fy) / dpiC.DpiScaleY);
+                            cw.TestHover(p);
+                            await Task.Delay(1500);
+                            log.AppendLine($"#{k} ({fx:0.00},{fy:0.000}) ponto=({p.X:0},{p.Y:0}): {cw.TestLit}");
+                            log.Append(cw.TestChain(p));
+                            cw.TestSave(System.IO.Path.Combine(folder, $"web-{k++:00}.png"));
+                        }
+                    keybd_event(0x1B, 0, 0, UIntPtr.Zero);
+                    keybd_event(0x1B, 0, 2, UIntPtr.Zero);
+                }
+                else log.AppendLine("a captura não abriu");
+            }
+            await Task.Delay(800);
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "spotweb.txt"), log.ToString());
+            Application.Current.Shutdown();
+            return;
+        }
+        // only the capture's spotlight (quick): Character Map open, Print Screen, the mouse over a few spots of it and the wheel
+        if (Environment.GetEnvironmentVariable("NOTCHY_SPOTTEST") == "1")
+        {
+            [System.Runtime.InteropServices.DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+            [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out Native.RECT r);
+            [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+            var log = new System.Text.StringBuilder();
+            await Task.Delay(5000);
+            // (Character Map: an app of its own, full of buttons; only the window this test opens is closed at the end)
+            var np = System.Diagnostics.Process.Start("charmap.exe")!;
+            IntPtr nh = IntPtr.Zero;
+            for (int i = 0; i < 40 && nh == IntPtr.Zero; i++)
+            {
+                await Task.Delay(250);
+                np.Refresh();
+                nh = np.MainWindowHandle;
+            }
+            SetForegroundWindow(nh);
+            await Task.Delay(1500);
+            GetWindowRect(nh, out var wr);
+            keybd_event(0x2C, 0, 0, UIntPtr.Zero);
+            keybd_event(0x2C, 0, 2, UIntPtr.Zero);
+            await Task.Delay(1200);
+            var cw = _capture;
+            if (cw != null)
+            {
+                var dpiC = VisualTreeHelper.GetDpi(cw);
+                Point At(double fx, double fy) => new((wr.Left + (wr.Right - wr.Left) * fx) / dpiC.DpiScaleX, (wr.Top + (wr.Bottom - wr.Top) * fy) / dpiC.DpiScaleY);
+                var spots = new (string, Point)[] { ("grade de caracteres", At(0.3, 0.45)), ("botão do canto", At(0.88, 0.9)), ("caixa da fonte", At(0.6, 0.12)), ("fora (área de trabalho?)", new Point(5, 5)) };
+                int k = 0;
+                foreach (var (name, p) in spots)
+                {
+                    cw.TestHover(p);
+                    await Task.Delay(1500);
+                    log.AppendLine($"{name} ({p.X:0},{p.Y:0}): {cw.TestLit}");
+                    cw.TestSave(System.IO.Path.Combine(folder, $"spot-{k++}.png"));
+                    if (k == 1)
+                    {
+                        cw.TestWheel(120); await Task.Delay(400);
+                        log.AppendLine($"  rodinha para cima: {cw.TestLit}");
+                        cw.TestWheel(120); cw.TestWheel(120); cw.TestWheel(120); await Task.Delay(400);
+                        log.AppendLine($"  mais 3 para cima: {cw.TestLit}");
+                        cw.TestSave(System.IO.Path.Combine(folder, $"spot-{k++}-janela.png"));
+                        cw.TestWheel(-120); cw.TestWheel(-120); cw.TestWheel(-120); cw.TestWheel(-120); await Task.Delay(400);
+                        log.AppendLine($"  de volta para baixo: {cw.TestLit}");
+                    }
+                }
+                keybd_event(0x1B, 0, 0, UIntPtr.Zero);
+                keybd_event(0x1B, 0, 2, UIntPtr.Zero);
+            }
+            else log.AppendLine("a captura não abriu");
+            await Task.Delay(800);
+            try { np.CloseMainWindow(); } catch { }
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "spot.txt"), log.ToString());
+            Application.Current.Shutdown();
+            return;
+        }
+        // only the wireless receivers (quick): HyperX and Rapoo, what each answers
+        if (Environment.GetEnvironmentVariable("NOTCHY_HYPERXTEST") == "1")
+        {
+            var log = new System.Text.StringBuilder();
+            for (int round = 1; round <= 2; round++)
+            {
+                foreach (var read in new Func<Action<string>, HidBattery.Reading?>[] { HidBattery.ReadHyperX })
+                {
+                    var r = await Task.Run(() => read(m => log.AppendLine(m)));
+                    log.AppendLine($"== rodada {round}: {(r == null ? "nada" : $"{r.Name} {r.Percent}% carregando={r.Charging}")}");
+                }
+            }
+            HidBattery.ReadRapoo(); await Task.Delay(8000);
+            log.AppendLine($"== Rapoo pelo leitor de fundo: {HidBattery.ReadRapoo()?.Percent.ToString() ?? "nada"}%");
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "hyperx.txt"), log.ToString());
+            Application.Current.Shutdown();
+            return;
+        }
+        // only the header's right side at its fullest (quick): update ready, the music shortcut, a laptop battery, the bell, the
+        // devices battery, the ••• pills and the sub-pages; top and right; logs anything that overlaps
+        if (Environment.GetEnvironmentVariable("NOTCHY_HEADERFITTEST") == "1")
+        {
+            var log = new System.Text.StringBuilder();
+            await Task.Delay(5000);
+            Rect B(FrameworkElement e) => e.IsVisible && e.Opacity > 0.05 && e.ActualWidth > 0 ? e.TransformToAncestor(this).TransformBounds(new Rect(0, 0, e.ActualWidth, e.ActualHeight)) : Rect.Empty;
+            var right = (Panel)MoreButton.Parent;
+            void Check(string tag)
+            {
+                var parts = new List<(string, Rect)> { ("centro", B(_headerCenter)), ("titulo", B(_subHeader)), ("titulo-aba", B((FrameworkElement)HeaderA.Parent)) };
+                foreach (FrameworkElement c in right.Children) parts.Add((c == _devChip ? "bateria" : c == _bell ? "sino" : c == _headerWave ? "wave" : c == _updateButton || c is Panel pu && pu.Children.Contains(_updateButton) ? "atualizar" : c == BatteryText ? "bat-pc" : c == MoreButton ? "•••" : c == _moreChips ? "pilulas" : "?", B(c)));
+                parts.RemoveAll(p => p.Item2.IsEmpty);
+                var bad = new List<string>();
+                for (int i = 0; i < parts.Count; i++)
+                    for (int j = i + 1; j < parts.Count; j++)
+                        if (Rect.Intersect(parts[i].Item2, parts[j].Item2) is { IsEmpty: false } r && r.Width > 0.5) bad.Add($"{parts[i].Item1}x{parts[j].Item1}({r.Width:0})");
+                log.AppendLine($"{tag}: {string.Join(" ", parts.Select(p => $"{p.Item1}[{p.Item2.Left:0}-{p.Item2.Right:0}]"))} wave={_headerWave.Visibility} textoAtualizar={_updateLabel.Visibility} pct={_devChipText.Visibility} " + (bad.Count == 0 ? "OK" : "SOBREPOE " + string.Join(" ", bad)));
+            }
+            foreach (var place in new[] { IslandPlace.Top, IslandPlace.Right })
+            {
+                S.Place = place;
+                ApplySettings();
+                _media.Fake("Waking up", "Teste", true);
+                _noticeUnseen = 12; UpdateBell();
+                _updateButton.Visibility = Visibility.Visible;
+                SetDevices(new() { new("HyperX Cloud Alpha", DeviceKind.Headset, 100, true), new("Buds3 de Pedro", DeviceKind.Earbuds, 100, false) });
+                await Task.Delay(2500);
+                _forcedState = IslandState.Expanded; UpdateState(); await Task.Delay(900);
+                foreach (bool laptop in new[] { false, true })
+                {
+                    _testPcBattery = true;
+                    _pcBattery = null;
+                    SetPcBattery(laptop ? new DeviceBattery("Este PC", DeviceKind.Computer, 100, true) : null);
+                    SelectTab(Tab.Home, false); await Task.Delay(700);
+                    string tag = $"{place}{(laptop ? "-notebook" : "")}";
+                    Check($"{tag} inicio"); await Shot($"hdr-{tag}-inicio");
+                    SetMoreOpen(true); await Task.Delay(700);
+                    Check($"{tag} ••• aberto"); await Shot($"hdr-{tag}-mais");
+                    SetMoreOpen(false); await Task.Delay(500);
+                    OpenDevicesPage(); await Task.Delay(900);
+                    Check($"{tag} dispositivos"); await Shot($"hdr-{tag}-dispositivos");
+                    OpenSubPage(Loc.T("notif.title"), NoticesPage); await Task.Delay(900);
+                    Check($"{tag} notificacoes"); await Shot($"hdr-{tag}-notificacoes");
+                    CloseSubPage(animate: false);
+                    SetDevices(new() { new("Mouse Rapoo", DeviceKind.Mouse, 14, false), new("HyperX Cloud Alpha", DeviceKind.Headset, 62, false) });
+                    SelectTab(Tab.Clock, false); await Task.Delay(700);
+                    Check($"{tag} relogio fraca"); await Shot($"hdr-{tag}-fraca");
+                    _updateButton.Visibility = Visibility.Collapsed; SelectTab(Tab.Home, false); await Task.Delay(700);
+                    Check($"{tag} fraca sem atualizacao"); await Shot($"hdr-{tag}-fraca-semupd");
+                    SetDevices(new() { new("HyperX Cloud Alpha", DeviceKind.Headset, 62, false) }); await Task.Delay(700);
+                    Check($"{tag} normal sem atualizacao (wave deve aparecer)"); await Shot($"hdr-{tag}-normal-semupd");
+                    _updateButton.Visibility = Visibility.Visible;
+                    SetDevices(new() { new("HyperX Cloud Alpha", DeviceKind.Headset, 100, true), new("Buds3 de Pedro", DeviceKind.Earbuds, 100, false) });
+                }
+                _forcedState = null; UpdateState(); await Task.Delay(800);
+            }
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "headerfit.txt"), log.ToString());
+            Application.Current.Shutdown();
+            return;
+        }
+        // only the notification pill under the minimized island (quick): top and right, idle and with music, the island's outline flash
+        if (Environment.GetEnvironmentVariable("NOTCHY_PILLTOPTEST") == "1")
+        {
+            var log = new System.Text.StringBuilder();
+            uint id = 910000;
+            await Task.Delay(5000);
+            foreach (var place in new[] { IslandPlace.Top, IslandPlace.Right })
+                foreach (bool music in new[] { false, true })
+                {
+                    S.Place = place;
+                    ApplySettings();
+                    _media.Fake(music ? "Waking up" : "", music ? "Teste" : "", music);
+                    UpdateState();
+                    await Task.Delay(2500);
+                    string tag = $"{place}-{(music ? "musica" : "parada")}";
+                    OnNotice(new Notice(id++, "WhatsApp", "", "Mãe", "Já chegou em casa? Me avisa quando chegar", DateTime.Now, null, false) { Accent = Color.FromRgb(0x25, 0xD3, 0x66) });
+                    foreach (int ms in new[] { 350, 900, 2600 })
+                    {
+                        await Task.Delay(ms == 350 ? 350 : ms == 900 ? 550 : 1700);
+                        log.AppendLine($"{tag} {ms}ms: {_state}/{_compactMode} pilula={_noticeInPill} luz={FocusLight.Visibility}:{FocusLight.Opacity:0.00} cartao={_noticePanel.Opacity:0.00}");
+                        await Shot($"pill-{tag}-{ms}");
+                    }
+                    DismissNotice();
+                    await Task.Delay(800);
+                }
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "pilltop.txt"), log.ToString());
+            Application.Current.Shutdown();
+            return;
+        }
+        // only the shelf's "open once on a new file" (quick): opens on the shelf the first time, then on the last tab
+        if (Environment.GetEnvironmentVariable("NOTCHY_SHELFOPENTEST") == "1")
+        {
+            await Task.Delay(5000);
+            _media.Fake("", "", false);
+            var log = new System.Text.StringBuilder();
+            _userTab = Tab.Home;
+            _shelfUnseen = true; // (as Island_Drop leaves it)
+            for (int i = 1; i <= 2; i++)
+            {
+                _forcedState = IslandState.Expanded; UpdateState(); await Task.Delay(900);
+                log.AppendLine($"abertura {i}: {_tab}");
+                await Shot($"shelfopen-{i}");
+                _forcedState = IslandState.Idle; UpdateState(); await Task.Delay(900);
+            }
+            System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "shelfopen.txt"), log.ToString());
+            Application.Current.Shutdown();
+            return;
+        }
         // only the music bars' hover (quick): the lighter stretch and the label, on progress and volume
         // the alarm cards with the red bin showing (as with the mouse on a card): right, left and top, three sizes
         if (Environment.GetEnvironmentVariable("NOTCHY_ALARMBINTEST") == "1")

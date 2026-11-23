@@ -24,7 +24,7 @@ public enum CaptureAction { Copy, Save, Ocr, Pin }
 /// the toolbar (arrow, rectangle, pen, marker, text, pixelate, colour, undo · read text, pin, save, Copiar). Copiar
 /// and Salvar send the picture up to the island with a trail of light. Esc or right click cancels.
 /// </summary>
-public sealed class CaptureWindow : Window
+public sealed partial class CaptureWindow : Window
 {
     private enum Tool { Arrow, Rect, Pen, Marker, Text, Blur }
     private enum Phase { Choosing, Editing, Flying }
@@ -58,6 +58,7 @@ public sealed class CaptureWindow : Window
     private readonly Point _islandAt;        // the island's middle, in this window's coordinates
     private readonly double _islandW;
     private readonly List<Rect> _windows;    // top-level windows, front to back (window coordinates)
+    private readonly List<IntPtr> _windowHandles; // the same windows' handles (for the elements inside them)
     private readonly Canvas _stage = new();
     private readonly Path _dim = new() { Fill = new SolidColorBrush(Color.FromArgb(0x99, 0, 0, 0)), IsHitTestVisible = false };
     private readonly Canvas _annot = new() { IsHitTestVisible = false };
@@ -134,7 +135,9 @@ public sealed class CaptureWindow : Window
         double kx = _screenPx.Width / Width, ky = _screenPx.Height / Height;
         _islandAt = new Point((islandPx.X - _screenPx.Left) / kx, (islandPx.Y - _screenPx.Top) / ky);
         _islandW = islandWidthPx / kx;
-        _windows = TopWindows().Select(r => new Rect((r.Left - _screenPx.Left) / kx, (r.Top - _screenPx.Top) / ky, r.Width / kx, r.Height / ky)).ToList();
+        var tops = TopWindows();
+        _windows = tops.Select(w => ToStage(w.r)).ToList();
+        _windowHandles = tops.Select(w => w.h).ToList();
 
         _annot.Width = Width;
         _annot.Height = Height;
@@ -187,6 +190,7 @@ public sealed class CaptureWindow : Window
         };
         MouseLeftButtonDown += OnDown;
         MouseMove += (_, e) => OnMove(e.GetPosition(_stage));
+        MouseWheel += OnElementWheel;
         MouseLeftButtonUp += (_, e) => OnUp(e.GetPosition(_stage));
         MouseRightButtonUp += (_, _) => { if (_phase != Phase.Flying) Cancel(); };
         PreviewKeyDown += OnKey;
@@ -215,16 +219,7 @@ public sealed class CaptureWindow : Window
         if (_phase != Phase.Choosing) return;
         if (!_dragging)
         {
-            var w = WindowAt(p);
-            if (w.IsEmpty) _hover.Visibility = Visibility.Collapsed;
-            else
-            {
-                _hover.Visibility = Visibility.Visible;
-                Canvas.SetLeft(_hover, w.X - 1);
-                Canvas.SetTop(_hover, w.Y - 1);
-                _hover.Width = w.Width + 2;
-                _hover.Height = w.Height + 2;
-            }
+            TrackElements(p);
         }
         // the magnifier: 29 pixels around the cursor, three times as big
         double px = p.X * Kx, py = p.Y * Ky;
@@ -307,8 +302,8 @@ public sealed class CaptureWindow : Window
             var r = new Rect(_down, p);
             if (r.Width < 6 || r.Height < 6)
             {
-                // a click: the window under it, or the whole monitor
-                r = WindowAt(p);
+                // a click: the element (or window) lit under it, or the whole monitor
+                r = LitAt(p);
                 if (r.IsEmpty)
                 {
                     var m = System.Windows.Forms.Screen.FromPoint(new System.Drawing.Point((int)(p.X * Kx) + _screenPx.Left, (int)(p.Y * Ky) + _screenPx.Top)).Bounds;
@@ -1416,6 +1411,8 @@ public sealed class CaptureWindow : Window
         png.Save(f);
     }
     public Rect TestSel => _sel;
+    public void TestWheel(int delta) => OnElementWheel(this, new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, delta) { RoutedEvent = MouseWheelEvent });
+    public string TestLit => $"aceso={_lit.X:0},{_lit.Y:0} {_lit.Width:0}x{_lit.Height:0} níveis={_chain.Count} subiu={_levelsUp} buraco={_spotHole.Rect.Width:0}x{_spotHole.Rect.Height:0}";
     public Point TestIsland => _islandAt;
 
     /// <summary>The window's picture, half size.</summary>
@@ -1454,9 +1451,9 @@ public sealed class CaptureWindow : Window
     }
 
     /// <summary>Visible top-level windows of other apps, front to back, as they look (device pixels).</summary>
-    private static List<System.Drawing.Rectangle> TopWindows()
+    private static List<(IntPtr h, System.Drawing.Rectangle r)> TopWindows()
     {
-        var list = new List<System.Drawing.Rectangle>();
+        var list = new List<(IntPtr, System.Drawing.Rectangle)>();
         int me = Environment.ProcessId;
         EnumWindows((h, _) =>
         {
@@ -1467,7 +1464,7 @@ public sealed class CaptureWindow : Window
             if ((GetWindowLong(h, -20) & 0x80 /* WS_EX_TOOLWINDOW */) != 0) return true;
             if (DwmGetWindowAttribute(h, 9 /* DWMWA_EXTENDED_FRAME_BOUNDS */, out RECT r, Marshal.SizeOf<RECT>()) != 0 && !GetWindowRect(h, out r)) return true;
             if (r.Right - r.Left < 40 || r.Bottom - r.Top < 40) return true;
-            list.Add(new System.Drawing.Rectangle(r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top));
+            list.Add((h, new System.Drawing.Rectangle(r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top)));
             return true;
         }, IntPtr.Zero);
         return list;

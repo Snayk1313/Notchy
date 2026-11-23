@@ -109,6 +109,16 @@ public sealed class GeminiRunner : IChatRunner
     public bool Busy { get; private set; }
 
     public GeminiRunner(Dispatcher ui) => _ui = ui;
+    /// <summary>Google refused the search (free keys have no quota for it): questions go without it until then.</summary>
+    private static DateTime SearchOffUntil;
+    private const double SearchOffHours = 6;
+
+    private static Task<HttpResponseMessage> SendAsync(string model, string key, string json, CancellationToken token)
+    {
+        var request = Request(HttpMethod.Post, $"/v1beta/models/{model}:streamGenerateContent?alt=sse", key);
+        request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+        return Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+    }
 
     private static HttpRequestMessage Request(HttpMethod method, string path, string key)
     {
@@ -222,12 +232,20 @@ public sealed class GeminiRunner : IChatRunner
             ["systemInstruction"] = new JsonObject { ["parts"] = new JsonArray(new JsonObject { ["text"] = systemPrompt }) },
             ["contents"] = new JsonArray(_history.ConvertAll(m => (JsonNode?)m.DeepClone()).ToArray())
         };
-        string json = body.ToJsonString();
+        string plain = body.ToJsonString();
+        // questions (not spelling or translation) may search Google first, so recent facts come out right;
+        // if Google refuses the search (the free plan's daily limit…), the same question goes again without it
+        string? searching = null;
+        if (!Quick && DateTime.UtcNow >= SearchOffUntil)
+        {
+            body["tools"] = new JsonArray(new JsonObject { ["google_search"] = new JsonObject() });
+            searching = body.ToJsonString();
+        }
 
         var cts = new CancellationTokenSource(TimeSpan.FromSeconds(AnswerTimeoutSeconds));
         _cts = cts;
         bool quick = Quick;
-        _ = Task.Run(() => StreamAsync(id, key, json, question, cts, quick));
+        _ = Task.Run(() => StreamAsync(id, key, searching ?? plain, searching != null ? plain : null, question, cts, quick));
     }
 
     private static JsonArray PartsFor(string prompt, string? imagePath)
@@ -242,7 +260,7 @@ public sealed class GeminiRunner : IChatRunner
         return parts;
     }
 
-    private async Task StreamAsync(int id, string key, string json, JsonObject question, CancellationTokenSource cts, bool quick)
+    private async Task StreamAsync(int id, string key, string json, string? plain, JsonObject question, CancellationTokenSource cts, bool quick)
     {
         var text = new StringBuilder();
         string? error = null;
@@ -259,9 +277,17 @@ public sealed class GeminiRunner : IChatRunner
                 attempt.CancelAfter(TimeSpan.FromSeconds(FirstWordsTimeoutSeconds)); // no first words in time: the other model gets a chance
                 try
                 {
-                    using var request = Request(HttpMethod.Post, $"/v1beta/models/{model}:streamGenerateContent?alt=sse", key);
-                    request.Content = new StringContent(json, Encoding.UTF8, "application/json");
-                    using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, attempt.Token);
+                    using var response = await SendAsync(model, key, json, attempt.Token) is var first && plain != null && (int)first.StatusCode is 400 or 403 or 429
+                        ? await Retry(first)
+                        : first;
+                    async Task<HttpResponseMessage> Retry(HttpResponseMessage refused)
+                    {
+                        SearchOffUntil = DateTime.UtcNow.AddHours(SearchOffHours); // (no search quota on this key: don't ask again for a while)
+                        refused.Dispose();
+                        json = plain!;
+                        plain = null;
+                        return await SendAsync(model, key, json, attempt.Token);
+                    }
                     if (!last && (response.StatusCode == HttpStatusCode.NotFound || (int)response.StatusCode >= 500)) continue;
                     if (!response.IsSuccessStatusCode)
                     {

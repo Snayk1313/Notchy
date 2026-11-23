@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
@@ -60,22 +60,34 @@ public partial class MainWindow
     }
 
     /// <summary>Keeps the right side of the header clear of the time in the middle: when room is short the
-    ///     waveform shortcut goes first, then the update button drops its label (only the arrow stays).
-    ///     Returns whether the waveform fits.</summary>
+    ///     waveform shortcut goes first, then the update button drops its label (only the arrow stays), then the devices
+    ///     battery its low percentage (only the little battery stays). Returns whether the waveform fits.</summary>
     private bool FitHeader()
     {
         var right = (FrameworkElement)BatteryText.Parent;
         var center = (FrameworkElement)HeaderClaudeDot.Parent;
         double room = (((FrameworkElement)right.Parent).ActualWidth - center.ActualWidth) / 2 - 6;
         double label = _updateButton.Visibility == Visibility.Visible ? UpdateLabelWidth() : 0;
+        double pct = _devChip.Visibility == Visibility.Visible && _devChipLow ? TextWidth(_devChipText) + _devChipText.Margin.Left : 0;
         double others = right.ActualWidth
                         - (_headerWave.Visibility == Visibility.Visible ? _headerWave.ActualWidth + _headerWave.Margin.Right : 0)
-                        - (_updateLabel.Visibility == Visibility.Visible ? label : 0);
+                        - (_updateLabel.Visibility == Visibility.Visible ? label : 0)
+                        - (_devChipText.Visibility == Visibility.Visible ? _devChipText.ActualWidth + _devChipText.Margin.Left : 0);
+        bool showPct = pct > 0 && others + pct <= room;
+        if (showPct) others += pct;
+        _devChipText.Visibility = showPct ? Visibility.Visible : Visibility.Collapsed;
         bool showLabel = others + label <= room;
         _updateLabel.Visibility = showLabel ? Visibility.Visible : Visibility.Collapsed;
         _updateIcon.Margin = new Thickness(0, 1, showLabel ? 5 : 0, 0);
         const double wave = 20 + 10 + 4; // visualizer + padding + margin
         return others + (showLabel ? label : 0) + wave <= room;
+    }
+
+    private static double TextWidth(TextBlock t)
+    {
+        var dpi = VisualTreeHelper.GetDpi(t).PixelsPerDip;
+        return new FormattedText(t.Text, System.Globalization.CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+            new Typeface(t.FontFamily, FontStyles.Normal, t.FontWeight, FontStretches.Normal), t.FontSize, Brushes.White, dpi).WidthIncludingTrailingWhitespace;
     }
 
     private string _updateLabelFor = "";
@@ -155,7 +167,7 @@ public partial class MainWindow
         double dt = Math.Clamp(now - _compactFaceLast, 0, 0.1);
         _compactFaceLast = now;
         _compactFace.Color = S.EyesUseAlbumColor ? Bright(_musicAccent) : ParseColor(S.EyeColor);
-        _compactFace.BaseMood = _media.IsPlaying ? Mood.Normal : Mood.Sleepy;
+        _compactFace.BaseMood = _media.IsPlaying || !UserAway ? Mood.Normal : Mood.Sleepy;
         SyncSetupFace();
         _compactFace.Update(dt, S.LivelyEyes && _media.IsPlaying ? 1 : 0);
     }

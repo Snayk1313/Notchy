@@ -527,6 +527,9 @@ public partial class MainWindow
         return (Math.Clamp(dx / 260, -1, 1) * 5, Math.Clamp(dy / 260, -1, 1) * 4);
     }
 
+    private const double NoticeFlashSeconds = 2.2, NoticeFlashFade = 1.6; // (lit, then fading out over the last 1.6 s)
+    private double _noticeFlashAt = -100;
+
     /// <summary>The light on the small island's edge: it fills from the top as the time goes by.</summary>
     private void UpdateFocusLight()
     {
@@ -534,8 +537,12 @@ public partial class MainWindow
         bool timer = _compactMode is CompactMode.Timer or CompactMode.TimerRing;
         var buds = _state == IslandState.Compact ? BudsLight() : null; // Bluetooth earbuds: the battery level
         bool cal = _compactMode == CompactMode.CalNotice; // a calendar notice: all the way round, in the event's colour
-        bool noticeNow = _compactMode == CompactMode.Notice; // a notification: a soft line all the way round, in the app's colour
-        bool show = _state == IslandState.Compact && (_compactMode == CompactMode.Focus || timer || cal || noticeNow || buds != null) && !_introActive && !_islandMorphing && !IslandLightsOff;
+        // a notification's pill came down: the island's outline lights up once in the app's colour and fades (unless it shows a light of its own)
+        bool ownLight = _state == IslandState.Compact && (_compactMode == CompactMode.Focus || timer || cal || buds != null);
+        double flashLeft = NoticeFlashSeconds - (AnimNow - _noticeFlashAt);
+        bool flash = flashLeft > 0 && _noticeInPill && _state is IslandState.Idle or IslandState.Compact && !ownLight;
+        bool noticeNow = _compactMode == CompactMode.Notice || flash; // a notification: a soft line all the way round, in the app's colour
+        bool show = (ownLight || _state == IslandState.Compact && noticeNow || flash) && !_introActive && !_islandMorphing && !IslandLightsOff;
         if (show) _lightIsNotice = noticeNow;
         // (while fading out it keeps the look it had: no flash of another style)
         bool notice = _lightIsNotice;
@@ -574,10 +581,10 @@ public partial class MainWindow
         bool budsLow = buds?.pulse == true; // low battery: the light breathes in red, with a red glow around
         double pulse = ringing ? 0.45 + 0.55 * Math.Abs(Math.Sin(AnimNow * 4))
             : budsLow ? 0.55 + 0.45 * (0.5 + 0.5 * Math.Sin(AnimNow * 4.2)) : 1;
-        FocusLightGlow.BlurRadius = notice ? NoticeGlowBlur : budsLow ? 10 + 12 * (pulse - 0.55) / 0.45 : 10;
-        FocusLightGlow.Opacity = notice ? NoticeGlowOpacity : 1;
+        FocusLightGlow.BlurRadius = flash ? 14 : notice ? NoticeGlowBlur : budsLow ? 10 + 12 * (pulse - 0.55) / 0.45 : 10;
+        FocusLightGlow.Opacity = notice && !flash ? NoticeGlowOpacity : 1;
         FocusLight.StrokeThickness = notice ? NoticeLineThickness : _focusLightThickness;
-        FocusLight.Opacity = _focusLightOpacity * pulse * (notice ? NoticeLineOpacity : 1);
+        FocusLight.Opacity = _focusLightOpacity * pulse * (flash ? Math.Min(1, flashLeft / NoticeFlashFade) : notice ? NoticeLineOpacity : 1);
         FocusTrack.Opacity = notice ? 0 : _focusLightOpacity * (ringing || budsLow ? 0.15 + 0.45 * pulse : 0.22);
         double p = Math.Clamp(cal || notice ? 1 : buds?.share ?? (ringing ? 1 : timer ? _clock.Soonest?.LeftShare ?? 0 : _focus.Progress), 0, 1);
         if (_focusDrawn < 0 || Math.Abs(p - _focusDrawn) > 0.0004)

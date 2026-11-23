@@ -812,8 +812,10 @@ public partial class MainWindow
         _ => "português do Brasil"
     };
 
-    private string SystemPrompt => Loc.F("chat.system", S.Language == "en" ? "English" : "português do Brasil");
-    private string FreeSystemPrompt => Loc.F("chat.system.free", S.Language == "en" ? "English" : "português do Brasil");
+    // (today's date too: without it the model answers from what it learned, as if that were now)
+    private static string TodayNote => Loc.F("chat.p.today", DateTime.Now.ToString("D", Loc.Culture));
+    private string SystemPrompt => Loc.F("chat.system", S.Language == "en" ? "English" : "português do Brasil", DateTime.Now.ToString("D", Loc.Culture));
+    private string FreeSystemPrompt => Loc.F("chat.system.free", S.Language == "en" ? "English" : "português do Brasil", DateTime.Now.ToString("D", Loc.Culture));
 
     private async void RunChatAction(string action, string question)
     {
@@ -847,6 +849,8 @@ public partial class MainWindow
         }
         else
         {
+            // a question also carries today's date (light models heed it there more than in the system prompt)
+            if (action == "ask") prompt.Append(TodayNote).Append(' ');
             prompt.Append(instruction);
         }
         if (includeContext && _ctxImage == null)

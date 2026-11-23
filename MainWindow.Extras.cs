@@ -33,8 +33,6 @@ public partial class MainWindow
     // eyes
     private DateTime _happyUntil = DateTime.MinValue;
     private bool _happyShown;
-    private Native.POINT _lastCursor;
-    private DateTime _lastCursorMove = DateTime.Now;
 
     // scroll
     private DateTime _lastTrackSkip = DateTime.MinValue;
@@ -236,6 +234,9 @@ public partial class MainWindow
         SetHappy(true);
     }
 
+    /// <summary>No mouse or keyboard input for 90 s: the eyes may doze off.</summary>
+    private static bool UserAway => Native.IdleSeconds() > 90;
+
     private void SetHappy(bool on)
     {
         if (_happyShown == on) return;
@@ -246,11 +247,6 @@ public partial class MainWindow
     private void UpdateLivelyEyes()
     {
         Native.GetCursorPos(out var p);
-        if (p.X != _lastCursor.X || p.Y != _lastCursor.Y)
-        {
-            _lastCursor = p;
-            _lastCursorMove = DateTime.Now;
-        }
 
         if (!S.LivelyEyes)
         {
@@ -259,8 +255,8 @@ public partial class MainWindow
             return;
         }
 
-        // sleepy after 90 s without mouse movement (and nothing going on)
-        bool sleepy = (DateTime.Now - _lastCursorMove).TotalSeconds > 90 && !_media.IsPlaying &&
+        // sleepy after 90 s without using the mouse or keyboard (and nothing going on)
+        bool sleepy = UserAway && !_media.IsPlaying &&
                       _claude.Active?.IsWorking != true && !_focus.Running && !_happyShown;
         double targetScale = sleepy ? 0.28 : 1;
         PauseBlinking(sleepy); // closed eyes don't blink
@@ -652,6 +648,7 @@ public partial class MainWindow
             Happy();
             SaveShelf();
             ShelfStored(wasEmpty);
+            _shelfUnseen = true;
         }
 
         // stay open a moment so you can see the new item

@@ -74,6 +74,18 @@ internal static class Native
     /// <summary>True while the key is held, even though the island never has the keyboard focus.</summary>
     public static bool IsKeyDown(int vk) => (GetAsyncKeyState(vk) & 0x8000) != 0;
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LASTINPUTINFO { public uint cbSize, dwTime; }
+
+    [DllImport("user32.dll")] private static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
+
+    /// <summary>Seconds since the last mouse or keyboard input anywhere in Windows (the same clock the screen saver uses).</summary>
+    public static double IdleSeconds()
+    {
+        var i = new LASTINPUTINFO { cbSize = 8 };
+        return GetLastInputInfo(ref i) ? unchecked((uint)Environment.TickCount - i.dwTime) / 1000.0 : 0;
+    }
+
     /// <summary>Moves a window (device pixels), keeping its size and staying on top.</summary>
     public static void MoveTopmost(IntPtr hwnd, int x, int y) => SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
 

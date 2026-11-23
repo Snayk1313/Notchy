@@ -26,7 +26,6 @@ public partial class MainWindow
     private readonly Grid _pillRow = new();
     private Border _pillBody = null!, _pillGlow = null!, _pillAvatar = null!;
     private TextBlock _pillApp = null!, _pillTitle = null!, _pillText = null!, _pillMore = null!;
-    private DropShadowEffect _pillGlowEffect = null!;
     private readonly ScaleTransform _pillScale = new(1, 1);
     private readonly TranslateTransform _pillMove = new(), _noticeCardMove = new();
     private bool _noticeInPill, _noticeSwiping;
@@ -39,8 +38,8 @@ public partial class MainWindow
 
     private void BuildNoticePill()
     {
-        _pillGlowEffect = new DropShadowEffect { ShadowDepth = 0, BlurRadius = NoticeGlowBlur, Opacity = NoticeGlowOpacity };
-        _pillGlow = new Border { CornerRadius = new CornerRadius(PillRadius), BorderThickness = new Thickness(NoticeLineThickness), Opacity = NoticeLineOpacity, Effect = _pillGlowEffect, IsHitTestVisible = false };
+        // a plain line, no glow: only the island lights up (in the app's colour) when a notification comes
+        _pillGlow = new Border { CornerRadius = new CornerRadius(PillRadius), BorderThickness = new Thickness(NoticeLineThickness), BorderBrush = White(0x30), IsHitTestVisible = false };
         _pillBody = new Border { CornerRadius = new CornerRadius(PillRadius), Padding = new Thickness(20, 0, 16, 0) };
 
         var row = _pillRow;
@@ -176,12 +175,13 @@ public partial class MainWindow
 #endif
 
     /// <summary>When the island is in use (open, or minimized and busy), a notification goes under it instead of replacing what's there.</summary>
-    private bool NoticeGoesUnderIsland => !_hiddenForFullscreen && (_state == IslandState.Expanded || IslandBusy);
+    // always a pill under the island (top or side, busy or not); only a full-screen card stands alone
+    private bool NoticeGoesUnderIsland => !_hiddenForFullscreen;
 
     /// <summary>The activity over the pill ended (after a moment, so the gap between two songs doesn't count): it goes up and carries on as the card.</summary>
     private void CheckPillStillNeeded()
     {
-        if (_noticeShown?.Local != null || _state == IslandState.Expanded || IslandBusy || _noticePill.IsMouseOver || _noticeSwiping)
+        if (!_hiddenForFullscreen || _noticeShown?.Local != null || _state == IslandState.Expanded || IslandBusy || _noticePill.IsMouseOver || _noticeSwiping)
         {
             _pillIdleSince = null;
             return;
@@ -347,8 +347,6 @@ public partial class MainWindow
         bool icon = n.Local is DownloadCard d && Array.IndexOf(ImageExt, System.IO.Path.GetExtension(d.Path).ToLowerInvariant()) < 0;
         _pillAvatar.Background = n.Avatar != null ? new ImageBrush(n.Avatar) { Stretch = icon ? Stretch.Uniform : Stretch.UniformToFill } : White(0x14);
         _pillBody.Background = Island.Background;
-        _pillGlow.BorderBrush = new SolidColorBrush(_noticeAccent);
-        _pillGlowEffect.Color = _noticeAccent;
         _pillScale.ScaleX = _pillScale.ScaleY = S.SizeScale;
     }
 
@@ -366,6 +364,7 @@ public partial class MainWindow
         _pillMove.BeginAnimation(TranslateTransform.XProperty, null);
         _pillMove.X = 0;
         _pillMove.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(-22, 0, time) { EasingFunction = new BackEase { Amplitude = 0.35, EasingMode = EasingMode.EaseOut } });
+        if (_state != IslandState.Expanded && n.Local == null) _noticeFlashAt = AnimNow; // the minimized island's outline lights up once (app notifications only)
         _noticePill.BeginAnimation(OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(Dur(220))));
     }
 
@@ -432,7 +431,7 @@ public partial class MainWindow
     /// <summary>The island closed under a pill: the same notification carries on as the card, for the time it had left.</summary>
     private void TurnPillIntoCard()
     {
-        if (!_noticeInPill || _noticeShown == null) return;
+        if (!_noticeInPill || _noticeShown == null || !_hiddenForFullscreen) return; // (the pill just goes up with the island)
         if (IslandBusy || _noticeShown.Local != null) return; // (Notchy's own cards stay under the island) // what's on the island stays there, the pill under it
         double left = Math.Max(PillMinSecondsOnCard, (_pillUntil - DateTime.UtcNow).TotalSeconds);
         HideNoticePill();

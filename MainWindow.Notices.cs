@@ -76,6 +76,7 @@ public partial class MainWindow
 
         BuildNoticePill();
         BuildBell();
+        BuildDevicesChip();
         _notices.AccessChecked += SyncQuietMode;
         _notices.Arrived += OnNotice;
         _notices.HistoryChanged += () => { if (_subOpen && _subTitle.Text == Loc.T("notif.title")) RefreshSubPage(NoticesPage); };

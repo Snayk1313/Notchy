@@ -10,7 +10,7 @@ namespace Notchy;
 public static class WhatsNew
 {
     /// <summary>The version these notes are for (major.minor).</summary>
-    public const string Version = "2.5";
+    public const string Version = "2.6";
 
     public sealed record Highlight(string Art, Color Color, string TagPt, string TagEn, string TitlePt, string TitleEn, string TextPt, string TextEn)
     {
@@ -27,98 +27,81 @@ public static class WhatsNew
 
     public static readonly Highlight[] Highlights =
     {
-        new("side", Color.FromRgb(0x7E, 0xE0, 0xC8), "Novo", "New", "Ilha nas laterais", "Island on the sides",
-            "A ilha pode ficar em pé na borda esquerda ou direita da tela, com tudo o que ela faz no topo.",
-            "The island can stand on the left or right edge of the screen, doing everything it does at the top."),
-        new("notices", Color.FromRgb(0x9A, 0xD7, 0xFF), "Melhor", "Better", "Print e download em cards", "Capture and download cards",
-            "O aviso do print e do download concluído vira um card embaixo da ilha, que abre a qualquer momento.",
-            "The capture and finished-download notices become a card under the island, which opens any time."),
-        new("chat", Color.FromRgb(0xFF, 0xAA, 0x4C), "Melhor", "Better", "Notchy Chat mais rápido", "Faster Notchy Chat",
-            "Corrigir e Traduzir ficaram bem mais rápidos, e o botão Substituir aparece em mais apps.",
-            "Fix spelling and Translate got much faster, and the Replace button shows up in more apps."),
+        new("buds", Color.FromRgb(0x6C, 0xE6, 0xA0), "Novo", "New", "Dispositivos", "Devices",
+            "A bateria do headset, do mouse e dos fones ao lado do sino, com o aviso de bateria fraca na ilha.",
+            "Your headset, mouse and earbuds battery next to the bell, with a low battery warning on the island."),
+        new("capture", Color.FromRgb(0x9A, 0xD7, 0xFF), "Melhor", "Better", "Captura com holofote", "Capture spotlight",
+            "Na captura, a parte da janela sob o mouse fica acesa e o resto escurece; a rodinha sobe até a janela inteira.",
+            "In the capture, the part of the window under the mouse stays lit and the rest darkens; the wheel goes up to the whole window."),
+        new("notices", Color.FromRgb(0xB9, 0xA6, 0xFF), "Melhor", "Better", "Notificações em bolha", "Notifications as bubbles",
+            "Toda notificação desce numa bolha embaixo da ilha, e só o contorno da ilha acende na cor do app.",
+            "Every notification comes down as a bubble under the island, and only the island's outline lights up in the app's colour."),
     };
 
     public static readonly Section[] Sections =
     {
-        new("Ilha nas laterais (nova)", "Island on the sides (new)",
+        new("Dispositivos (novo)", "Devices (new)",
             new[]
             {
-                "A ilha pode ficar em pé na borda esquerda ou direita da tela, além do topo, com os mesmos estados: olhos, música e letra, Claude, foco, download, volume e brilho, bolhas e notificações.",
-                "Aberta na lateral, as abas ficam numa coluna em pé, a troca de abas desliza para cima e para baixo, e cada página usa a altura toda: Início, Música com a letra embaixo da capa, Foco, Relógio com o timer e os alarmes juntos, Calendário com a grade maior e Clima com mais um dia.",
-                "A barra de volume fica em pé e troca a saída de áudio numa lista ao lado dela.",
-                "O lembrete do calendário e o sininho do alarme aparecem na pílula em pé, alinhados com os olhinhos."
+                "Uma bateria pequena ao lado do sino mostra o aparelho sem fio mais fraco, e a porcentagem aparece quando ela está fraca. O clique abre “‹ Dispositivos”, com cada aparelho, a porcentagem e um raio quando está carregando.",
+                "Headset HyperX Cloud Alpha Wireless e mouses Rapoo lidos direto do receptor USB, sem precisar do app da marca. Fones e caixas Bluetooth com a bateria que o Windows informa.",
+                "Headset com bateria fraca: aviso na ilha em 15% e em 5%, como os fones. Um clique na ilha de bateria fraca abre Dispositivos.",
+                "Em notebook, a bateria do PC virou “Este PC” em Dispositivos, e o cabeçalho ficou com uma bateria só.",
+                "Com pouco espaço no cabeçalho, sai primeiro a waveform, depois o texto do Atualizar e por último a porcentagem: nada se sobrepõe ao relógio."
             },
             new[]
             {
-                "The island can stand on the left or right edge of the screen, besides the top, with the same states: eyes, music and lyrics, Claude, focus, download, volume and brightness, bubbles and notifications.",
-                "Open on a side, the tabs sit in a standing column, switching tabs slides up and down, and every page uses the whole height: Home, Music with the lyrics under the cover, Focus, Clock with the timer and alarms together, Calendar with a bigger month and Weather with one more day.",
-                "The volume bar stands up and switches the audio output in a list beside it.",
-                "The calendar reminder and the alarm bell show on the standing pill, lined up with the eyes."
+                "A small battery next to the bell shows your weakest wireless device, with its percentage when it's low. A click opens “‹ Devices”, with each device, its percentage and a bolt while charging.",
+                "HyperX Cloud Alpha Wireless headsets and Rapoo mice read straight from their USB receiver, no brand app needed. Bluetooth earbuds and speakers with the battery Windows reports.",
+                "Low headset battery: a warning on the island at 15% and 5%, like the earbuds. A click on the low battery island opens Devices.",
+                "On laptops, the PC's battery became “This PC” in Devices, so the header has a single battery.",
+                "When the header is short of room, the waveform goes first, then the Update label, then the percentage: nothing overlaps the clock."
             }),
-        new("Posição", "Position",
+        new("Captura de tela", "Screen capture",
             new[]
             {
-                "Nova aba Posição nas Configurações: o lugar normal (esquerda, topo ou direita), arrastar a ilha e regras.",
-                "Regras: \u201cQuando [app] estiver em tela cheia ou em primeiro plano, a ilha vai para [lado]\u201d. Ela muda de lugar em menos de um segundo e volta quando a condição acaba.",
-                "Arraste a ilha até o topo ou uma lateral: ela fica em pé aos poucos perto da borda e encaixa com um assentar leve.",
-                "A troca de lugar desliza para fora e para dentro da borda, e as bolhas vão junto com a ilha."
+                "Holofote: a parte da janela sob o mouse (imagem, botão, lista, campo de texto) fica acesa e o resto da tela escurece; o recorte desliza de uma para outra.",
+                "A rodinha sobe para os grupos em volta e até a janela inteira, e desce de volta. O clique captura o que está aceso.",
+                "Em apps que não informam suas partes (navegadores baseados no Firefox, apps como Discord e Spotify, jogos), acende a janela inteira, sem seleções estranhas.",
+                "O Esc cancela a captura logo depois do Print Screen, antes de selecionar qualquer coisa."
             },
             new[]
             {
-                "New Position tab in Settings: the usual place (left, top or right), dragging the island and rules.",
-                "Rules: \u201cWhen [app] is full screen or in front, the island moves to [side]\u201d. It moves in under a second and goes back when that stops.",
-                "Drag the island to the top or a side: it stands up bit by bit near the edge and snaps in with a soft settle.",
-                "Changing place slides out of and into the edge, and the bubbles go along with the island."
+                "Spotlight: the part of the window under the mouse (an image, button, list, text box) stays lit and the rest of the screen darkens; the cut-out glides from one to the next.",
+                "The wheel goes up to the groups around it and to the whole window, and back down. A click takes what's lit.",
+                "In apps that don't report their parts (Firefox-based browsers, apps like Discord and Spotify, games), the whole window lights up, with no odd selections.",
+                "Esc cancels the capture right after Print Screen, before anything is picked."
             }),
-        new("Avisos em cards", "Notices as cards",
+        new("Notificações", "Notifications",
             new[]
             {
-                "O aviso do print virou um card embaixo da ilha, na mesma fila das notificações, com a miniatura e os botões Copiar, Salvar e Editar. A ilha abre a qualquer momento enquanto ele está na tela.",
-                "O download concluído também vira card, com o arquivo e os botões Abrir e Mostrar na pasta."
+                "Com a ilha parada no topo ou nas laterais, a notificação também desce numa bolha embaixo dela, como quando há algo tocando.",
+                "Só a ilha brilha: o contorno dela acende uma vez na cor do app e apaga devagar; a bolha não tem mais brilho, em nenhuma posição."
             },
             new[]
             {
-                "The capture notice became a card under the island, in the same line as notifications, with the thumbnail and Copy, Save and Edit. The island opens any time while it's showing.",
-                "A finished download is a card too, with the file and Open and Show in folder."
+                "With the island idle at the top or on a side, a notification also comes down as a bubble under it, as when something is playing.",
+                "Only the island glows: its outline lights up once in the app's colour and fades; the bubble has no glow anymore, in any position."
             }),
-        new("Música", "Music",
+        new("Melhorias", "Improvements",
             new[]
             {
-                "A capa no player cresce e inclina com o mouse, como os cards da página inicial, mostra no canto o ícone do app que está tocando, e o clique abre esse app."
+                "Prateleira: depois de soltar um arquivo na ilha, a próxima vez que ela abrir vai direto para a prateleira.",
+                "Notchy Chat sabe a data de hoje e avisa quando uma informação pode estar desatualizada. Com uma chave do Gemini que permita, ele pesquisa no Google antes de responder."
             },
             new[]
             {
-                "The player's cover grows and tilts with the mouse, like the home cards, shows the playing app's icon in its corner, and a click opens that app."
-            }),
-        new("Notchy Chat", "Notchy Chat",
-            new[]
-            {
-                "Corrigir e Traduzir ficaram bem mais rápidos.",
-                "O botão Substituir aparece em mais apps.",
-                "Um clique fora do Notchy fecha a ilha que tinha ficado presa aberta depois de uma correção."
-            },
-            new[]
-            {
-                "Fix spelling and Translate got much faster.",
-                "The Replace button shows up in more apps.",
-                "A click outside Notchy closes the island if it got stuck open after a fix."
+                "Shelf: after you drop a file on the island, the next time it opens it goes straight to the shelf.",
+                "Notchy Chat knows today's date and says when something may be out of date. With a Gemini key that allows it, it searches Google before answering."
             }),
         new("Correções", "Fixes",
             new[]
             {
-                "Downloads rápidos entram no histórico de Downloads.",
-                "Os cliques não ficam mais bloqueados enquanto o print sobe até a ilha.",
-                "Ao clicar numa notificação, a ilha fecha uma vez, sem reabrir, e o app abre mais rápido no primeiro clique.",
-                "A página do Clima não fecha ao trocar a localização entre automática e manual.",
-                "O brilho de \u201ccopiado\u201d aparece junto da ilha, e os botões Cancelar e Salvar do alarme não ficam mais cortados."
+                "Os olhos não dormem mais com uma música pausada enquanto você usa o PC: só depois de 90 segundos sem mexer no mouse e no teclado."
             },
             new[]
             {
-                "Quick downloads show up in the Downloads history.",
-                "Clicks are no longer blocked while the capture flies up to the island.",
-                "Clicking a notification closes the island once, without opening it again, and the app opens faster on the first click.",
-                "The Weather page no longer closes when switching the location between automatic and manual.",
-                "The \u201ccopied\u201d glow shows right by the island, and the alarm's Cancel and Save buttons are no longer cut."
+                "The eyes no longer doze off with a paused song while you're using the PC: only after 90 seconds without touching the mouse or keyboard."
             }),
     };
 }

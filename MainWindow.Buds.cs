@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -91,6 +91,7 @@ public partial class MainWindow
         _bt.BatteryLow += i => Dispatcher.BeginInvoke(() => ShowBuds(CompactMode.BudsLow, i, 5));
         _bt.Disconnected += i => Dispatcher.BeginInvoke(() => ShowBuds(CompactMode.BudsOff, i, 2.5));
         _bt.Start();
+        InitDevices();
     }
 
     private void ShowBuds(CompactMode mode, BudsInfo info, double seconds)
@@ -106,7 +107,7 @@ public partial class MainWindow
         };
         _budsPct.Text = mode != CompactMode.BudsOff && info.Battery is int b ? b + "%" : "";
         _budsPct.Foreground = new SolidColorBrush(info.Battery is int b2 ? BatteryColor(b2) : Colors.White);
-        _budsIcon.Data = info.Speaker ? Geometry.Parse("M7 3h10a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm5 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm0-6a1.3 1.3 0 1 0 0 2.6A1.3 1.3 0 0 0 12 6z") : EarbudsGeometry();
+        _budsIcon.Data = info.Id == HyperXId ? Geometry.Parse("M4 14v-2a8 8 0 0 1 16 0v2h-2v-2a6 6 0 0 0-12 0v2zM3 14h4v7H5a2 2 0 0 1-2-2zm14 0h4v5a2 2 0 0 1-2 2h-2z") : info.Speaker ? Geometry.Parse("M7 3h10a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm5 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm0-6a1.3 1.3 0 1 0 0 2.6A1.3 1.3 0 0 0 12 6z") : EarbudsGeometry();
         _budsIcon.Fill = new SolidColorBrush(mode == CompactMode.BudsLow ? Color.FromRgb(0xFF, 0x8A, 0x80) : Colors.White);
         if (mode == CompactMode.Buds) SoundService.Play(Sfx.Hello);
         else if (mode == CompactMode.BudsLow) SoundService.Play(Sfx.Attention);
